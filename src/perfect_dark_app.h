@@ -6270,7 +6270,7 @@ class PerfectDarkApp : public rex::ReXApp {
       ReadGuestU32(mem, simulants_opt + 16) != 0x825DE27C ||       // Simulants option
       ReadGuestU32(mem, simulants_opt) != 0x04 ||                  // Teams type
       ReadGuestU32(mem, simulants_opt + 8) != 0x5016 ||            // Teams text
-      ReadGuestU32(mem, simulants_opt + 16) != 0x825DE444 ||       // Teams option
+      ReadGuestU32(mem, simulants_opt + 16) != 0x825DE444          // Teams option
     ) {
       REXLOG_INFO("[menu_patch] lobby setup pages are not as expected; left alone");
       return;
