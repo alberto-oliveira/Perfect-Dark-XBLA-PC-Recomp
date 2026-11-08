@@ -53,3 +53,5 @@ compile_commands.json
 Thumbs.db
 desktop.ini
 .DS_Store
+
+*.code-workspace
