@@ -3035,7 +3035,7 @@ class PerfectDarkApp : public rex::ReXApp {
   // Player Setup's rebuilt rows (0 until they are built).
   static inline uint32_t setup_items_ = 0;
   static inline uint32_t achievements_strings_ = 0;
-  static inline uint32_t is_lobby_setup_ = 0;
+  static inline uint32_t is_adv_setup_ = 0;
 
   // Re-read twice a second, so an unlock during play shows up without asking
   // the store on every menu frame.
