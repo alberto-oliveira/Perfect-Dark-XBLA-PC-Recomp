@@ -6264,13 +6264,13 @@ class PerfectDarkApp : public rex::ReXApp {
     static uint32_t simulants_opt = kLobbySettingsItems + uint32_t(kLobbySettingsSimulants) * 20;
     static uint32_t teams_opt = kLobbySettingsItems + uint32_t(kLobbySettingsTeams) * 20;
     if (
-      ReadGuestU32(mem, kLobbySettingsDef + 8) != 0x825DEB48||    // Adv. Setup Check
-      ReadGuestU32(mem, simulants_opt) != 0x04 ||                 // Simulants type
-      ReadGuestU32(mem, simulants_opt + 8) != 0x5019 ||           // Simulants text
-      ReadGuestU32(mem, simulants_opt + 16) != 0x825DE27C ||      // Simulants option
-      ReadGuestU32(mem, simulants_opt) != 0x04 ||                 // Teams type
-      ReadGuestU32(mem, simulants_opt + 8) != 0x5016 ||           // Teams text
-      ReadGuestU32(mem, simulants_opt + 16) != 0x825DE444 ||      // Teams option
+      ReadGuestU32(mem, kLobbySettingsDef + 8) != 0x825DEB48 ||    // Adv. Setup Check
+      ReadGuestU32(mem, simulants_opt) != 0x04 ||                  // Simulants type
+      ReadGuestU32(mem, simulants_opt + 8) != 0x5019 ||            // Simulants text
+      ReadGuestU32(mem, simulants_opt + 16) != 0x825DE27C ||       // Simulants option
+      ReadGuestU32(mem, simulants_opt) != 0x04 ||                  // Teams type
+      ReadGuestU32(mem, simulants_opt + 8) != 0x5016 ||            // Teams text
+      ReadGuestU32(mem, simulants_opt + 16) != 0x825DE444 ||       // Teams option
     ) {
       REXLOG_INFO("[menu_patch] lobby setup pages are not as expected; left alone");
       return;
