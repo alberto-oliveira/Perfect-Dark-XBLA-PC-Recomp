@@ -5091,6 +5091,7 @@ class PerfectDarkApp : public rex::ReXApp {
     }
     done = true;
     PatchPlayerSetupMenus();
+    PatchHandicapRow();
     PatchGamerCardPrompt();
     menu_patched_ = true;
     REXLOG_INFO("[menu_patch] text bank found after {} check(s); installing PC menu rows",
@@ -6122,12 +6123,14 @@ class PerfectDarkApp : public rex::ReXApp {
   // ---- Combat Simulator Game Setttings -------------------------------------
   // Options below will be used to patch the game settings with the (already
   // existing) handicap settings
+  static constexpr uint32_t kHandicapDef = 0x825E044C;
+  static constexpr uint32_t kHandicapItems = 0x825E044C;
   static constexpr uint32_t kLobbySettingsDef = 0x825DEB2C;
   static constexpr uint32_t kLobbySettingsItems = 0x825DEB48;
   // Rows Before Handicap: Scenario, Options, Arena, Weapons, Limits, Simulants
   static constexpr int kLobbySettingsRowsBefore = 6;
   // Rows After Handicap: Teams, Sep, Load Set., Save Set., Sep, Finished, End Marker
-  static constexpr int kLobbySettingsRowsAfter = 7;
+  static constexpr int kLobbySettingsRowsAfter = 6;
   static constexpr int kLobbySettingsSimulants = 5; // Simulants row position
   static constexpr int kLobbySettingsTeams = 6; // Teams row position
 
@@ -6249,11 +6252,10 @@ class PerfectDarkApp : public rex::ReXApp {
                 (name_label && name_handler) ? "" : " - no Player Name row (thunks failed)");
   }
 
-  /*
   static void PatchHandicapRow() {
     PerfectDarkApp* app = current_instance_;
     if (!app || !app->runtime() || !app->runtime()->memory()) return;
-    if (is_lobby_setup_) return;
+    if (is_adv_setup_) return;
     auto* mem = app->runtime()->memory();
     auto* fd = app->runtime()->function_dispatcher();
     if (!fd) return;
@@ -6262,13 +6264,13 @@ class PerfectDarkApp : public rex::ReXApp {
     static uint32_t simulants_opt = kLobbySettingsItems + uint32_t(kLobbySettingsSimulants) * 20;
     static uint32_t teams_opt = kLobbySettingsItems + uint32_t(kLobbySettingsTeams) * 20;
     if (
-      ReadGuestU32(mem, kLobbySettingsDef + 8) != 0x825DEB48||   // Adv. Setup Check
+      ReadGuestU32(mem, kLobbySettingsDef + 8) != 0x825DEB48||    // Adv. Setup Check
       ReadGuestU32(mem, simulants_opt) != 0x04 ||                 // Simulants type
-      ReadGuestU32(mem, simulants_opt + 8) != 0x5019 ||          // Simulants text
-      ReadGuestU32(mem, simulants_opt + 16) != 0x825DE27C ||     // Simulants option
-      ReadGuestU32(mem, simulants_opt) != 0x04 ||                 // Simulants type
-      ReadGuestU32(mem, simulants_opt + 8) != 0x5016 ||          // Simulants text
-      ReadGuestU32(mem, simulants_opt + 16) != 0x825DE444 ||     // Simulants option
+      ReadGuestU32(mem, simulants_opt + 8) != 0x5019 ||           // Simulants text
+      ReadGuestU32(mem, simulants_opt + 16) != 0x825DE27C ||      // Simulants option
+      ReadGuestU32(mem, simulants_opt) != 0x04 ||                 // Teams type
+      ReadGuestU32(mem, simulants_opt + 8) != 0x5016 ||           // Teams text
+      ReadGuestU32(mem, simulants_opt + 16) != 0x825DE444 ||      // Teams option
     ) {
       REXLOG_INFO("[menu_patch] lobby setup pages are not as expected; left alone");
       return;
@@ -6276,61 +6278,30 @@ class PerfectDarkApp : public rex::ReXApp {
 
     const uint32_t heap = mem->SystemHeapAlloc(1024);
     if (!heap) return;
-    const uint32_t adv_settings_items = heap; // 12 rows before -> 13 rows after
+    const uint32_t adv_setup_items = heap; // 12 rows before -> 13 rows after
 
     // Control: the controls, then Back.
-    uint32_t out = adv_settings_items;
+    uint32_t out = adv_setup_items;
+    // Copies Scenario, Options, Arena, Weapons, Limits, Simulants
     for (int i = 0; i < kLobbySettingsRowsBefore; ++i, out += 20) {
-      CopyMenuItem(mem, kControlItems + uint32_t(i) * 20, out);
+      CopyMenuItem(mem, kLobbySettingsItems + uint32_t(i) * 20, out);
     }
-    CopyMenuItem(mem, kControlItems + uint32_t(kCtrlSeparator) * 20, out);
+    out += 20
+    // Adds the "Handicap" row
+    CopyMenuItem(mem, kHandicapDef, out);
     out += 20;
-    CopyMenuItem(mem, kControlItems + uint32_t(kCtrlBack) * 20, out);
+    // Copies Teams, Sep, Save, Load, Sep, Finished
+    for (int i = 0; i < kLobbySettingsRowsAfter; ++i, out += 20) {
+      CopyMenuItem(mem, kLobbySettingsItems + uint32_t(i) * 20, out);
+    }
     WriteMenuEnd(mem, out + 20);
 
-    // HUD Options: what is drawn around your gun, then what is drawn about
-    // everything else (radar and the highlights, which were here already).
-    out = hud_items;
-    for (int i = 0; i < kCtrlHudCount; ++i, out += 20) {
-      CopyMenuItem(mem, kControlItems + uint32_t(kCtrlHudFirst + i) * 20, out);
-    }
-    CopyMenuItem(mem, kControlItems + uint32_t(kCtrlSeparator) * 20, out);
-    out += 20;
-    for (int i = 0; i < kHudOldRowCount; ++i, out += 20) {
-      CopyMenuItem(mem, kHudItems + uint32_t(i) * 20, out);
-    }
-    WriteMenuEnd(mem, out);
+    WriteGuestU32(mem, kLobbySettingsDef + 8, adv_setup_items);
 
-    // Player Setup: Player Name, then the pages as they were.
-    const uint32_t name_label = fd->AllocateThunk(&PdOnlineRowLabel<0>, 0);
-    const uint32_t name_handler = fd->AllocateThunk(&PdOnlineRowHandler<0>, 0);
-    out = setup_items;
-    if (name_label && name_handler) {
-      WriteGuestU32(mem, out + 0, 0x0C000000);  // dropdown: the name, "Change name..."
-      WriteGuestU32(mem, out + 4, 0);
-      WriteGuestU32(mem, out + 8, name_label);
-      WriteGuestU32(mem, out + 12, 0);
-      WriteGuestU32(mem, out + 16, name_handler);
-      out += 20;
-    }
-    for (int i = 0; i < kSetupRowCount; ++i, out += 20) {
-      CopyMenuItem(mem, kSetupItems + uint32_t(i) * 20, out);
-    }
-    WriteMenuEnd(mem, out);
+    is_adv_setup_ = adv_setup_items;
 
-    // The page keeps its own name: the title now uses the same text as the row
-    // that opens it, which TickLobbyLabels renames to "HUD Options".
-    WriteGuestU32(mem, kHudDef + 4, kSetupHudRowTid);
-    WriteGuestU32(mem, kControlDef + 8, control_items);
-    WriteGuestU32(mem, kHudDef + 8, hud_items);
-    WriteGuestU32(mem, kSetupDef + 8, setup_items);
-    setup_items_ = setup_items;
-    REXLOG_INFO("[menu_patch] player setup rebuilt: control 0x{:08X}, HUD 0x{:08X}, "
-                "setup 0x{:08X}{}",
-                control_items, hud_items, setup_items,
-                (name_label && name_handler) ? "" : " - no Player Name row (thunks failed)");
+    REXLOG_INFO("[menu_patch] player setup rebuilt: adv. settings 0x{:08X}", adv_setup_items);
   }
-  */
 
   static void PatchVideoOptionsMenu() {
     PerfectDarkApp* app = current_instance_;
