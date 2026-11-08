@@ -6286,7 +6286,7 @@ class PerfectDarkApp : public rex::ReXApp {
     for (int i = 0; i < kLobbySettingsRowsBefore; ++i, out += 20) {
       CopyMenuItem(mem, kLobbySettingsItems + uint32_t(i) * 20, out);
     }
-    out += 20
+    out += 20;
     // Adds the "Handicap" row
     CopyMenuItem(mem, kHandicapDef, out);
     out += 20;
