@@ -1478,6 +1478,61 @@ class PerfectDarkApp : public rex::ReXApp {
   // Items that keep a selection of their own inside them: a list, the player
   // stats list, and a dropdown while it is open.
   static bool MenuItemIsList(uint32_t type) { return type == 0x02 || type == 0x0F; }
+
+  // For the F3 menu log: what kind of row an item is, by the same numbering.
+  static const char* MenuItemTypeName(uint32_t type) {
+    switch (type) {
+      case 0x01: return "label";
+      case 0x02: return "list";
+      case 0x04: return "selectable";
+      case 0x06: return "objectives";
+      case 0x08: return "slider";
+      case 0x09: return "checkbox";
+      case 0x0B: return "separator";
+      case 0x0C: return "dropdown";
+      case 0x0D: return "keyboard";
+      case 0x0E: return "ranking";
+      case 0x0F: return "player stats";
+      case 0x11: return "carousel";
+      case 0x12: return "model";
+      case 0x15: return "meter";
+      case 0x17: return "marquee";
+      case 0x19: return "controller";
+      case 0x1A:
+      case 0x1B:
+      case 0x1C: return "panel";
+      case 0x1D: return "end";
+      default: return "?";
+    }
+  }
+
+  // For the F3 menu log: an item's text and what choosing it does. Its text
+  // (+0x08) is a text id, or the guest function that makes the label; its last
+  // field (+0x10) is the menu it opens when flag 0x4 is set, otherwise its
+  // handler. Label functions are not called here: this runs on the UI thread.
+  static std::string DescribeMenuItem(rex::memory::Memory* mem, uint32_t item) {
+    const uint32_t type = ReadGuestU32(mem, item) >> 24;
+    const uint32_t flags = ReadGuestU32(mem, item + 4);
+    const uint32_t text = ReadGuestU32(mem, item + 8);
+    const uint32_t last = ReadGuestU32(mem, item + 16);
+    std::string label;
+    if (type == 0x0B || type == 0x1D) {
+      label = "";
+    } else if (text >= 0x82000000 && text < 0x826E0000) {
+      label = fmt::format(" text from function 0x{:08X}", text);
+    } else if (text != 0 && text < 0x10000) {
+      const std::string s = GuestText(mem, text);
+      label = s.empty() ? fmt::format(" text {:04X} (not loaded)", text)
+                        : fmt::format(" \"{}\" ({:04X})", s, text);
+    }
+    std::string action;
+    if (type == 0x04 && (flags & 0x4) && last) {
+      action = fmt::format(", opens menu 0x{:08X}", last);
+    } else if (last >= 0x82000000 && last < 0x826E0000) {
+      action = fmt::format(", handler 0x{:08X}", last);
+    }
+    return fmt::format(" [{}{}]{}", MenuItemTypeName(type), action, label);
+  }
   static constexpr uint32_t kMenuItemDropdown = 0x0C;
   static constexpr uint32_t kMenuItemSlider = 0x08;
   static constexpr uint32_t kMenuItemCarousel = 0x11;
@@ -2387,10 +2442,11 @@ class PerfectDarkApp : public rex::ReXApp {
         list_info = fmt::format(" list cur {} index {} target {} view {}", list.curoffsety,
                                 list.index, list.targetoffsety, list.viewheight);
       }
-      REXLOG_INFO("[menumouse]   x {:.0f}..{:.0f} y {:.0f}..{:.0f} item 0x{:08X} type {:02X} "
+      REXLOG_INFO("[menumouse]   x {:.0f}..{:.0f} y {:.0f}..{:.0f} item 0x{:08X} type {:02X}{} "
                   "block {}{}{}{}", row.left, row.right, row.top, row.bottom, row.item,
-                  ReadGuestU32(mem, row.item) >> 24, row.block, row.focusable ? "" : " (no focus)",
-                  list_info, row.item == focus ? "  <- focus" : "");
+                  ReadGuestU32(mem, row.item) >> 24, DescribeMenuItem(mem, row.item), row.block,
+                  row.focusable ? "" : " (no focus)", list_info,
+                  row.item == focus ? "  <- focus" : "");
     }
   }
 
@@ -2979,6 +3035,7 @@ class PerfectDarkApp : public rex::ReXApp {
   // Player Setup's rebuilt rows (0 until they are built).
   static inline uint32_t setup_items_ = 0;
   static inline uint32_t achievements_strings_ = 0;
+  static inline uint32_t is_lobby_setup_ = 0;
 
   // Re-read twice a second, so an unlock during play shows up without asking
   // the store on every menu frame.
@@ -6062,6 +6119,18 @@ class PerfectDarkApp : public rex::ReXApp {
     for (int w = 1; w < 5; ++w) WriteGuestU32(mem, at + uint32_t(w) * 4, 0);
   }
 
+  // ---- Combat Simulator Game Setttings -------------------------------------
+  // Options below will be used to patch the game settings with the (already
+  // existing) handicap settings
+  static constexpr uint32_t kLobbySettingsDef = 0x825DEB2C;
+  static constexpr uint32_t kLobbySettingsItems = 0x825DEB48;
+  // Rows Before Handicap: Scenario, Options, Arena, Weapons, Limits, Simulants
+  static constexpr int kLobbySettingsRowsBefore = 6;
+  // Rows After Handicap: Teams, Sep, Load Set., Save Set., Sep, Finished, End Marker
+  static constexpr int kLobbySettingsRowsAfter = 7;
+  static constexpr int kLobbySettingsSimulants = 5; // Simulants row position
+  static constexpr int kLobbySettingsTeams = 6; // Teams row position
+
   // ---- the Xbox "gamer card" prompt ----------------------------------------
   // Pages that list players - the Combat Simulator's Player Ranking tab and
   // the leaderboards - offered a Y button, "View Gamer Profile" on the console
@@ -6179,6 +6248,89 @@ class PerfectDarkApp : public rex::ReXApp {
                 control_items, hud_items, setup_items,
                 (name_label && name_handler) ? "" : " - no Player Name row (thunks failed)");
   }
+
+  /*
+  static void PatchHandicapRow() {
+    PerfectDarkApp* app = current_instance_;
+    if (!app || !app->runtime() || !app->runtime()->memory()) return;
+    if (is_lobby_setup_) return;
+    auto* mem = app->runtime()->memory();
+    auto* fd = app->runtime()->function_dispatcher();
+    if (!fd) return;
+
+    // Only rebuild pages that still look like the ones this was written for.
+    static uint32_t simulants_opt = kLobbySettingsItems + uint32_t(kLobbySettingsSimulants) * 20;
+    static uint32_t teams_opt = kLobbySettingsItems + uint32_t(kLobbySettingsTeams) * 20;
+    if (
+      ReadGuestU32(mem, kLobbySettingsDef + 8) != 0x825DEB48||   // Adv. Setup Check
+      ReadGuestU32(mem, simulants_opt) != 0x04 ||                 // Simulants type
+      ReadGuestU32(mem, simulants_opt + 8) != 0x5019 ||          // Simulants text
+      ReadGuestU32(mem, simulants_opt + 16) != 0x825DE27C ||     // Simulants option
+      ReadGuestU32(mem, simulants_opt) != 0x04 ||                 // Simulants type
+      ReadGuestU32(mem, simulants_opt + 8) != 0x5016 ||          // Simulants text
+      ReadGuestU32(mem, simulants_opt + 16) != 0x825DE444 ||     // Simulants option
+    ) {
+      REXLOG_INFO("[menu_patch] lobby setup pages are not as expected; left alone");
+      return;
+    }
+
+    const uint32_t heap = mem->SystemHeapAlloc(1024);
+    if (!heap) return;
+    const uint32_t adv_settings_items = heap; // 12 rows before -> 13 rows after
+
+    // Control: the controls, then Back.
+    uint32_t out = adv_settings_items;
+    for (int i = 0; i < kLobbySettingsRowsBefore; ++i, out += 20) {
+      CopyMenuItem(mem, kControlItems + uint32_t(i) * 20, out);
+    }
+    CopyMenuItem(mem, kControlItems + uint32_t(kCtrlSeparator) * 20, out);
+    out += 20;
+    CopyMenuItem(mem, kControlItems + uint32_t(kCtrlBack) * 20, out);
+    WriteMenuEnd(mem, out + 20);
+
+    // HUD Options: what is drawn around your gun, then what is drawn about
+    // everything else (radar and the highlights, which were here already).
+    out = hud_items;
+    for (int i = 0; i < kCtrlHudCount; ++i, out += 20) {
+      CopyMenuItem(mem, kControlItems + uint32_t(kCtrlHudFirst + i) * 20, out);
+    }
+    CopyMenuItem(mem, kControlItems + uint32_t(kCtrlSeparator) * 20, out);
+    out += 20;
+    for (int i = 0; i < kHudOldRowCount; ++i, out += 20) {
+      CopyMenuItem(mem, kHudItems + uint32_t(i) * 20, out);
+    }
+    WriteMenuEnd(mem, out);
+
+    // Player Setup: Player Name, then the pages as they were.
+    const uint32_t name_label = fd->AllocateThunk(&PdOnlineRowLabel<0>, 0);
+    const uint32_t name_handler = fd->AllocateThunk(&PdOnlineRowHandler<0>, 0);
+    out = setup_items;
+    if (name_label && name_handler) {
+      WriteGuestU32(mem, out + 0, 0x0C000000);  // dropdown: the name, "Change name..."
+      WriteGuestU32(mem, out + 4, 0);
+      WriteGuestU32(mem, out + 8, name_label);
+      WriteGuestU32(mem, out + 12, 0);
+      WriteGuestU32(mem, out + 16, name_handler);
+      out += 20;
+    }
+    for (int i = 0; i < kSetupRowCount; ++i, out += 20) {
+      CopyMenuItem(mem, kSetupItems + uint32_t(i) * 20, out);
+    }
+    WriteMenuEnd(mem, out);
+
+    // The page keeps its own name: the title now uses the same text as the row
+    // that opens it, which TickLobbyLabels renames to "HUD Options".
+    WriteGuestU32(mem, kHudDef + 4, kSetupHudRowTid);
+    WriteGuestU32(mem, kControlDef + 8, control_items);
+    WriteGuestU32(mem, kHudDef + 8, hud_items);
+    WriteGuestU32(mem, kSetupDef + 8, setup_items);
+    setup_items_ = setup_items;
+    REXLOG_INFO("[menu_patch] player setup rebuilt: control 0x{:08X}, HUD 0x{:08X}, "
+                "setup 0x{:08X}{}",
+                control_items, hud_items, setup_items,
+                (name_label && name_handler) ? "" : " - no Player Name row (thunks failed)");
+  }
+  */
 
   static void PatchVideoOptionsMenu() {
     PerfectDarkApp* app = current_instance_;
