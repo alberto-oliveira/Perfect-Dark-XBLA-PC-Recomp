@@ -6264,15 +6264,36 @@ class PerfectDarkApp : public rex::ReXApp {
     static uint32_t simulants_opt = kLobbySettingsItems + uint32_t(kLobbySettingsSimulants) * 20;
     static uint32_t teams_opt = kLobbySettingsItems + uint32_t(kLobbySettingsTeams) * 20;
     if (
-      ReadGuestU32(mem, kLobbySettingsDef + 8) != 0x825DEB48 ||    // Adv. Setup Check
-      ReadGuestU32(mem, simulants_opt) != 0x04 ||                  // Simulants type
-      ReadGuestU32(mem, simulants_opt + 8) != 0x5019 ||            // Simulants text
-      ReadGuestU32(mem, simulants_opt + 16) != 0x825DE27C ||       // Simulants option
-      ReadGuestU32(mem, simulants_opt) != 0x04 ||                  // Teams type
-      ReadGuestU32(mem, simulants_opt + 8) != 0x5016 ||            // Teams text
-      ReadGuestU32(mem, simulants_opt + 16) != 0x825DE444          // Teams option
+      ReadGuestU32(mem, kLobbySettingsDef + 8) != 0x825DEB48 ||     // Adv. Setup Check
+      ReadGuestU32(mem, simulants_opt) != 0x04000000 ||             // Simulants type
+      ReadGuestU32(mem, simulants_opt + 8) != 0x00005019 ||         // Simulants text
+      ReadGuestU32(mem, simulants_opt + 16) != 0x825DE27C ||        // Simulants option
+      ReadGuestU32(mem, teams_opt) != 0x04000000 ||                 // Teams type
+      ReadGuestU32(mem, teams_opt + 8) != 0x00005016 ||             // Teams text
+      ReadGuestU32(mem, teams_opt + 16) != 0x825DE444               // Teams option
     ) {
-      REXLOG_INFO("[menu_patch] lobby setup pages are not as expected; left alone");
+      REXLOG_INFO("[menu_patch] lobby setup pages are not as expected; reads below:");
+      auto read_res = ReadGuestU32(mem, kLobbySettingsDef + 8);
+      auto fail = read_res != 0x825DEB48;
+      REXLOG_INFO("  - [menu_patch] [fail:{}] kLobbySettingsDef is: 0x{:08X}; should be: 0x825DEB48",fail, read_res);
+      read_res = ReadGuestU32(mem, simulants_opt);
+      fail = read_res != 0x04000000;
+      REXLOG_INFO("  - [menu_patch] [fail:{}] simulants_opt[0] is: 0x{:08X}; should be: 0x04",fail, read_res);
+      read_res = ReadGuestU32(mem, simulants_opt + 8);
+      fail = read_res != 0x00005019;
+      REXLOG_INFO("  - [menu_patch] [fail:{}] simulants_opt[8] is: 0x{:08X}; should be: 0x00005019",fail, read_res);
+      read_res = ReadGuestU32(mem, simulants_opt + 16);
+      fail = read_res != 0x825DE27C;
+      REXLOG_INFO("  - [menu_patch] [fail:{}] simulants_opt[16] is: 0x{:08X}; should be: 0x825DE27C",fail, read_res);
+      read_res = ReadGuestU32(mem, teams_opt);
+      fail = read_res != 0x04000000;
+      REXLOG_INFO("  - [menu_patch] [fail:{}] teams_opt[0] is: 0x{:08X}; should be: 0x04",fail, read_res);
+      read_res = ReadGuestU32(mem, teams_opt + 8);
+      fail = read_res != 0x00005016;
+      REXLOG_INFO("  - [menu_patch] [fail:{}] teams_opt[8] is: 0x{:08X}; should be: 0x00005016",fail, read_res);
+      read_res = ReadGuestU32(mem, teams_opt + 16);
+      fail = read_res != 0x825DE444;
+      REXLOG_INFO("  - [menu_patch] [fail:{}] teams_opt[16] is: 0x{:08X}; should be: 0x825DE444",fail, read_res);
       return;
     }
 
@@ -6286,15 +6307,14 @@ class PerfectDarkApp : public rex::ReXApp {
     for (int i = 0; i < kLobbySettingsRowsBefore; ++i, out += 20) {
       CopyMenuItem(mem, kLobbySettingsItems + uint32_t(i) * 20, out);
     }
-    out += 20;
     // Adds the "Handicap" row
     CopyMenuItem(mem, kHandicapDef, out);
     out += 20;
     // Copies Teams, Sep, Save, Load, Sep, Finished
-    for (int i = 0; i < kLobbySettingsRowsAfter; ++i, out += 20) {
+    for (int i = kLobbySettingsRowsBefore; i < kLobbySettingsRowsBefore+kLobbySettingsRowsAfter; ++i, out += 20) {
       CopyMenuItem(mem, kLobbySettingsItems + uint32_t(i) * 20, out);
     }
-    WriteMenuEnd(mem, out + 20);
+    WriteMenuEnd(mem, out);
 
     WriteGuestU32(mem, kLobbySettingsDef + 8, adv_setup_items);
 
