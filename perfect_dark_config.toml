@@ -307,3 +307,20 @@ registers = ["r3"]
 address = 0x8220089C
 name = "PdHookCrateWithoutAmmo"
 registers = ["r10", "r31"]
+
+# Debug Hooks for Player Settings Reset
+# tail calls to mpChooseTrack go through PdMpChooseTrack.
+[[midasm_hook]]
+address = 0x821CFE68
+name = "PdHookHandicapResetProfile"
+registers = ["r27"]
+
+[[midasm_hook]]
+address = 0x8225F824
+name = "PdHookHandicapResetJoin"
+registers = ["r3", "r4"]
+
+[[midasm_hook]]
+address = 0x821D0E7C
+name = "PdHookHandicapResetDefaults"
+registers = ["r30"]
