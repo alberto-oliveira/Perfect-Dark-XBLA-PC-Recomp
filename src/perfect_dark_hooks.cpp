@@ -262,3 +262,17 @@ void PdHookNetLookApply(PPCRegister& r4) {
 void PdHookChooseTrack() {
   PdMpChooseTrack(HookContext(), HookBase());
 }
+
+// Before `bl 0x821d0b28` (set handicap: slot r3, value r4) in the join path, which
+// runs again every time the Combat Simulator screen opens: keep the slot's current
+// handicap instead of resetting it to 128.
+void PdHookHandicapResetJoin(PPCRegister& r3, PPCRegister& r4) {
+  const uint32_t slot = r3.u32;
+  if (slot >= 4) return;  // the Handicaps dialog has 4 sliders
+  r4.u64 = HookBase()[0x82641950 + slot * 216 + 0xCD];
+}
+
+// ---- Debug ------------------------------------------------------------------
+
+void PdHookHandicapResetProfile(PPCRegister& r27)  { REXLOG_INFO("[handicap] profile reset, slot {}", r27.u32 / 216); }
+void PdHookHandicapResetDefaults(PPCRegister& r30) { REXLOG_INFO("[handicap] defaults reset, slot {}", r30.u32 / 216); }

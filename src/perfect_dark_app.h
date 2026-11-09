@@ -6292,13 +6292,13 @@ class PerfectDarkApp : public rex::ReXApp {
       REXLOG_INFO("  - [menu_patch] [fail:{}] kHandicapRow[0] is: 0x{:08X}; should be: 0x04",fail, read_res);
       read_res = ReadGuestU32(mem, kHandicapRow + 8);
       fail = read_res != 0x000054B9;
-      REXLOG_INFO("  - [menu_patch] [fail:{}] kHandicapRow[8] is: 0x{:08X}; should be: 0x00005016",fail, read_res);
+      REXLOG_INFO("  - [menu_patch] [fail:{}] kHandicapRow[8] is: 0x{:08X}; should be: 0x000054B9",fail, read_res);
       read_res = ReadGuestU32(mem, kHandicapRow + 16);
       fail = read_res != 0x825DE0BC;
       REXLOG_INFO("  - [menu_patch] [fail:{}] kHandicapRow[16] is: 0x{:08X}; should be: 0x825DE0BC",fail, read_res);
-      read_res = ReadGuestU32(mem, adv_setup_end_marker);
+      read_res = ReadGuestU32(mem, adv_setup_end_marker) >> 24;
       fail = read_res != 0x1D;
-      REXLOG_INFO("  - [menu_patch] [fail:{}] adv_setup_end_marker[16] is: 0x{:08X}; should be: 0x1D",fail, read_res);
+      REXLOG_INFO("  - [menu_patch] [fail:{}] adv_setup_end_marker[0] is: 0x{:08X}; should be: 0x1D",fail, read_res);
       return;
     }
 
