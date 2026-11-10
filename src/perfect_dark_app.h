@@ -3035,7 +3035,6 @@ class PerfectDarkApp : public rex::ReXApp {
   // Player Setup's rebuilt rows (0 until they are built).
   static inline uint32_t setup_items_ = 0;
   static inline uint32_t achievements_strings_ = 0;
-  static inline uint32_t adv_setup_ = 0;
 
   // Re-read twice a second, so an unlock during play shows up without asking
   // the store on every menu frame.
@@ -5091,7 +5090,8 @@ class PerfectDarkApp : public rex::ReXApp {
     }
     done = true;
     PatchPlayerSetupMenus();
-    PatchHandicapRow();
+    PatchHandicapRow(kLobbySettingsLocalDef, kLobbySettingsLocalItems);
+    PatchHandicapRow(kLobbySettingsNetDef, kLobbySettingsNetItems);
     PatchGamerCardPrompt();
     menu_patched_ = true;
     REXLOG_INFO("[menu_patch] text bank found after {} check(s); installing PC menu rows",
@@ -6124,8 +6124,13 @@ class PerfectDarkApp : public rex::ReXApp {
   // Options below will be used to patch the game settings with the (already
   // existing) handicap settings
   static constexpr uint32_t kHandicapRow  = 0x825E044C;
-  static constexpr uint32_t kLobbySettingsDef = 0x825DEB2C;
-  static constexpr uint32_t kLobbySettingsItems = 0x825DEB48;
+  
+  static constexpr uint32_t kLobbySettingsLocalDef = 0x825DEB2C;
+  static constexpr uint32_t kLobbySettingsLocalItems = 0x825DEB48;
+
+  static constexpr uint32_t kLobbySettingsNetDef = 0x825FAF74;
+  static constexpr uint32_t kLobbySettingsNetItems = 0x825FAE70;
+
   // Rows Before Handicap: Scenario, Options, Arena, Weapons, Limits, Simulants
   static constexpr int kLobbySettingsRowsBefore = 6;
   // Rows After Handicap: Teams, Sep, Load Set., Save Set., Sep, Finished
@@ -6251,35 +6256,37 @@ class PerfectDarkApp : public rex::ReXApp {
                 (name_label && name_handler) ? "" : " - no Player Name row (thunks failed)");
   }
 
-  static void PatchHandicapRow() {
+  static void PatchHandicapRow(uint32_t current_lobby_def, uint32_t current_lobby_items) {
+
+    REXLOG_INFO("[menu_patch] rebuilding adv. setup - def: 0x{:08X}, items: 0x{:08X}", current_lobby_def, current_lobby_items);
+
     PerfectDarkApp* app = current_instance_;
     if (!app || !app->runtime() || !app->runtime()->memory()) return;
-    if (adv_setup_) return;
     auto* mem = app->runtime()->memory();
     auto* fd = app->runtime()->function_dispatcher();
     if (!fd) return;
+    if (ReadGuestU32(mem, current_lobby_def + 8) != current_lobby_items){
+      REXLOG_INFO("  - [menu_patch] adv. setup has been patched already; returning.");
+      return;
+    }
 
     // Only rebuild pages that still look like the ones this was written for.
-    constexpr uint32_t simulants_opt = kLobbySettingsItems + uint32_t(kLobbySettingsSimulants) * 20;
+    const uint32_t simulants_opt = current_lobby_items + uint32_t(kLobbySettingsSimulants) * 20;
     // The original number of elements is 12, hence why read + 12*20 for the end marker
-    constexpr uint32_t adv_setup_end_marker = kLobbySettingsItems + uint32_t(kLobbySettingsEnd) * 20;
+    const uint32_t adv_setup_end_marker = current_lobby_items + uint32_t(kLobbySettingsEnd) * 20;
     if (
-      ReadGuestU32(mem, kLobbySettingsDef + 8) != 0x825DEB48 ||        // Adv. Setup Check
       ReadGuestU32(mem, simulants_opt) >> 24 != 0x04 ||                // Simulants type
       ReadGuestU32(mem, simulants_opt + 8) != 0x00005019 ||            // Simulants text
       ReadGuestU32(mem, simulants_opt + 16) != 0x825DE27C ||           // Simulants option
       ReadGuestU32(mem, kHandicapRow) >> 24 != 0x04 ||                 // Handicap type
-      ReadGuestU32(mem, kHandicapRow + 8) != 0x000054B9 ||         // Handicap text
-      ReadGuestU32(mem, kHandicapRow + 16) != 0x825DE0BC ||        // Handicap option
-      ReadGuestU32(mem, adv_setup_end_marker) >> 24 != 0x1D       // Adv. Setup End marker
+      ReadGuestU32(mem, kHandicapRow + 8) != 0x000054B9 ||             // Handicap text
+      ReadGuestU32(mem, kHandicapRow + 16) != 0x825DE0BC ||            // Handicap option
+      ReadGuestU32(mem, adv_setup_end_marker) >> 24 != 0x1D            // Adv. Setup End marker
       
     ) {
       REXLOG_INFO("[menu_patch] lobby setup pages are not as expected; reads below:");
-      auto read_res = ReadGuestU32(mem, kLobbySettingsDef + 8);
-      auto fail = read_res != 0x825DEB48;
-      REXLOG_INFO("  - [menu_patch] [fail:{}] kLobbySettingsDef is: 0x{:08X}; should be: 0x825DEB48",fail, read_res);
-      read_res = ReadGuestU32(mem, simulants_opt) >> 24;
-      fail = read_res != 0x04;
+      auto read_res = ReadGuestU32(mem, simulants_opt) >> 24;
+      auto fail = read_res != 0x04;
       REXLOG_INFO("  - [menu_patch] [fail:{}] simulants_opt[0] is: 0x{:08X}; should be: 0x04",fail, read_res);
       read_res = ReadGuestU32(mem, simulants_opt + 8);
       fail = read_res != 0x00005019;
@@ -6309,22 +6316,20 @@ class PerfectDarkApp : public rex::ReXApp {
     uint32_t out = adv_setup_items;
     // Copies Scenario, Options, Arena, Weapons, Limits, Simulants
     for (int i = 0; i < kLobbySettingsRowsBefore; ++i, out += 20) {
-      CopyMenuItem(mem, kLobbySettingsItems + uint32_t(i) * 20, out);
+      CopyMenuItem(mem, current_lobby_items + uint32_t(i) * 20, out);
     }
     // Adds the "Handicap" row
     CopyMenuItem(mem, kHandicapRow, out);
     out += 20;
     // Copies Teams, Sep, Save, Load, Sep, Finished
     for (int i = kLobbySettingsRowsBefore; i < kLobbySettingsRowsBefore+kLobbySettingsRowsAfter; ++i, out += 20) {
-      CopyMenuItem(mem, kLobbySettingsItems + uint32_t(i) * 20, out);
+      CopyMenuItem(mem, current_lobby_items + uint32_t(i) * 20, out);
     }
     WriteMenuEnd(mem, out);
 
-    WriteGuestU32(mem, kLobbySettingsDef + 8, adv_setup_items);
+    WriteGuestU32(mem, current_lobby_def + 8, adv_setup_items);
 
-    adv_setup_ = adv_setup_items;
-
-    REXLOG_INFO("[menu_patch] player setup rebuilt: adv. settings 0x{:08X}", adv_setup_items);
+    REXLOG_INFO("  - [menu_patch] adv. setup rebuilt: adv. settings 0x{:08X}", adv_setup_items);
   }
 
   static void PatchVideoOptionsMenu() {
