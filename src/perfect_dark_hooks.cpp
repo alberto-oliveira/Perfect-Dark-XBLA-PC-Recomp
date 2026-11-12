@@ -16,6 +16,8 @@
 
 // main.cpp
 bool PdSkipArcadeLogo();
+bool PdN64Poison(const uint8_t* base);
+int16_t PdN64PoisonRespawnCap();
 int32_t PdLegalScreenTicks();
 bool PdSmoothGameClock();
 uint32_t PdOsCountStep(uint32_t real_step);
@@ -270,4 +272,74 @@ void PdHookHandicapResetJoin(PPCRegister& r3, PPCRegister& r4) {
   const uint32_t slot = r3.u32;
   if (slot >= 4) return;  // the Handicaps dialog has 4 sliders
   r4.u64 = HookBase()[0x82641950 + slot * 216 + 0xCD];
+}
+
+// At bondstartnewlife's `sth r30,856(r11)` (r11 = the respawning player's chr;
+// it zeroes the poison counter, then the blur). With pd_n64_poison, true jumps past
+// both stores, the poison counter is capped (PdN64PoisonRespawnCap) and the
+// blur's death count is cleared, so the kept blur fades at its normal speed.
+bool PdHookKeepPoisonOnRespawn(PPCRegister& r11) {
+  uint8_t* base = HookBase();
+  if (!PdN64Poison(base)) return false;
+  uint8_t* chr = base + r11.u32;
+  const int16_t poison = int16_t((chr[856] << 8) | chr[857]);  // s16, big-endian
+  const int16_t cap = PdN64PoisonRespawnCap();
+  if (poison > cap) {
+    chr[856] = uint8_t(uint16_t(cap) >> 8);
+    chr[857] = uint8_t(cap);
+  }
+  REXLOG_INFO("[poison] respawn chr 0x{:08X} frame {}: counter {} -> {}", r11.u32,  // TEMP_POISON
+              LoadU32(base, 0x82648BF8 + 0x0C), poison, poison > cap ? cap : poison);
+  chr[767] = 0;  // blurnumtimesdied: the blur fades (deaths + 1) times faster
+  return true;
+}
+
+// The player index whose chr this is (g_Vars.players[i]->prop == chr->prop), or -1.
+static int PoisonVictimPlayer(uint8_t* base, uint32_t chr) {
+  const uint32_t prop = LoadU32(base, chr + 28);
+  for (int i = 0; i < 8; ++i) {
+    const uint32_t player = LoadU32(base, 0x82648BF8 + 100 + uint32_t(i) * 4);
+    if (player && LoadU32(base, player + 188) == prop) return i;
+  }
+  return -1;
+}
+
+// TEMP_POISON: the victim's bondhealth, or -99 if it is not a player.
+static float PoisonVictimHealth(uint8_t* base, uint32_t chr) {
+  const int i = PoisonVictimPlayer(base, chr);
+  if (i < 0) return -99.0f;
+  const uint32_t bits = LoadU32(base, LoadU32(base, 0x82648BF8 + 100 + uint32_t(i) * 4) + 228);
+  float health;
+  std::memcpy(&health, &bits, 4);
+  return health;
+}
+
+// TEMP_POISON: chr_set_poisoned's MP store `sth r10,856(r31)` (r10 = the new counter).
+void PdHookPoisonSetLog(PPCRegister& r10, PPCRegister& r31) {
+  uint8_t* base = HookBase();
+  REXLOG_INFO("[poison] set chr 0x{:08X} frame {}: counter -> {}, health {:.3f}", r31.u32,
+              LoadU32(base, 0x82648BF8 + 0x0C), int16_t(r10.u16), PoisonVictimHealth(base, r31.u32));
+}
+
+// chr_tick_poisoned's MP damage call (`bl 0x8212dd90`, 1.3 every 720 of the
+// counter; r31 = the poisoned chr). Every PC ticks every chr's poison, but only the
+// victim's own PC knows when that player is dead and holds the counter then; on the
+// other PCs a remote player's health always reads full, so their counters run on
+// through the death and their ticks kill at other moments. With pd_n64_poison, true
+// skips the damage unless the victim is a player on this PC (config +109 = its pad,
+// -1 for a remote player).
+bool PdHookPoisonTickLocalOnly(PPCRegister& r31) {
+  uint8_t* base = HookBase();
+  const int player = PoisonVictimPlayer(base, r31.u32);
+  bool remote = false;
+  if (player >= 0) {
+    const uint32_t cfg = LoadU32(base, 0x82648BF8 + 132 + uint32_t(player) * 128 + 112);
+    remote = cfg < 8 && int8_t(base[0x82641950 + cfg * 216 + 109]) < 0;
+  }
+  const bool skip = remote && PdN64Poison(base);
+  const int16_t counter = int16_t((base[r31.u32 + 856] << 8) | base[r31.u32 + 857]);
+  REXLOG_INFO("[poison] tick chr 0x{:08X} frame {}: counter {}, health before {:.3f}, {}",  // TEMP_POISON
+              r31.u32, LoadU32(base, 0x82648BF8 + 0x0C), counter, PoisonVictimHealth(base, r31.u32),
+              skip ? "skipped (remote player)" : "applied");
+  return skip;
 }

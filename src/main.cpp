@@ -655,6 +655,33 @@ void PdMpChooseTrack(PPCContext& ctx, uint8_t* base) {
               slot, entry >> 9, own);
 }
 
+// N64 poison (user, 2026-11-11): a thrown combat knife poisons its target, and
+// in a match the poison is kept while dead (chr_tick_poisoned, sub_82109478). On
+// the N64 respawning did not clear it, so it kept ticking after respawn (at 10%
+// handicap every tick kills). 4J's bondstartnewlife (sub_820FDA68) clears the
+// poison and the blur on respawn; this skips both stores in a match.
+REXCVAR_DEFINE_BOOL(pd_n64_poison, false, "PerfectDark",
+                    "Thrown-knife poison and its blur carry over a respawn, as on the N64 "
+                    "(multiplayer only)");
+
+REXCVAR_DEFINE_INT32(pd_n64_poison_kills, 2, "PerfectDark",
+                     "With pd_n64_poison: how many more times the poison can kill after a "
+                     "respawn (0-4)")
+    .range(0, 4);
+
+bool PdN64Poison(const uint8_t* base) {
+  return REXCVAR_GET(pd_n64_poison) && GuestU32(base, kGVarsMpRunning) != 0;
+}
+
+// The poison counter a respawn keeps at most. A tick of poison damage happens
+// each time the counter (counting down, 4 a frame) crosses a nonzero multiple of
+// 720, and while dead it is held at up to 3600: so it ticks 5 more times after a
+// respawn, the first one at once. Keeping kills * 720 + 719 leaves `kills` ticks,
+// the first 3 s after the respawn.
+int16_t PdN64PoisonRespawnCap() {
+  return int16_t(std::clamp(REXCVAR_GET(pd_n64_poison_kills), 0, 4) * 720 + 719);
+}
+
 // Each frame on a joined PC (from PdNoteGameFrame).
 void PdMpMusicFrame(uint8_t* base) {
   namespace netplay = rex::kernel::xam::netplay;

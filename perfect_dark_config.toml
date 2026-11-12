@@ -284,3 +284,27 @@ return = true
 address = 0x8225F824
 name = "PdHookHandicapResetJoin"
 registers = ["r3", "r4"]
+
+# N64 poison (pd_n64_poison): respawning keeps the thrown knife's poison and its
+# blur, so the poison keeps ticking after respawn as on the N64 (at 10% handicap
+# every tick kills). Skips bondstartnewlife's two stores (sth 856 and sth 728);
+# the hook caps the kept poison (pd_n64_poison_kills).
+[[midasm_hook]]
+address = 0x820FDB9C
+name = "PdHookKeepPoisonOnRespawn"
+registers = ["r11"]
+jump_address_on_true = 0x820FDBA4
+
+# Online, only the poisoned player's own PC applies the poison ticks
+# (pd_n64_poison): chr_tick_poisoned's MP damage call is skipped for remote players.
+[[midasm_hook]]
+address = 0x8210960C
+name = "PdHookPoisonTickLocalOnly"
+registers = ["r31"]
+jump_address_on_true = 0x82109610
+
+# TEMP_POISON: log poison set (chr_set_poisoned's MP store).
+[[midasm_hook]]
+address = 0x82109448
+name = "PdHookPoisonSetLog"
+registers = ["r10", "r31"]
