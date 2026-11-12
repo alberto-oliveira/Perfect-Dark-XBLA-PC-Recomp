@@ -147,6 +147,9 @@ REXCVAR_DEFINE_BOOL(pd_light_capture, false, "PerfectDark",
 REXCVAR_DEFINE_STRING(pd_light_watch, "", "PerfectDark",
                       "With pd_light_capture: F9 watches writes to this hex byte pattern in the game's memory, "
                       "F9 again lists the code that made them (lighting investigation)");
+REXCVAR_DEFINE_STRING(pd_handicaps, "", "PerfectDark",
+                      "Online handicaps by gamertag: \"Name:percent, Name:percent\" (10-1000). "
+                      "Every player must use the same list.");
 
 REXCVAR_DEFINE_BOOL(pd_menu_mouse, true, "PerfectDark",
                     "Use the mouse in menus: point at a row to highlight it, left button "

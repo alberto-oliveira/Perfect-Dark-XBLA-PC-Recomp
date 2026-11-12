@@ -278,19 +278,9 @@ address = 0x822426B8
 name = "PdHookChooseTrack"
 return = true
 
-# Debug Hooks for Player Settings Reset
-# tail calls to mpChooseTrack go through PdMpChooseTrack.
-[[midasm_hook]]
-address = 0x821CFE68
-name = "PdHookHandicapResetProfile"
-registers = ["r27"]
-
+# Handicaps: the join path (Combat Simulator screen) keeps each slot's handicap
+# instead of resetting it to 128.
 [[midasm_hook]]
 address = 0x8225F824
 name = "PdHookHandicapResetJoin"
 registers = ["r3", "r4"]
-
-[[midasm_hook]]
-address = 0x821D0E7C
-name = "PdHookHandicapResetDefaults"
-registers = ["r30"]

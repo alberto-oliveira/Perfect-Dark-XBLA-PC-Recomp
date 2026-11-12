@@ -2404,56 +2404,6 @@ class PerfectDarkApp : public rex::ReXApp {
     }
   }
 
-  // TEMP_NET_HANDICAP: what is the config index of each online player on each machine
-  // TEMP_NET_HANDICAP: if the host's handicap value reaches the client
-  static void DebugDumpPlayerSlots() {
-    PerfectDarkApp* app = current_instance_;
-    if (!app || !app->runtime() || !app->runtime()->memory()) return;
-    auto* mem = app->runtime()->memory();
-    const uint16_t mask = uint16_t(ReadGuestU32(mem, 0x82641898 + 20) & 0xFFFF);  // +22
-    REXLOG_INFO("[handicap] slot mask 0x{:04X}", mask);
-    for (uint32_t i = 0; i < 8; ++i) {
-      const uint32_t cfg = 0x82641950 + i * 216;
-      std::string name;
-      for (uint32_t k = 0; k < 15; ++k) {
-        const uint8_t c = ReadGuestU8(mem, cfg + k);
-        if (!c || c == '\n') break;
-        name += char(c);
-      }
-      REXLOG_INFO("[handicap] cfg {} id {} handicap {} name '{}'", i,
-                  int(int8_t(ReadGuestU8(mem, cfg + 109))), ReadGuestU8(mem, cfg + 0xCD), name);
-    }
-
-    const uint32_t g_vars = 0x82648BF8;
-    for (uint32_t i = 0; i < 8; ++i) {
-      const uint32_t player = ReadGuestU32(mem, g_vars + 100 + i * 4);
-      if (!player) continue;
-      const uint32_t cfg_index = ReadGuestU32(mem, g_vars + 132 + i * 128 + 112);
-      REXLOG_INFO("[handicap] player {} at 0x{:08X} uses cfg {}", i, player, cfg_index);
-    }
-
-  }
-
-  // TEMP_NET_HANDICAP: every place a player name is stored in the game's data,
-  // as ASCII and as UTF-16 (the Xbox stores gamertags both ways).
-  static void DebugFindName(const std::string& name) {
-    PerfectDarkApp* app = current_instance_;
-    if (!app || !app->runtime() || !app->runtime()->memory()) return;
-    auto* mem = app->runtime()->memory();
-    constexpr uint32_t kStart = 0x82000000, kSize = 0x6D8000;  // the game's image + data
-    const auto* base = mem->TranslateVirtual<const uint8_t*>(kStart);
-    std::string wide;                                          // UTF-16 big-endian
-    for (char c : name) { wide += '\0'; wide += c; }
-    const std::string* patterns[] = {&name, &wide};
-    for (const std::string* pat : patterns) {
-      for (uint32_t i = 0; i + pat->size() <= kSize; ++i) {
-        if (std::memcmp(base + i, pat->data(), pat->size()) == 0)
-          REXLOG_INFO("[handicap] '{}' {} at 0x{:08X}", name,
-                      pat == &name ? "ascii" : "utf16", kStart + i);
-      }
-    }
-  }
-
   // TEMP_TID_SCAN: the text bank is a run of strings in load order, so a
   // string's id can be counted off a known one ("Show Crouch" = 0x8D47).
   // TEMP_TID_SCAN: find the slots that point at two known strings; the gap
@@ -6350,8 +6300,6 @@ class PerfectDarkApp : public rex::ReXApp {
     PerfectDarkApp* app = current_instance_;
     if (!app || !app->runtime() || !app->runtime()->memory()) return;
     auto* mem = app->runtime()->memory();
-    auto* fd = app->runtime()->function_dispatcher();
-    if (!fd) return;
     if (ReadGuestU32(mem, current_lobby_def + 8) != current_lobby_items){
       REXLOG_INFO("  - [menu_patch] adv. setup has been patched already; returning.");
       return;
@@ -8783,9 +8731,6 @@ inline void PerfectDarkInputTracker::OnDraw(ImGuiIO& /*io*/) {
     bool f3_down = (GetAsyncKeyState(VK_F3) & 0x8000) != 0;
     if (f3_down && !f3_was_down_) {
       PerfectDarkApp::DebugFindMenuState();
-      PerfectDarkApp::DebugDumpPlayerSlots();
-      PerfectDarkApp::DebugFindName("Zqhost");
-      PerfectDarkApp::DebugFindName("Zqclient");
     }
     f3_was_down_ = f3_down;
 

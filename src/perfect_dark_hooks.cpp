@@ -271,8 +271,3 @@ void PdHookHandicapResetJoin(PPCRegister& r3, PPCRegister& r4) {
   if (slot >= 4) return;  // the Handicaps dialog has 4 sliders
   r4.u64 = HookBase()[0x82641950 + slot * 216 + 0xCD];
 }
-
-// ---- Debug ------------------------------------------------------------------
-
-void PdHookHandicapResetProfile(PPCRegister& r27)  { REXLOG_INFO("[handicap] profile reset, slot {}", r27.u32 / 216); }
-void PdHookHandicapResetDefaults(PPCRegister& r30) { REXLOG_INFO("[handicap] defaults reset, slot {}", r30.u32 / 216); }
