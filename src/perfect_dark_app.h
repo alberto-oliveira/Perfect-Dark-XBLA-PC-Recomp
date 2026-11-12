@@ -8745,6 +8745,9 @@ inline void PerfectDarkInputTracker::OnDraw(ImGuiIO& /*io*/) {
     bool f3_down = (GetAsyncKeyState(VK_F3) & 0x8000) != 0;
     if (f3_down && !f3_was_down_) {
       PerfectDarkApp::DebugFindMenuState();
+      PerfectDarkApp::DebugDumpPlayerSlots();
+      PerfectDarkApp::DebugFindName("Zqhost");
+      PerfectDarkApp::DebugFindName("Zqclient");
     }
     f3_was_down_ = f3_down;
 
