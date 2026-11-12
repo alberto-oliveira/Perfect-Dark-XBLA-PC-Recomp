@@ -50,6 +50,7 @@
 #include "pd_test_input.h"  // native-renderer branch: test pipe input
 #include "pd_native_vk_out.h"  // Graphics API: pd::native_vk::VulkanUsable
 #include "pd_update.h"         // Check for Updates
+#include "pd_handicap.h"       // pd_handicaps: online handicaps by gamertag
 #include <rex/input/sdl/sdl_input_driver.h>
 #include <rex/cvar.h>
 #include <rex/diag_timing.h>
@@ -5440,6 +5441,42 @@ class PerfectDarkApp : public rex::ReXApp {
     return text;
   }
 
+  // Option A (pd_handicaps): every machine applies the same list to its own
+  // config table. Hits are calculated on the shooter's machine from its own
+  // table, so every copy must hold the same list.
+  static void TickNetHandicaps() {
+    static int frames = 0;
+    if (++frames % 60 != 0) return;
+    const std::string list = rex::cvar::GetFlagByName("pd_handicaps");
+    if (list.empty()) return;
+    static std::string parsed_from;
+    static std::unordered_map<std::string, uint8_t> table;
+    if (list != parsed_from) {
+      table = pd::handicap::Parse(list);
+      parsed_from = list;
+    }
+    PerfectDarkApp* app = current_instance_;
+    auto* mem = (app && app->runtime()) ? app->runtime()->memory() : nullptr;
+    if (!mem || ReadGuestU32(mem, 0x82648BF8 + 1336) == 0) return;  // g_Vars: MP match running
+    for (uint32_t i = 0; i < 8; ++i) {
+      const uint32_t cfg = 0x82641950 + i * 216;
+      std::string name;
+      for (uint32_t k = 0; k < 16; ++k) {
+        const uint8_t c = ReadGuestU8(mem, cfg + 75 + k);  // real gamertag (network match only)
+        if (!c || c == '\n') break;
+        name += char(c);
+      }
+      if (name.empty()) continue;
+      const auto it = table.find(pd::handicap::LowerTrim(name));
+      if (it == table.end()) continue;
+      uint8_t* p = mem->TranslateVirtual<uint8_t*>(cfg + 0xCD);
+      if (p && *p != it->second) {
+        REXLOG_INFO("[handicap] cfg {} '{}': {} -> {}", i, name, *p, it->second);
+        *p = it->second;
+      }
+    }
+  }
+
   static void TickMatchDetails() {
     namespace netplay = rex::kernel::xam::netplay;
     static int frames = 0;
@@ -8688,6 +8725,7 @@ inline void PerfectDarkInputTracker::OnDraw(ImGuiIO& /*io*/) {
   PerfectDarkApp::TickCutsceneSkip();
   PerfectDarkApp::DrawMenuCursor();
   PerfectDarkApp::TickMatchDetails();
+  PerfectDarkApp::TickNetHandicaps();
   PerfectDarkApp::DrawPrivateMatchNotice();
   PerfectDarkApp::TickControllerPrompts();
   PerfectDarkApp::TickTitlePrompt();
