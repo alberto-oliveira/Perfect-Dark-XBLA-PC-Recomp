@@ -3,6 +3,7 @@
 #include "generated/default/perfect_dark_init.h"
 
 #include "perfect_dark_app.h"
+#include "pd_weapons.h"  // more multiplayer weapons, shuffled weapon spawns
 
 #include <rex/chrono/clock.h>
 #include <rex/diag_timing.h>
@@ -540,7 +541,6 @@ REXCVAR_DEFINE_BOOL(pd_skip_arcade_logo, true, "PerfectDark",
 bool PdSkipArcadeLogo() {
   return REXCVAR_GET(pd_skip_arcade_logo);
 }
-
 // The blue "Xbox 360 Product Identification" screen is the N64 game's legal
 // screen (titleTickLegal = sub_8224A3E8, perfect_dark_recomp.12.cpp): it moves
 // on once the title timer passes 180 ticks of 60 Hz and the game has finished
@@ -652,6 +652,357 @@ void PdMpChooseTrack(PPCContext& ctx, uint8_t* base) {
               slot, entry >> 9, own);
 }
 
+// More multiplayer weapons and shuffled weapon spawns (pd_weapons.h). The host's
+// settings decide; a joined PC uses what the host sends, whatever its own say.
+REXCVAR_DEFINE_STRING(pd_mp_weapons, "", "PerfectDark",
+                      "Multiplayer weapon slots 7-16 in matches you host: weapon table indices "
+                      "separated by commas (list in src/pd_weapons.h; 0 = Nothing, 46 = Disabled). "
+                      "Empty = only the game's 6 slots. Every player needs this build");
+REXCVAR_DEFINE_BOOL(pd_mp_weapon_shuffle, false, "PerfectDark",
+                    "In matches you host, a weapon pickup that respawns comes back as a different "
+                    "one of the stage's weapons");
+REXCVAR_DEFINE_INT32(pd_mp_weapon_shuffle_seed, 0, "PerfectDark",
+                     "With pd_mp_weapon_shuffle: 0 = new choices every match, any other number = "
+                     "the same choices every time (for testing)");
+
+namespace {
+// A joined PC starts the stage at about the same time as the host, whose choice
+// arrives within a second (the joined PC asks twice a second).
+constexpr auto kWeaponsWait = std::chrono::milliseconds(3000);
+// A choice the host made longer ago than this belongs to an earlier match.
+constexpr auto kWeaponsFresh = std::chrono::seconds(10);
+uint32_t weapons_used_seq = 0;  // the host's choice this PC last used
+
+// This PC's own settings (a host, or a match that is not a network match).
+pd::weapons::MatchConfig OwnWeaponsConfig() {
+  pd::weapons::MatchConfig config;
+  config.extra = pd::weapons::ParseExtraSlots(REXCVAR_GET(pd_mp_weapons));
+  config.shuffle = REXCVAR_GET(pd_mp_weapon_shuffle);
+  config.seed = uint32_t(REXCVAR_GET(pd_mp_weapon_shuffle_seed));
+  if (config.seed == 0) {
+    rex::kernel::xam::netplay::RandomBytes(reinterpret_cast<uint8_t*>(&config.seed), sizeof(config.seed));
+  }
+  return config;
+}
+
+// On a joined PC: the host's choice for this stage. It waits for a new one; if
+// none comes (a PC that joined a match already under way) it takes the host's
+// latest. False if the host never sent one (a host without this build).
+bool HostWeaponsConfig(pd::weapons::MatchConfig* out) {
+  namespace netplay = rex::kernel::xam::netplay;
+  netplay::HostBlob blob;
+  const auto is_new = [&] {
+    return netplay::LatestHostBlob(pd::weapons::kBlobKey, &blob) && blob.seq != weapons_used_seq &&
+           std::chrono::steady_clock::now() - blob.set_at < kWeaponsFresh;
+  };
+  const auto start = std::chrono::steady_clock::now();
+  bool found = is_new();
+  while (!found && std::chrono::steady_clock::now() - start < kWeaponsWait) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    found = is_new();
+  }
+  const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
+  if (!found) {
+    if (!netplay::LatestHostBlob(pd::weapons::kBlobKey, &blob)) {
+      REXLOG_WARN("[weapons] no weapon choice from the host after {} ms: using the game's 6 slots", waited.count());
+      return false;
+    }
+    REXLOG_WARN("[weapons] no new weapon choice from the host after {} ms: using its last one (#{})",
+                waited.count(), blob.seq);
+  }
+  if (!pd::weapons::DecodeBlob(blob.data, out)) {
+    REXLOG_WARN("[weapons] the host's weapon choice #{} is from another version: using the game's 6 slots", blob.seq);
+    return false;
+  }
+  weapons_used_seq = blob.seq;
+  REXLOG_INFO("[weapons] host's choice #{} after {} ms", blob.seq, waited.count());
+  return true;
+}
+}  // namespace
+
+// setupCreateProps' start (sub_821FFCC8): the stage's props are about to be made.
+// Decides this stage's weapon slots and shuffle (the host also sends them; a
+// joined PC waits for them), then notes the stage's weapon pickups and the
+// weapons they start with.
+void PdSetupCreateProps(PPCContext& ctx, uint8_t* base) {
+  namespace netplay = rex::kernel::xam::netplay;
+  namespace weapons = pd::weapons;
+  weapons::g_match = {};
+  weapons::g_pickups.clear();
+  weapons::g_selection.clear();
+  weapons::g_crates.clear();
+  if (weapons::LoadU32(base, weapons::kMatchRunning) == 0 && weapons::LoadU32(base, weapons::kMatchRunning2) == 0) {
+    return;  // not a multiplayer match: the stage has no weapon spawn locations
+  }
+
+  const char* source = "own settings";
+  if (netplay::IsJoinedSession()) {
+    source = "host";
+    if (!HostWeaponsConfig(&weapons::g_match)) weapons::g_match = {};
+  } else {
+    weapons::g_match = OwnWeaponsConfig();
+    if (netplay::IsHostingSession()) {
+      source = "own settings, sent to the joined PCs";
+      const std::vector<uint8_t> blob = weapons::EncodeBlob(weapons::g_match);
+      netplay::SetHostBlob(weapons::kBlobKey, blob.data(), blob.size());
+    }
+  }
+
+  // The size of a setup object, in words: the game's own function.
+  const auto object_words = [&](uint32_t obj) {
+    PPCContext call = ctx;
+    call.r3.u64 = obj;
+    sub_821FD198(call, base);
+    return call.r3.u32;
+  };
+  // Each pickup's starting weapon is the one its spawn location gets; together
+  // they are the stage's weapon selection (with 16 slots and 10 locations, the
+  // weapons of slots 1-10), which respawns choose from.
+  const std::vector<uint8_t> slots = weapons::AllSlots(base, weapons::g_match);
+  for (const uint32_t obj : weapons::FindPickups(base, object_words, &weapons::g_crates)) {
+    const int location = base[obj + weapons::kSetupLocation] - weapons::kFirstLocation;
+    const uint8_t index = weapons::IndexForLocation(base, location, slots);
+    if (!weapons::CanRespawnAs(index)) continue;  // Nothing, or a Shield: not a weapon pickup
+    weapons::g_pickups.push_back({obj, index, 0});
+    if (std::find(weapons::g_selection.begin(), weapons::g_selection.end(), index) == weapons::g_selection.end()) {
+      weapons::g_selection.push_back(index);
+    }
+  }
+
+  const weapons::MatchConfig& match = weapons::g_match;
+  REXLOG_INFO("[weapons] stage {} ({}): slots {}, respawn shuffle {} (seed {}), {} weapon pickups, {} ammo "
+              "crates, selection {}",
+              weapons::LoadU32(base, weapons::kStageNumber), source, weapons::DescribeSlots(base, slots),
+              match.shuffle ? "on" : "off", match.seed, weapons::g_pickups.size(), weapons::g_crates.size(),
+              weapons::DescribeSlots(base, weapons::g_selection));
+}
+
+namespace {
+float LoadF32(const uint8_t* base, uint32_t address) {
+  const uint32_t bits = pd::weapons::LoadU32(base, address);
+  float value;
+  std::memcpy(&value, &bits, 4);
+  return value;
+}
+void StoreU32(uint8_t* base, uint32_t address, uint32_t value) {
+  base[address] = uint8_t(value >> 24);
+  base[address + 1] = uint8_t(value >> 16);
+  base[address + 2] = uint8_t(value >> 8);
+  base[address + 3] = uint8_t(value);
+}
+void StoreF32(uint8_t* base, uint32_t address, float value) {
+  uint32_t bits;
+  std::memcpy(&bits, &value, 4);
+  StoreU32(base, address, bits);
+}
+
+constexpr uint32_t kObjFlags = 8;    // setup/object flags
+constexpr uint32_t kObjMatrix = 28;  // the object's 3x3 matrix (rotation times scale)
+// Flags that make setupGenericObject place an object some other way than resting
+// on its bounding box (0x2: sub_822128E8 instead of sub_82212550; 0x4, 0x8: other
+// cases inside sub_82212550): those objects only get their matrix rescaled.
+constexpr uint32_t kObjFlagsNotOnFloor = 0x2 | 0x4 | 0x8;
+
+// How high above the floor the stage's floor placement (sub_82212550, called by
+// setupGenericObject) puts an object's origin, for `model`: it takes the axis of
+// the object's matrix closest to vertical and lifts the object by the model's
+// bounding-box end on that axis times that axis' height component. `rot_y` = the
+// vertical components of the object's 3 matrix rows (they include the scale).
+// False if the model has no bounding box.
+bool FloorLift(PPCContext& ctx, uint8_t* base, uint32_t model, const float rot_y[3], float* lift) {
+  PPCContext call = ctx;
+  call.r3.u64 = model;
+  sub_82202DA8(call, base);  // the model's bounding-box node
+  if (!call.r3.u32) return false;
+  const uint32_t bbox = pd::weapons::LoadU32(base, call.r3.u32 + 4);  // {?, xmin, xmax, ymin, ymax, zmin, zmax}
+  if (!bbox) return false;
+  int axis = 0;  // as the game: the first of the largest
+  if (std::fabs(rot_y[1]) > std::fabs(rot_y[axis])) axis = 1;
+  if (std::fabs(rot_y[2]) > std::fabs(rot_y[axis])) axis = 2;
+  const uint32_t low_end = bbox + 4 + uint32_t(axis) * 8;  // that axis' min, then max
+  const float low = LoadF32(base, rot_y[axis] < 0 ? low_end + 4 : low_end);
+  *lift = -rot_y[axis] * low;
+  return true;
+}
+
+// Makes a weapon pickup's object hold weapon table entry `index`: a new model
+// for it, made as setupPlaceWeapon (sub_821FE370), setupGenericObject
+// (sub_821FDCF0) and objInit (sub_82203B50) make one, then the old model freed.
+// Only for a pickup that is not on show (it is about to respawn). The weapon's
+// models are loaded first if they are not yet: a weapon of the selection whose
+// pickup the stage left out (player count or difficulty) was never loaded.
+bool SetPickupWeapon(PPCContext& ctx, uint8_t* base, uint32_t prop, uint32_t obj, uint8_t index) {
+  namespace weapons = pd::weapons;
+  const uint32_t entry = weapons::kWeaponTable + index * weapons::kWeaponEntrySize;
+  const uint8_t weapon_num = base[entry];
+  const uint16_t model_num = weapons::LoadU16(base, entry + 6);
+  const uint32_t state = weapons::kModelStates + uint32_t(model_num) * 8;
+
+  PPCContext call = ctx;
+  call.r3.u64 = model_num;
+  sub_821FD640(call, base);  // setupLoadModeldef: the pickup's model
+  call = ctx;
+  call.r3.u64 = weapon_num;
+  sub_82101298(call, base);  // the models its shots use (bolts, rockets...)
+  const uint32_t file = weapons::LoadU32(base, state);
+  if (!file) {
+    REXLOG_WARN("[weapons] model {} of index {} did not load", model_num, index);
+    return false;
+  }
+
+  call = ctx;
+  call.r3.u64 = file;
+  sub_8218E648(call, base);  // modelmgrInstantiateModelWithoutAnim
+  const uint32_t model = call.r3.u32;
+  if (!model) {
+    REXLOG_WARN("[weapons] no free model instance for index {}", index);
+    return false;
+  }
+  // As setupPlaceWeapon: each weapon has its own pickup scale (entry +8, 256 = 1.0).
+  weapons::StoreU16(base, obj + weapons::kObjScale, weapons::LoadU16(base, entry + 8));
+
+  // As objInit: the model knows its object, and its scale is the model table's.
+  StoreU32(base, model + weapons::kModelObj, obj);
+  base[model + 1] = 0;
+  float scale = float(weapons::LoadU16(base, state + 6)) * weapons::kModelStateScaleUnit;
+  // As setupGenericObject: times the object's own scale (256 = 1.0).
+  scale *= float(weapons::LoadU16(base, obj + weapons::kObjScale)) / 256.0f;
+  StoreF32(base, model + weapons::kModelScale, scale);
+
+  const uint32_t old_model = weapons::LoadU32(base, obj + weapons::kObjModel);
+  const float old_scale = old_model ? LoadF32(base, old_model + weapons::kModelScale) : 0.0f;
+  if (old_scale > 0.0f) {
+    // The stage placed the pickup for its first model: setupGenericObject scaled the
+    // object's matrix (obj+28, 3x3, rows of 3 floats) by that model's scale
+    // (sub_822438C8), and its floor placement lifted the object by that model's
+    // bounding box. Without this a new weapon was drawn at a size made for the
+    // old one, and rested at the old one's height (small ones floated).
+    const float ratio = scale / old_scale;
+    float rot_y[3];
+    for (int row = 0; row < 3; ++row) rot_y[row] = LoadF32(base, obj + kObjMatrix + uint32_t(row * 3 + 1) * 4);
+    float old_lift = 0.0f;
+    float new_lift = 0.0f;
+    const bool floor_placed = (weapons::LoadU32(base, obj + kObjFlags) & kObjFlagsNotOnFloor) == 0;
+    if (floor_placed && FloorLift(ctx, base, old_model, rot_y, &old_lift)) {
+      const float new_rot_y[3] = {rot_y[0] * ratio, rot_y[1] * ratio, rot_y[2] * ratio};
+      if (FloorLift(ctx, base, model, new_rot_y, &new_lift)) {
+        // The prop's position (prop+8: x, y, z); the respawn that follows this
+        // hook (sub_821FD838) works out its rooms again from it.
+        StoreF32(base, prop + 12, LoadF32(base, prop + 12) - old_lift + new_lift);
+      }
+    }
+    for (uint32_t i = 0; i < 9; ++i) {
+      StoreF32(base, obj + kObjMatrix + i * 4, LoadF32(base, obj + kObjMatrix + i * 4) * ratio);
+    }
+  }
+  StoreU32(base, obj + weapons::kObjModel, model);
+  weapons::StoreU16(base, obj + weapons::kObjModelNum, model_num);
+  base[obj + weapons::kObjWeaponNum] = weapon_num;
+  if (old_model) {
+    call = ctx;
+    call.r3.u64 = old_model;
+    sub_8218E0D8(call, base);  // modelmgrFreeModel
+  }
+
+  // As the game's weapon init (sub_8221E410, after objInit): hide the muzzle flash.
+  // A new gun model has its flash parts visible, which showed as a stretched fire
+  // texture on the pickup. sub_8220D778 = weaponSetGunfireVisible(prop, visible,
+  // room); room -1 = no flash light.
+  call = ctx;
+  call.r3.u64 = prop;
+  call.r4.u64 = 0;
+  call.r5.s64 = -1;
+  sub_8220D778(call, base);
+  return true;
+}
+
+// The ammo crates that hold pickup `obj`'s ammo get the ammo of weapon table
+// entry `index` instead. setupCreateProps loads the ammo models of a crate's
+// filled slots only, so those of newly filled slots are loaded here
+// (setupLoadModeldef, sub_821FD640: nothing to do if already loaded).
+void SetPickupCrates(PPCContext& ctx, uint8_t* base, uint32_t obj, uint8_t index) {
+  namespace weapons = pd::weapons;
+  for (const weapons::Crate& crate : weapons::g_crates) {
+    if (crate.weapon_obj != obj) continue;
+    weapons::SetCrateAmmo(base, crate, index);
+    for (int s = 0; s < weapons::kCrateSlotCount; ++s) {
+      const uint32_t slot = crate.obj + weapons::kCrateSlots + uint32_t(s) * 4;
+      const uint16_t model = weapons::LoadU16(base, slot);
+      const uint16_t quantity = weapons::LoadU16(base, slot + 2);
+      if (quantity == 0 || model == weapons::kNoModel) continue;
+      PPCContext call = ctx;
+      call.r3.u64 = model;
+      sub_821FD640(call, base);
+    }
+  }
+}
+}  // namespace
+
+// propEnable's start (sub_821F7518, r3 = the prop): a prop is put on show. Every
+// PC calls it when a weapon pickup respawns: the host from the object tick, a
+// joined PC from the host's respawn message. With the respawn shuffle on, a
+// stage pickup that respawns first becomes a different weapon.
+void PdPropEnable(PPCContext& ctx, uint8_t* base, uint32_t prop) {
+  namespace weapons = pd::weapons;
+  if (!weapons::g_match.shuffle || weapons::g_pickups.empty() || !prop) return;
+  if (weapons::LoadU32(base, weapons::kLevelFrames) == 0) return;  // the stage is being made
+  const uint32_t obj = weapons::LoadU32(base, prop + weapons::kPropObj);
+  for (size_t i = 0; i < weapons::g_pickups.size(); ++i) {
+    weapons::Pickup& pickup = weapons::g_pickups[i];
+    if (pickup.obj != obj) continue;
+    const uint32_t respawn = ++pickup.respawns;
+    const uint8_t next = weapons::RespawnIndex(weapons::g_selection, pickup.index, weapons::g_match.seed,
+                                               uint32_t(i), respawn);
+    // SetPickupWeapon logs a warning when it fails; the pickup then keeps its weapon.
+    if (next != pickup.index && SetPickupWeapon(ctx, base, prop, obj, next)) {
+      pickup.index = next;
+      SetPickupCrates(ctx, base, obj, next);
+    }
+    return;
+  }
+}
+
+// setupCreateProps' ammo-crate case, where it skips the crate when its weapon has
+// no ammo (Combat Boost, Cloaking Device...). With the respawn shuffle on, the
+// pickup can later become a gun, so the crate is made anyway, empty (as
+// SetCrateAmmo leaves it for a weapon without ammo). True = make the crate.
+// Every PC has the same slots and shuffle flag, so all of them make the same
+// crates in the same order (pickups are matched online by that order).
+bool PdMakeCrateWithoutAmmo(uint8_t* base, uint32_t crate_obj) {
+  namespace weapons = pd::weapons;
+  if (!weapons::g_match.shuffle) return false;
+  for (const weapons::Crate& crate : weapons::g_crates) {
+    if (crate.obj != crate_obj) continue;
+    for (const weapons::Pickup& pickup : weapons::g_pickups) {
+      if (pickup.obj != crate.weapon_obj) continue;
+      weapons::SetCrateAmmo(base, crate, pickup.index);  // empties it
+      return true;
+    }
+    return false;  // its weapon is not a pickup that respawns (Nothing, Shield)
+  }
+  return false;
+}
+
+// mpGetMpWeaponByLocation (sub_821CC458) for a match with extra slots: the guest
+// address of the weapon table entry spawn location `location` gets. False with no
+// extra slots (the game's own function answers).
+bool PdWeaponByLocation(const uint8_t* base, int32_t location, uint32_t* entry) {
+  namespace weapons = pd::weapons;
+  if (weapons::g_match.extra.empty()) return false;
+  const uint8_t index = weapons::IndexForLocation(base, location, weapons::AllSlots(base, weapons::g_match));
+  *entry = weapons::kWeaponTable + index * weapons::kWeaponEntrySize;
+  return true;
+}
+
+// Each frame on a joined PC: asking for the host's weapon choice now starts the
+// polling in the lobby, so it is there when the stage loads.
+void PdWeaponsFrame() {
+  namespace netplay = rex::kernel::xam::netplay;
+  if (!netplay::IsJoinedSession()) return;
+  netplay::HostBlob blob;
+  netplay::LatestHostBlob(pd::weapons::kBlobKey, &blob);
+}
+
 // Each frame on a joined PC (from PdNoteGameFrame).
 void PdMpMusicFrame(uint8_t* base) {
   namespace netplay = rex::kernel::xam::netplay;
@@ -690,6 +1041,7 @@ void PdMpMusicFrame(uint8_t* base) {
 // against real time (100% = the game runs at its own speed).
 void PdNoteGameFrame(uint8_t* base) {
   PdMpMusicFrame(base);
+  PdWeaponsFrame();
   PerfectDarkApp::NoteGameStage(
       _byteswap_ulong(*reinterpret_cast<const uint32_t*>(base + 0x826492E0)),   // stage
       _byteswap_ulong(*reinterpret_cast<const uint32_t*>(base + 0x82648BF8 + 0x0C)));  // level frames
