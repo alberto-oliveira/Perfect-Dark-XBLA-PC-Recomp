@@ -41,6 +41,9 @@ void PdNetLookReceive(uint32_t record, uint32_t input);
 void PdNetLookSend(uint32_t input, uint32_t frame);
 void PdNetLookApply(uint32_t pad);
 void PdMpChooseTrack(PPCContext& ctx, uint8_t* base);
+void PdSetupCreateProps(PPCContext& ctx, uint8_t* base);
+bool PdWeaponByLocation(const uint8_t* base, int32_t location, uint32_t* entry);
+void PdPropEnable(PPCContext& ctx, uint8_t* base, uint32_t prop);
 
 namespace {
 // The calling guest thread's full context and guest memory, for a hook that needs
@@ -261,4 +264,25 @@ void PdHookNetLookApply(PPCRegister& r4) {
 // In place of the tail call to mpChooseTrack (config: return).
 void PdHookChooseTrack() {
   PdMpChooseTrack(HookContext(), HookBase());
+}
+
+// setupCreateProps' start, before the stage's props are made: decide this stage's
+// weapon slots (pd_mp_weapons, or the host's) and note its weapon pickups.
+void PdHookSetupCreateProps() {
+  PdSetupCreateProps(HookContext(), HookBase());
+}
+
+// mpGetMpWeaponByLocation's start (r3 = a weapon spawn location, 0-15). With extra
+// weapon slots, true returns at once with r3 = the weapon table entry it gets.
+bool PdHookWeaponByLocation(PPCRegister& r3) {
+  uint32_t entry = 0;
+  if (!PdWeaponByLocation(HookBase(), r3.s32, &entry)) return false;
+  r3.u64 = entry;
+  return true;
+}
+
+// propEnable's start (r3 = the prop being put on show): a respawning weapon
+// pickup may become a different weapon first (pd_mp_weapon_shuffle).
+void PdHookPropEnable(PPCRegister& r3) {
+  PdPropEnable(HookContext(), HookBase(), r3.u32);
 }

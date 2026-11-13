@@ -50,6 +50,7 @@
 #include "pd_test_input.h"  // native-renderer branch: test pipe input
 #include "pd_native_vk_out.h"  // Graphics API: pd::native_vk::VulkanUsable
 #include "pd_update.h"         // Check for Updates
+#include "pd_weapons.h"        // pd_mp_weapons: weapon slots 7-16, shuffled respawns
 #include <rex/input/sdl/sdl_input_driver.h>
 #include <rex/cvar.h>
 #include <rex/diag_timing.h>
@@ -73,6 +74,8 @@ REXCVAR_DECLARE(bool, pd_dev_hotkeys);
 void PdInstallCrashReport();
 // Keeps the game on a hybrid CPU's performance cores (main.cpp, HANDOVER 4ba).
 void PdPreferPerformanceCores();
+// TEMP_WEAP: logs the multiplayer weapon slots and the stage's pickups (main.cpp).
+void PdWeaponsDebugDump();
 REXCVAR_DECLARE(bool, pd_story_complete);
 REXCVAR_DECLARE(bool, pd_frame_stats);
 REXCVAR_DECLARE(bool, pd_menu_mouse);
@@ -80,6 +83,7 @@ REXCVAR_DECLARE(int32_t, pd_mp_facing_delay_ms);
 REXCVAR_DECLARE(double, pd_shine);
 REXCVAR_DECLARE(bool, pd_view_bob);
 REXCVAR_DECLARE(bool, pd_light_capture);
+REXCVAR_DECLARE(bool, pd_mp_weapon_shuffle);
 #include <rex/logging/api.h>
 #include <rex/logging/macros.h>
 #include <rex/rex_app.h>
@@ -582,6 +586,7 @@ class PerfectDarkInputTracker : public rex::ui::ImGuiDialog {
   // sub_82343458 r3/r11 candidates (both proved byte-identical between
   // Horizontal/Vertical - watching for the actual write is the fallback).
   bool f1_was_down_ = false;
+  bool home_was_down_ = false;  // TEMP_WEAP
 };
 
 class PerfectDarkApp : public rex::ReXApp {
@@ -8855,6 +8860,13 @@ inline void PerfectDarkSettingsDialog::OnDraw(ImGuiIO& io) {
 
     float row_y = window_pos.y + kTopContent;
     for (int row = 0; row < kRows; ++row) {
+
+    // TEMP_WEAP: Home logs the multiplayer weapon slots and the stage's weapon pickups.
+    bool home_down = (GetAsyncKeyState(VK_HOME) & 0x8000) != 0;
+    if (home_down && !home_was_down_) {
+      PdWeaponsDebugDump();
+    }
+    home_was_down_ = home_down;
       ImVec2 row_pos(window_pos.x + kSideMargin, row_y);
       ImVec2 row_size(window_size.x - kSideMargin * 2.0f, kRowHeight);
       bool selected = (row == selected_row_);
