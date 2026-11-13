@@ -796,6 +796,35 @@ void StoreF32(uint8_t* base, uint32_t address, float value) {
   StoreU32(base, address, bits);
 }
 
+constexpr uint32_t kObjFlags = 8;    // setup/object flags
+constexpr uint32_t kObjMatrix = 28;  // the object's 3x3 matrix (rotation times scale)
+// Flags that make setupGenericObject place an object some other way than resting
+// on its bounding box (0x2: sub_822128E8 instead of sub_82212550; 0x4, 0x8: other
+// cases inside sub_82212550): those objects only get their matrix rescaled.
+constexpr uint32_t kObjFlagsNotOnFloor = 0x2 | 0x4 | 0x8;
+
+// How high above the floor the stage's floor placement (sub_82212550, called by
+// setupGenericObject) puts an object's origin, for `model`: it takes the axis of
+// the object's matrix closest to vertical and lifts the object by the model's
+// bounding-box end on that axis times that axis' height component. `rot_y` = the
+// vertical components of the object's 3 matrix rows (they include the scale).
+// False if the model has no bounding box.
+bool FloorLift(PPCContext& ctx, uint8_t* base, uint32_t model, const float rot_y[3], float* lift) {
+  PPCContext call = ctx;
+  call.r3.u64 = model;
+  sub_82202DA8(call, base);  // the model's bounding-box node
+  if (!call.r3.u32) return false;
+  const uint32_t bbox = pd::weapons::LoadU32(base, call.r3.u32 + 4);  // {?, xmin, xmax, ymin, ymax, zmin, zmax}
+  if (!bbox) return false;
+  int axis = 0;  // as the game: the first of the largest
+  if (std::fabs(rot_y[1]) > std::fabs(rot_y[axis])) axis = 1;
+  if (std::fabs(rot_y[2]) > std::fabs(rot_y[axis])) axis = 2;
+  const uint32_t low_end = bbox + 4 + uint32_t(axis) * 8;  // that axis' min, then max
+  const float low = LoadF32(base, rot_y[axis] < 0 ? low_end + 4 : low_end);
+  *lift = -rot_y[axis] * low;
+  return true;
+}
+
 // Makes a weapon pickup's object hold weapon table entry `index`: a new model
 // for it, made as setupPlaceWeapon (sub_821FE370), setupGenericObject
 // (sub_821FDCF0) and objInit (sub_82203B50) make one, then the old model freed.
@@ -841,6 +870,31 @@ bool SetPickupWeapon(PPCContext& ctx, uint8_t* base, uint32_t prop, uint32_t obj
   StoreF32(base, model + weapons::kModelScale, scale);
 
   const uint32_t old_model = weapons::LoadU32(base, obj + weapons::kObjModel);
+  const float old_scale = old_model ? LoadF32(base, old_model + weapons::kModelScale) : 0.0f;
+  if (old_scale > 0.0f) {
+    // The stage placed the pickup for its first model: setupGenericObject scaled the
+    // object's matrix (obj+28, 3x3, rows of 3 floats) by that model's scale
+    // (sub_822438C8), and its floor placement lifted the object by that model's
+    // bounding box. Without this a new weapon was drawn at a size made for the
+    // old one, and rested at the old one's height (small ones floated).
+    const float ratio = scale / old_scale;
+    float rot_y[3];
+    for (int row = 0; row < 3; ++row) rot_y[row] = LoadF32(base, obj + kObjMatrix + uint32_t(row * 3 + 1) * 4);
+    float old_lift = 0.0f;
+    float new_lift = 0.0f;
+    const bool floor_placed = (weapons::LoadU32(base, obj + kObjFlags) & kObjFlagsNotOnFloor) == 0;
+    if (floor_placed && FloorLift(ctx, base, old_model, rot_y, &old_lift)) {
+      const float new_rot_y[3] = {rot_y[0] * ratio, rot_y[1] * ratio, rot_y[2] * ratio};
+      if (FloorLift(ctx, base, model, new_rot_y, &new_lift)) {
+        // The prop's position (prop+8: x, y, z); the respawn that follows this
+        // hook (sub_821FD838) works out its rooms again from it.
+        StoreF32(base, prop + 12, LoadF32(base, prop + 12) - old_lift + new_lift);
+      }
+    }
+    for (uint32_t i = 0; i < 9; ++i) {
+      StoreF32(base, obj + kObjMatrix + i * 4, LoadF32(base, obj + kObjMatrix + i * 4) * ratio);
+    }
+  }
   StoreU32(base, obj + weapons::kObjModel, model);
   weapons::StoreU16(base, obj + weapons::kObjModelNum, model_num);
   base[obj + weapons::kObjWeaponNum] = weapon_num;
@@ -908,6 +962,27 @@ void PdPropEnable(PPCContext& ctx, uint8_t* base, uint32_t prop) {
   }
 }
 
+// setupCreateProps' ammo-crate case, where it skips the crate when its weapon has
+// no ammo (Combat Boost, Cloaking Device...). With the respawn shuffle on, the
+// pickup can later become a gun, so the crate is made anyway, empty (as
+// SetCrateAmmo leaves it for a weapon without ammo). True = make the crate.
+// Every PC has the same slots and shuffle flag, so all of them make the same
+// crates in the same order (pickups are matched online by that order).
+bool PdMakeCrateWithoutAmmo(uint8_t* base, uint32_t crate_obj) {
+  namespace weapons = pd::weapons;
+  if (!weapons::g_match.shuffle) return false;
+  for (const weapons::Crate& crate : weapons::g_crates) {
+    if (crate.obj != crate_obj) continue;
+    for (const weapons::Pickup& pickup : weapons::g_pickups) {
+      if (pickup.obj != crate.weapon_obj) continue;
+      weapons::SetCrateAmmo(base, crate, pickup.index);  // empties it
+      return true;
+    }
+    return false;  // its weapon is not a pickup that respawns (Nothing, Shield)
+  }
+  return false;
+}
+
 // mpGetMpWeaponByLocation (sub_821CC458) for a match with extra slots: the guest
 // address of the weapon table entry spawn location `location` gets. False with no
 // extra slots (the game's own function answers).
@@ -962,27 +1037,6 @@ void PdMpMusicFrame(uint8_t* base) {
 // start of every frame, where g_Vars diffframe60 still holds the step count of
 // the frame that just ended. A frame that took under 20 ms but stepped the game
 // twice or more is a double step: the game jumps ahead on screen, which is what
-// setupCreateProps' ammo-crate case, where it skips the crate when its weapon has
-// no ammo (Combat Boost, Cloaking Device...). With the respawn shuffle on, the
-// pickup can later become a gun, so the crate is made anyway, empty (as
-// SetCrateAmmo leaves it for a weapon without ammo). True = make the crate.
-// Every PC has the same slots and shuffle flag, so all of them make the same
-// crates in the same order (pickups are matched online by that order).
-bool PdMakeCrateWithoutAmmo(uint8_t* base, uint32_t crate_obj) {
-  namespace weapons = pd::weapons;
-  if (!weapons::g_match.shuffle) return false;
-  for (const weapons::Crate& crate : weapons::g_crates) {
-    if (crate.obj != crate_obj) continue;
-    for (const weapons::Pickup& pickup : weapons::g_pickups) {
-      if (pickup.obj != crate.weapon_obj) continue;
-      weapons::SetCrateAmmo(base, crate, pickup.index);  // empties it
-      return true;
-    }
-    return false;  // its weapon is not a pickup that respawns (Nothing, Shield)
-  }
-  return false;
-}
-
 // the 4aj clock fault looked like. Every 10 s one line also gives game time
 // against real time (100% = the game runs at its own speed).
 void PdNoteGameFrame(uint8_t* base) {

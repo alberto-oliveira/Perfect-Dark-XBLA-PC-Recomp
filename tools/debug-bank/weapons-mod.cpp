@@ -60,6 +60,12 @@ REXLOG_INFO("[weapons] pickup {} respawn #{} (frame {}): index {} -> {}{}", i, r
 REXLOG_INFO("[weapons] location {} -> index {} (weapon #{})", location, index,
             weapons::WeaponNumber(base, index));
 
+// SetPickupWeapon, after rescaling the pickup's matrix and moving it to the new
+// model's floor height (added and removed in the fix for oversized/floating
+// respawned pickups, 2026-11-13; it checked the scale ratio and the floor lift).
+REXLOG_INFO("[weapons] pickup 0x{:08X} -> index {}: scale {:.4f} -> {:.4f}, lift {:.2f} -> {:.2f}{}",
+            obj, index, old_scale, scale, old_lift, new_lift, floor_placed ? "" : " (not floor-placed)");
+
 // The Home dump.
 void PdWeaponsDebugDump() {
   namespace weapons = pd::weapons;
