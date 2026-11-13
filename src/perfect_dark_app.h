@@ -74,8 +74,6 @@ REXCVAR_DECLARE(bool, pd_dev_hotkeys);
 void PdInstallCrashReport();
 // Keeps the game on a hybrid CPU's performance cores (main.cpp, HANDOVER 4ba).
 void PdPreferPerformanceCores();
-// TEMP_WEAP: logs the multiplayer weapon slots and the stage's pickups (main.cpp).
-void PdWeaponsDebugDump();
 REXCVAR_DECLARE(bool, pd_story_complete);
 REXCVAR_DECLARE(bool, pd_frame_stats);
 REXCVAR_DECLARE(bool, pd_menu_mouse);
@@ -586,7 +584,6 @@ class PerfectDarkInputTracker : public rex::ui::ImGuiDialog {
   // sub_82343458 r3/r11 candidates (both proved byte-identical between
   // Horizontal/Vertical - watching for the actual write is the fallback).
   bool f1_was_down_ = false;
-  bool home_was_down_ = false;  // TEMP_WEAP
 };
 
 class PerfectDarkApp : public rex::ReXApp {
@@ -8860,13 +8857,6 @@ inline void PerfectDarkInputTracker::OnDraw(ImGuiIO& /*io*/) {
       PerfectDarkApp::DebugDumpStringTable();
     }
     f1_was_down_ = f1_down;
-
-    // TEMP_WEAP: Home logs the multiplayer weapon slots and the stage's weapon pickups.
-    bool home_down = (GetAsyncKeyState(VK_HOME) & 0x8000) != 0;
-    if (home_down && !home_was_down_) {
-      PdWeaponsDebugDump();
-    }
-    home_was_down_ = home_down;
   }
 }
 

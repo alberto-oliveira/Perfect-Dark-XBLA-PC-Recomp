@@ -861,19 +861,15 @@ void SetPickupCrates(PPCContext& ctx, uint8_t* base, uint32_t obj, uint8_t index
   for (const weapons::Crate& crate : weapons::g_crates) {
     if (crate.weapon_obj != obj) continue;
     weapons::SetCrateAmmo(base, crate, index);
-    std::string filled;
     for (int s = 0; s < weapons::kCrateSlotCount; ++s) {
       const uint32_t slot = crate.obj + weapons::kCrateSlots + uint32_t(s) * 4;
       const uint16_t model = weapons::LoadU16(base, slot);
       const uint16_t quantity = weapons::LoadU16(base, slot + 2);
-      if (quantity == 0) continue;
-      filled += fmt::format(" type {} x{}", s + 1, quantity);
-      if (model == weapons::kNoModel) continue;
+      if (quantity == 0 || model == weapons::kNoModel) continue;
       PPCContext call = ctx;
       call.r3.u64 = model;
       sub_821FD640(call, base);
     }
-    REXLOG_INFO("[weapons] crate 0x{:08X} now holds:{}", crate.obj, filled.empty() ? " nothing" : filled);  // TEMP_WEAP
   }
 }
 }  // namespace
@@ -893,11 +889,8 @@ void PdPropEnable(PPCContext& ctx, uint8_t* base, uint32_t prop) {
     const uint32_t respawn = ++pickup.respawns;
     const uint8_t next = weapons::RespawnIndex(weapons::g_selection, pickup.index, weapons::g_match.seed,
                                                uint32_t(i), respawn);
-    const bool changed = next != pickup.index && SetPickupWeapon(ctx, base, obj, next);
-    REXLOG_INFO("[weapons] pickup {} respawn #{} (frame {}): index {} -> {}{}", i, respawn,  // TEMP_WEAP
-                weapons::LoadU32(base, weapons::kLevelFrames), pickup.index, next,
-                changed ? "" : " (not changed)");
-    if (changed) {
+    // SetPickupWeapon logs a warning when it fails; the pickup then keeps its weapon.
+    if (next != pickup.index && SetPickupWeapon(ctx, base, obj, next)) {
       pickup.index = next;
       SetPickupCrates(ctx, base, obj, next);
     }
@@ -913,8 +906,6 @@ bool PdWeaponByLocation(const uint8_t* base, int32_t location, uint32_t* entry) 
   if (weapons::g_match.extra.empty()) return false;
   const uint8_t index = weapons::IndexForLocation(base, location, weapons::AllSlots(base, weapons::g_match));
   *entry = weapons::kWeaponTable + index * weapons::kWeaponEntrySize;
-  REXLOG_INFO("[weapons] location {} -> index {} (weapon #{})", location, index,  // TEMP_WEAP
-              weapons::WeaponNumber(base, index));
   return true;
 }
 
@@ -925,37 +916,6 @@ void PdWeaponsFrame() {
   if (!netplay::IsJoinedSession()) return;
   netplay::HostBlob blob;
   netplay::LatestHostBlob(pd::weapons::kBlobKey, &blob);
-}
-
-// TEMP_WEAP: Home (pd_dev_hotkeys) logs the weapon slots and the stage's pickups.
-void PdWeaponsDebugDump() {
-  namespace weapons = pd::weapons;
-  const uint8_t* base = rex::system::kernel_state()->memory()->virtual_membase();
-  const std::vector<uint8_t> game(base + weapons::kGameSlots, base + weapons::kGameSlots + weapons::kGameSlotCount);
-  std::string text = fmt::format(
-      "[weapons] dump: game slots {}, weapon set {}, settings '{}' shuffle {} seed {}\n"
-      "  this stage: extra slots {}, respawn shuffle {} (seed {}), host choice used #{}",
-      weapons::DescribeSlots(base, game), base[0x82648BF8 + 1839], REXCVAR_GET(pd_mp_weapons),
-      REXCVAR_GET(pd_mp_weapon_shuffle), REXCVAR_GET(pd_mp_weapon_shuffle_seed),
-      weapons::DescribeSlots(base, weapons::g_match.extra), weapons::g_match.shuffle,
-      weapons::g_match.seed, weapons_used_seq);
-  text += fmt::format("\n  selection {}", weapons::DescribeSlots(base, weapons::g_selection));
-  // After the props are made, a pickup's location byte holds its weapon number.
-  for (size_t i = 0; i < weapons::g_pickups.size(); ++i) {
-    const weapons::Pickup& pickup = weapons::g_pickups[i];
-    const int16_t pad = int16_t((base[pickup.obj + 6] << 8) | base[pickup.obj + 7]);
-    text += fmt::format("\n  pickup {} 0x{:08X}: pad {}, weapon #{} (index {}), {} respawns, model 0x{:08X}", i,
-                        pickup.obj, pad, base[pickup.obj + weapons::kObjWeaponNum], pickup.index,
-                        pickup.respawns, weapons::LoadU32(base, pickup.obj + weapons::kObjModel));
-  }
-  for (const weapons::Crate& crate : weapons::g_crates) {
-    text += fmt::format("\n  crate 0x{:08X} (ammo of pickup 0x{:08X}):", crate.obj, crate.weapon_obj);
-    for (int s = 0; s < weapons::kCrateSlotCount; ++s) {
-      const uint16_t quantity = weapons::LoadU16(base, crate.obj + weapons::kCrateSlots + uint32_t(s) * 4 + 2);
-      if (quantity) text += fmt::format(" type {} x{}", s + 1, quantity);
-    }
-  }
-  REXLOG_INFO("{}", text);
 }
 
 // Each frame on a joined PC (from PdNoteGameFrame).
