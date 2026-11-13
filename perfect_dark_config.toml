@@ -299,3 +299,11 @@ return_on_true = true
 address = 0x821F7518
 name = "PdHookPropEnable"
 registers = ["r3"]
+
+# setupCreateProps' ammo-crate case (`cmpwi r10,0` at loc_8220089C; r10 = the
+# weapon's first ammo quantity, r31 = the crate): 0 skips the crate. With
+# pd_mp_weapon_shuffle a crate next to a no-ammo pickup is made anyway, empty.
+[[midasm_hook]]
+address = 0x8220089C
+name = "PdHookCrateWithoutAmmo"
+registers = ["r10", "r31"]

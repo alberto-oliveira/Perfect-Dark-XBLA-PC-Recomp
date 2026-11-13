@@ -44,6 +44,7 @@ void PdMpChooseTrack(PPCContext& ctx, uint8_t* base);
 void PdSetupCreateProps(PPCContext& ctx, uint8_t* base);
 bool PdWeaponByLocation(const uint8_t* base, int32_t location, uint32_t* entry);
 void PdPropEnable(PPCContext& ctx, uint8_t* base, uint32_t prop);
+bool PdMakeCrateWithoutAmmo(uint8_t* base, uint32_t crate_obj);
 
 namespace {
 // The calling guest thread's full context and guest memory, for a hook that needs
@@ -285,4 +286,11 @@ bool PdHookWeaponByLocation(PPCRegister& r3) {
 // pickup may become a different weapon first (pd_mp_weapon_shuffle).
 void PdHookPropEnable(PPCRegister& r3) {
   PdPropEnable(HookContext(), HookBase(), r3.u32);
+}
+
+// setupCreateProps' ammo-crate case at `cmpwi r10,0` (r10 = the weapon's first ammo
+// quantity, r31 = the crate's setup object): 0 skips the crate. A nonzero r10 makes
+// it (r10 is reloaded right after, so nothing else sees the change).
+void PdHookCrateWithoutAmmo(PPCRegister& r10, PPCRegister& r31) {
+  if (r10.s32 <= 0 && PdMakeCrateWithoutAmmo(HookBase(), r31.u32)) r10.u64 = 1;
 }

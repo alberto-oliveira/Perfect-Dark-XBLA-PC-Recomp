@@ -962,6 +962,27 @@ void PdMpMusicFrame(uint8_t* base) {
 // start of every frame, where g_Vars diffframe60 still holds the step count of
 // the frame that just ended. A frame that took under 20 ms but stepped the game
 // twice or more is a double step: the game jumps ahead on screen, which is what
+// setupCreateProps' ammo-crate case, where it skips the crate when its weapon has
+// no ammo (Combat Boost, Cloaking Device...). With the respawn shuffle on, the
+// pickup can later become a gun, so the crate is made anyway, empty (as
+// SetCrateAmmo leaves it for a weapon without ammo). True = make the crate.
+// Every PC has the same slots and shuffle flag, so all of them make the same
+// crates in the same order (pickups are matched online by that order).
+bool PdMakeCrateWithoutAmmo(uint8_t* base, uint32_t crate_obj) {
+  namespace weapons = pd::weapons;
+  if (!weapons::g_match.shuffle) return false;
+  for (const weapons::Crate& crate : weapons::g_crates) {
+    if (crate.obj != crate_obj) continue;
+    for (const weapons::Pickup& pickup : weapons::g_pickups) {
+      if (pickup.obj != crate.weapon_obj) continue;
+      weapons::SetCrateAmmo(base, crate, pickup.index);  // empties it
+      return true;
+    }
+    return false;  // its weapon is not a pickup that respawns (Nothing, Shield)
+  }
+  return false;
+}
+
 // the 4aj clock fault looked like. Every 10 s one line also gives game time
 // against real time (100% = the game runs at its own speed).
 void PdNoteGameFrame(uint8_t* base) {
