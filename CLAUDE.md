@@ -4,7 +4,6 @@ This file describes the workflow for perfect dark modding using Claude Code. Som
 
 ## General Instructions
 - Every mod will start with a thorough planning.
-- If available, the `Fable` model will be used for planning, while `Opus 5.5` will be used for implementation.
 - The initial planning stage should try to anticipate all in-game testing that will be carried-out by me; however, I understand that new tests may be needed as development proceeds.
 - The initial planning stage should try to anticipate all debug functions and hooks that should be added; however, I understand that new debug functions and hooks may be needed as development proceeds.
 - No unit testing.
@@ -23,7 +22,6 @@ This file describes the workflow for perfect dark modding using Claude Code. Som
 
 ## Clarifications (2026-11-12)
 
-- Model switching: I switch the session myself with `/model` (Fable for planning, Opus 5.5 for implementation). Claude doesn't start planning subagents for this.
 - The N64 poison work stays on the `handicap-mod` branch as part of the handicap mod.
 - Debug code (hooks and functions tagged `TEMP_*`) is committed while a mod is in development. When it is removed in a cleanup, its code is first copied into the debug bank at `tools/debug-bank/`: plain source files kept only so the code can be recovered later. They are not built and don't need to compile. Each entry notes what it was for, the hook addresses and toml entries it used, and the commit it was removed in.
 - The test-copy scripts in `tools/` are committed on `handicap-mod`.
