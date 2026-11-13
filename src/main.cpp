@@ -802,7 +802,7 @@ void StoreF32(uint8_t* base, uint32_t address, float value) {
 // Only for a pickup that is not on show (it is about to respawn). The weapon's
 // models are loaded first if they are not yet: a weapon of the selection whose
 // pickup the stage left out (player count or difficulty) was never loaded.
-bool SetPickupWeapon(PPCContext& ctx, uint8_t* base, uint32_t obj, uint8_t index) {
+bool SetPickupWeapon(PPCContext& ctx, uint8_t* base, uint32_t prop, uint32_t obj, uint8_t index) {
   namespace weapons = pd::weapons;
   const uint32_t entry = weapons::kWeaponTable + index * weapons::kWeaponEntrySize;
   const uint8_t weapon_num = base[entry];
@@ -849,6 +849,16 @@ bool SetPickupWeapon(PPCContext& ctx, uint8_t* base, uint32_t obj, uint8_t index
     call.r3.u64 = old_model;
     sub_8218E0D8(call, base);  // modelmgrFreeModel
   }
+
+  // As the game's weapon init (sub_8221E410, after objInit): hide the muzzle flash.
+  // A new gun model has its flash parts visible, which showed as a stretched fire
+  // texture on the pickup. sub_8220D778 = weaponSetGunfireVisible(prop, visible,
+  // room); room -1 = no flash light.
+  call = ctx;
+  call.r3.u64 = prop;
+  call.r4.u64 = 0;
+  call.r5.s64 = -1;
+  sub_8220D778(call, base);
   return true;
 }
 
@@ -890,7 +900,7 @@ void PdPropEnable(PPCContext& ctx, uint8_t* base, uint32_t prop) {
     const uint8_t next = weapons::RespawnIndex(weapons::g_selection, pickup.index, weapons::g_match.seed,
                                                uint32_t(i), respawn);
     // SetPickupWeapon logs a warning when it fails; the pickup then keeps its weapon.
-    if (next != pickup.index && SetPickupWeapon(ctx, base, obj, next)) {
+    if (next != pickup.index && SetPickupWeapon(ctx, base, prop, obj, next)) {
       pickup.index = next;
       SetPickupCrates(ctx, base, obj, next);
     }

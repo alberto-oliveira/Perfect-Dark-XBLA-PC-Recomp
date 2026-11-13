@@ -321,12 +321,16 @@ inline std::vector<uint32_t> FindPickups(const uint8_t* base, ObjectWords object
 }
 
 // Fills a crate for weapon table entry `index` as setupCreateProps does: its
-// stage-file quantities, then the weapon's two ammo types.
+// stage-file quantities, then the weapon's two ammo types. setupCreateProps makes
+// no crate at all for a weapon without ammo (first quantity 0: Combat Boost,
+// Cloaking Device...); the crate already exists here, so it is emptied instead.
 inline void SetCrateAmmo(uint8_t* base, const Crate& crate, uint8_t index) {
-  for (int s = 0; s < kCrateSlotCount; ++s) {
-    StoreU16(base, crate.obj + kCrateSlots + uint32_t(s) * 4 + 2, crate.stage_quantities[s]);
-  }
   const uint32_t entry = kWeaponTable + index * kWeaponEntrySize;
+  const bool has_ammo = base[entry + 2] != 0;
+  for (int s = 0; s < kCrateSlotCount; ++s) {
+    StoreU16(base, crate.obj + kCrateSlots + uint32_t(s) * 4 + 2, has_ammo ? crate.stage_quantities[s] : 0);
+  }
+  if (!has_ammo) return;
   for (uint32_t k = 0; k < 2; ++k) {
     const int type = int8_t(base[entry + 1 + k * 2]);
     const uint8_t quantity = base[entry + 2 + k * 2];
