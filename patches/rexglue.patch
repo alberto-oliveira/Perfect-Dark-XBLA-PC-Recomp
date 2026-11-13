@@ -825,10 +825,10 @@ index 0000000..87bf22e
 +}  // namespace rex::kernel::xam::leaderboards
 diff --git a/include/rex/kernel/xam/netplay.h b/include/rex/kernel/xam/netplay.h
 new file mode 100644
-index 0000000..4f8916f
+index 0000000..ac5a3fd
 --- /dev/null
 +++ b/include/rex/kernel/xam/netplay.h
-@@ -0,0 +1,229 @@
+@@ -0,0 +1,247 @@
 +/**
 + * ReXGlue runtime - Xbox LIVE Private Match over the local network.
 + *
@@ -993,6 +993,24 @@ index 0000000..4f8916f
 +// On a joined PC: the host's latest value, false until one has been heard
 +// (the first call starts the polling). Never waits for the network.
 +bool LatestHostValue(HostValue* out);
++
++// Like the host value, but a small block of bytes under a key of the title's
++// choosing, so separate features each have their own (Perfect Dark: the extra
++// multiplayer weapon slots). The host sets it; each joined PC asks the host for
++// every key it has asked about, twice a second. Older copies do not answer.
++constexpr size_t kMaxHostBlob = 192;
++// Host side: replaces the bytes under `key` (at most kMaxHostBlob are kept).
++void SetHostBlob(uint32_t key, const uint8_t* data, size_t size);
++struct HostBlob {
++  bool valid = false;
++  uint32_t seq = 0;  // counts the host's SetHostBlob calls for this key
++  std::vector<uint8_t> data;
++  std::chrono::steady_clock::time_point set_at;  // when the host set it, on this PC's clock
++};
++// On a joined PC: the host's latest bytes under `key`, false until they have
++// been heard (the first call for a key adds it to the polling). Never waits
++// for the network.
++bool LatestHostBlob(uint32_t key, HostBlob* out);
 +
 +// Internet play through a relay server (net_relay_server; the server is
 +// perfect-dark-recomp/tools/relay/pd_relay.py). The server is a virtual LAN
@@ -8630,10 +8648,10 @@ index 0f6aa34..751e9df 100644
  REX_EXPORT_STUB(__imp__NetDll_XmlDownloadGetReceivedDataSize);
 diff --git a/src/kernel/xam/xam_netplay.cpp b/src/kernel/xam/xam_netplay.cpp
 new file mode 100644
-index 0000000..1893f23
+index 0000000..2ab919a
 --- /dev/null
 +++ b/src/kernel/xam/xam_netplay.cpp
-@@ -0,0 +1,2061 @@
+@@ -0,0 +1,2222 @@
 +/**
 + * ReXGlue runtime - Xbox LIVE Private Match over the local network.
 + * See rex/kernel/xam/netplay.h.
@@ -8736,6 +8754,12 @@ index 0000000..1893f23
 +// Older copies do not answer it.
 +constexpr uint32_t kValueQueryMagic = 0x50445651;   // "PDVQ"
 +constexpr uint32_t kValueAnswerMagic = 0x50445641;  // "PDVA"
++// Host blob (SetHostBlob): query is magic, version and key; answer adds the
++// key, the blob's sequence number (0 = never set), its age in ms, its size and
++// its bytes. Older copies do not answer it.
++constexpr uint32_t kBlobQueryMagic = 0x50444251;   // "PDBQ"
++constexpr uint32_t kBlobAnswerMagic = 0x50444241;  // "PDBA"
++constexpr size_t kBlobAnswerHeader = 24;
 +
 +// XNADDR offsets. abOnline carries this PC's IPv4 addresses so a peer can
 +// pick the one it shares a network with: "PD", count, pad, then 4 x 4 bytes.
@@ -9348,6 +9372,17 @@ index 0000000..1893f23
 +HostValue heard_value;
 +std::atomic<bool> value_poll_running{false};
 +
++// SetHostBlob on the host, by key; on a joined PC, the keys it asks the host
++// for and what its poll last heard. All under host_value_mutex.
++struct HostBlobState {
++  uint32_t seq = 0;
++  std::vector<uint8_t> data;
++  std::chrono::steady_clock::time_point set_at;
++};
++std::map<uint32_t, HostBlobState> host_blobs;
++std::vector<uint32_t> wanted_blob_keys;
++std::map<uint32_t, HostBlob> heard_blobs;
++
 +// A hosted match a search heard.
 +struct Candidate {
 +  std::array<uint8_t, kSessionInfoSize> info{};
@@ -9451,6 +9486,31 @@ index 0000000..1893f23
 +                : uint32_t(std::min<int64_t>(
 +                      std::chrono::duration_cast<std::chrono::milliseconds>(age).count(),
 +                      0xFFFFFFFEll)));
++    return reply;
++  }
++  if (GetBE32(packet) == kBlobQueryMagic) {
++    if (size < 12 || !IsHostingSession()) {
++      return reply;
++    }
++    const uint32_t key = GetBE32(packet + 8);
++    reply.assign(kBlobAnswerHeader, 0);
++    PutBE32(reply.data(), kBlobAnswerMagic);
++    PutBE32(reply.data() + 4, kProtocolVersion);
++    PutBE32(reply.data() + 8, key);
++    std::lock_guard<std::mutex> lock(host_value_mutex);
++    const auto it = host_blobs.find(key);
++    if (it == host_blobs.end()) {
++      PutBE32(reply.data() + 16, 0xFFFFFFFFu);  // never set: seq 0, size 0
++      return reply;
++    }
++    const HostBlobState& blob = it->second;
++    const auto age = std::chrono::steady_clock::now() - blob.set_at;
++    PutBE32(reply.data() + 12, blob.seq);
++    PutBE32(reply.data() + 16,
++            uint32_t(std::min<int64_t>(
++                std::chrono::duration_cast<std::chrono::milliseconds>(age).count(), 0xFFFFFFFEll)));
++    PutBE32(reply.data() + 20, uint32_t(blob.data.size()));
++    reply.insert(reply.end(), blob.data.begin(), blob.data.end());
 +    return reply;
 +  }
 +  if (GetBE32(packet) != kQueryMagic) {
@@ -10290,6 +10350,17 @@ index 0000000..1893f23
 +  host_value_set_at = std::chrono::steady_clock::now();
 +}
 +
++void SetHostBlob(uint32_t key, const uint8_t* data, size_t size) {
++  std::lock_guard<std::mutex> lock(host_value_mutex);
++  HostBlobState& blob = host_blobs[key];
++  blob.data.assign(data, data + std::min(size, kMaxHostBlob));
++  ++blob.seq;
++  if (blob.seq == 0) {
++    blob.seq = 1;
++  }
++  blob.set_at = std::chrono::steady_clock::now();
++}
++
 +namespace {
 +
 +// One ask of the host for its value: true and `out` filled on an answer.
@@ -10335,6 +10406,69 @@ index 0000000..1893f23
 +  return true;
 +}
 +
++// One ask of the host for its bytes under `key`: true and `out` filled on an
++// answer. Anything else that arrives meanwhile (a late answer to another ask)
++// is skipped.
++bool AskHostBlob(uint32_t host_ina, RelayInbox* inbox, socket_t s, uint32_t key, HostBlob* out) {
++  uint8_t query[12];
++  PutBE32(query, kBlobQueryMagic);
++  PutBE32(query + 4, kProtocolVersion);
++  PutBE32(query + 8, key);
++  const auto sent_at = std::chrono::steady_clock::now();
++  const auto deadline = sent_at + std::chrono::milliseconds(400);
++  if (inbox) {
++    RelaySend(inbox->port(), host_ina, kDiscoveryPort, query, sizeof(query));
++  } else {
++    sockaddr_in target = {};
++    target.sin_family = AF_INET;
++    target.sin_port = htons(kDiscoveryPort);
++    target.sin_addr.s_addr = host_ina;
++    sendto(s, reinterpret_cast<const char*>(query), sizeof(query), 0,
++           reinterpret_cast<const sockaddr*>(&target), sizeof(target));
++  }
++  uint8_t answer[kBlobAnswerHeader + kMaxHostBlob];
++  for (;;) {
++    const auto left_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
++                             deadline - std::chrono::steady_clock::now())
++                             .count();
++    if (left_ms <= 0) {
++      return false;
++    }
++    int received = -1;
++    if (inbox) {
++      uint32_t from = 0;
++      received = inbox->Receive(int(left_ms), answer, sizeof(answer), &from);
++    } else {
++      fd_set readable;
++      FD_ZERO(&readable);
++      FD_SET(s, &readable);
++      timeval timeout = {0, long(left_ms) * 1000};
++      if (select(int(s + 1), &readable, nullptr, nullptr, &timeout) > 0) {
++        received = recvfrom(s, reinterpret_cast<char*>(answer), sizeof(answer), 0, nullptr, nullptr);
++      }
++    }
++    if (received < 0) {
++      return false;  // no answer in time
++    }
++    if (received < int(kBlobAnswerHeader) || GetBE32(answer) != kBlobAnswerMagic ||
++        GetBE32(answer + 4) != kProtocolVersion || GetBE32(answer + 8) != key) {
++      continue;  // not the answer to this ask
++    }
++    const uint32_t size = GetBE32(answer + 20);
++    if (size > kMaxHostBlob || received < int(kBlobAnswerHeader + size)) {
++      continue;
++    }
++    const auto now = std::chrono::steady_clock::now();
++    out->seq = GetBE32(answer + 12);
++    out->data.assign(answer + kBlobAnswerHeader, answer + kBlobAnswerHeader + size);
++    const uint32_t age_ms = GetBE32(answer + 16);
++    // Set `age` before the host answered; the answer took about half the round trip.
++    out->set_at = out->seq == 0 ? std::chrono::steady_clock::time_point{}
++                                : now - (now - sent_at) / 2 - std::chrono::milliseconds(age_ms);
++    return true;
++  }
++}
++
 +// While this PC is in a match it joined, asks the host for its value twice a
 +// second (a 20-byte answer) and keeps the latest.
 +void StartValuePoll() {
@@ -10377,6 +10511,30 @@ index 0000000..1893f23
 +        std::lock_guard<std::mutex> lock(host_value_mutex);
 +        heard_value = heard;
 +      }
++      // Then each blob key the title has asked about (LatestHostBlob).
++      std::vector<uint32_t> keys;
++      {
++        std::lock_guard<std::mutex> lock(host_value_mutex);
++        keys = wanted_blob_keys;
++      }
++      for (const uint32_t key : keys) {
++        HostBlob blob;
++        if (!host_ina || (!inbox && s == kNoSocket) ||
++            !AskHostBlob(host_ina, inbox.get(), s, key, &blob)) {
++          continue;
++        }
++        blob.valid = true;
++        bool changed = false;
++        {
++          std::lock_guard<std::mutex> lock(host_value_mutex);
++          HostBlob& known = heard_blobs[key];
++          changed = blob.seq != known.seq;
++          known = blob;
++        }
++        if (changed) {
++          REXKRNL_INFO("[netplay] host blob {:08X} #{} ({} bytes)", key, blob.seq, blob.data.size());
++        }
++      }
 +      std::this_thread::sleep_for(std::chrono::milliseconds(500));
 +    }
 +    if (s != kNoSocket) {
@@ -10385,6 +10543,7 @@ index 0000000..1893f23
 +    {
 +      std::lock_guard<std::mutex> lock(host_value_mutex);
 +      heard_value = HostValue{};
++      heard_blobs.clear();
 +    }
 +    value_poll_running = false;
 +  }).detach();
@@ -10402,6 +10561,26 @@ index 0000000..1893f23
 +    return false;
 +  }
 +  *out = heard_value;
++  return true;
++}
++
++bool LatestHostBlob(uint32_t key, HostBlob* out) {
++  if (!IsJoinedSession()) {
++    return false;
++  }
++  {
++    std::lock_guard<std::mutex> lock(host_value_mutex);
++    if (std::find(wanted_blob_keys.begin(), wanted_blob_keys.end(), key) == wanted_blob_keys.end()) {
++      wanted_blob_keys.push_back(key);
++    }
++  }
++  StartValuePoll();
++  std::lock_guard<std::mutex> lock(host_value_mutex);
++  const auto it = heard_blobs.find(key);
++  if (it == heard_blobs.end() || !it->second.valid || it->second.seq == 0) {
++    return false;
++  }
++  *out = it->second;
 +  return true;
 +}
 +
