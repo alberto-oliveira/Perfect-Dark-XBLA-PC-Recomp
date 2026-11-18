@@ -47,6 +47,10 @@ void PdSetupCreateProps(PPCContext& ctx, uint8_t* base);
 bool PdWeaponByLocation(const uint8_t* base, int32_t location, uint32_t* entry);
 void PdPropEnable(PPCContext& ctx, uint8_t* base, uint32_t prop);
 bool PdMakeCrateWithoutAmmo(uint8_t* base, uint32_t crate_obj);
+void PdXbowDetonateLog(uint8_t* base, uint32_t player);              // TEMP_XBOW
+void PdXbowExplodeLog(uint8_t* base, uint32_t prop, uint32_t type);  // TEMP_XBOW
+void PdXbowBoltCreatedLog(uint8_t* base, uint32_t obj, const char* path);  // TEMP_XBOW
+bool PdXbowBoltTick(PPCContext& ctx, uint8_t* base, uint32_t prop, uint32_t obj);
 
 namespace {
 // The calling guest thread's full context and guest memory, for a hook that needs
@@ -350,4 +354,35 @@ bool PdHookPoisonTickLocalOnly(PPCRegister& r31) {
     remote = cfg < 8 && int8_t(base[0x82641950 + cfg * 216 + 109]) < 0;
   }
   return remote && PdN64Poison(base);
+}
+
+// ---- Detonator crossbow (pd_crossbow.h) -------------------------------------------
+
+// TEMP_XBOW: player_activate_remote_mine_detonator's start (r3 = player number).
+void PdHookXbowDetonateLog(PPCRegister& r3) {
+  PdXbowDetonateLog(HookBase(), r3.u32);
+}
+
+// TEMP_XBOW: prop_explode's start (r3 = prop, r4 = explosion type).
+void PdHookXbowExplodeLog(PPCRegister& r3, PPCRegister& r4) {
+  PdXbowExplodeLog(HookBase(), r3.u32, r4.u32);
+}
+
+// TEMP_XBOW: right after each fire path's weapon_create_projectile_from_weapon_num
+// call for a crossbow (r3 = the new bolt, 0 if none could be made).
+void PdHookXbowBoltLocalLog(PPCRegister& r3) {
+  if (r3.u32) PdXbowBoltCreatedLog(HookBase(), r3.u32, "local");
+}
+void PdHookXbowBoltReplayLog(PPCRegister& r3) {
+  if (r3.u32) PdXbowBoltCreatedLog(HookBase(), r3.u32, "replay");
+}
+
+// weapon_tick at the bolt branch's `cmplwi cr6,r11,86` (r11 = the weapon number,
+// r27 = the prop, r31 = the object). Every weapon not handled by an earlier branch
+// passes here, so it first checks for a bolt. True = the bolt exploded: the config
+// jumps to the end of the weapon branches (0x82215678), where the mine branch goes
+// after its explosion.
+bool PdHookXbowBoltTick(PPCRegister& r11, PPCRegister& r27, PPCRegister& r31) {
+  if (r11.u32 != 86) return false;
+  return PdXbowBoltTick(HookContext(), HookBase(), r27.u32, r31.u32);
 }

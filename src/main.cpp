@@ -4,6 +4,7 @@
 
 #include "perfect_dark_app.h"
 #include "pd_weapons.h"  // more multiplayer weapons, shuffled weapon spawns
+#include "pd_crossbow.h"  // the detonator crossbow
 
 #include <rex/chrono/clock.h>
 #include <rex/diag_timing.h>
@@ -13,7 +14,9 @@
 #include <dbghelp.h>
 
 #include <algorithm>
+#include <atomic>
 #include <csignal>
+#include <map>
 #include <filesystem>
 #include <thread>
 #include <vector>
@@ -23,7 +26,7 @@
 // Developer F-key diagnostics (see PerfectDarkInputTracker::OnDraw). Players
 // never need these; set pd_dev_hotkeys = true in perfect_dark.toml to enable.
 REXCVAR_DEFINE_BOOL(pd_dev_hotkeys, false, "PerfectDark",
-                    "Enable developer diagnostic hotkeys (F1, F2, F5, F6, F8, F10-F12)");
+                    "Enable developer diagnostic hotkeys (F1, F2, F5, F6, F8, F10-F12, End)");
 REXCVAR_DEFINE_BOOL(pd_frame_stats, false, "PerfectDark",
                     "Log presented frame rate and slow frames every five seconds (developer "
                     "aid for performance work)");
@@ -761,6 +764,7 @@ void PdSetupCreateProps(PPCContext& ctx, uint8_t* base) {
   weapons::g_pickups.clear();
   weapons::g_selection.clear();
   weapons::g_crates.clear();
+  pd::crossbow::g_pending.clear();  // the detonator crossbow's pending explosions
   if (weapons::LoadU32(base, weapons::kMatchRunning) == 0 && weapons::LoadU32(base, weapons::kMatchRunning2) == 0) {
     return;  // not a multiplayer match: the stage has no weapon spawn locations
   }
@@ -1033,6 +1037,268 @@ void PdWeaponsFrame() {
   netplay::LatestHostBlob(pd::weapons::kBlobKey, &blob);
 }
 
+// ---- TEMP_XBOW: detonator crossbow investigation (step 1.1) ----------------------
+// Logging only, no change to the game. It answers how bolts and explosions behave
+// in a network match: does each PC make its own copy of a remote player's bolt
+// (the replay path), do copies share a network id, and does one prop_explode on
+// the owner's PC make the same explosion on the others?
+namespace {
+// What the log last said about a bolt: one line each time it changes.
+struct XbowBoltState {
+  uint32_t obj = 0;
+  int phase = 0;            // XbowPhase: flying, landing (shaking), landed
+  uint32_t parent = 0;      // the prop it is stuck in
+  uint32_t last_frame = 0;  // xbow_frame when the weapon tick last saw it
+};
+// weapon_tick's use of a bolt's timer240: -1 while it flies, then a short
+// countdown from 13 while it shakes where it hit, then 1 (or 0) once at rest.
+int XbowPhase(int16_t timer) {
+  return timer < 0 ? 0 : (timer >= 2 ? 1 : 2);
+}
+const char* const kXbowPhaseNames[] = {"flying", "landing", "landed"};
+std::map<uint32_t, XbowBoltState> xbow_bolts;  // by prop; game thread only
+uint32_t xbow_frame = 0;                       // counts PdXbowFrame calls
+std::atomic<bool> xbow_dump_wanted{false};     // set by the End key (UI thread)
+
+std::string XbowDescribeBolt(const uint8_t* base, uint32_t prop, uint32_t obj) {
+  namespace xbow = pd::crossbow;
+  return fmt::format("prop 0x{:08X} obj 0x{:08X} owner {} sync id {} timer {} in {}", prop, obj,
+                     xbow::OwnerPlayer(base, obj), int32_t(xbow::LoadU32(base, prop + xbow::kPropSyncId)),
+                     xbow::LoadS16(base, obj + xbow::kObjTimer240), xbow::DescribeParent(base, prop));
+}
+}  // namespace
+
+// TEMP_XBOW: sub_8220D220's start (r3 = the player pressing Detonate).
+void PdXbowDetonateLog(uint8_t* base, uint32_t player) {
+  namespace xbow = pd::crossbow;
+  REXLOG_INFO("[xbow] frame {}: detonate by player {} ({}), mask before 0x{:X}",
+              xbow::LoadU32(base, xbow::kLevelFrames), player, xbow::PlayerName(base, int(player)),
+              xbow::LoadU32(base, xbow::kDetonatingMines));
+}
+
+// TEMP_XBOW: prop_explode's start (sub_82205A18; r3 = prop, r4 = explosion type).
+void PdXbowExplodeLog(uint8_t* base, uint32_t prop, uint32_t type) {
+  namespace xbow = pd::crossbow;
+  const uint32_t obj = xbow::LoadU32(base, prop + xbow::kPropObj);
+  const bool weapon = base[prop + xbow::kPropType] == xbow::kPropTypeWeapon;
+  REXLOG_INFO("[xbow] frame {}: prop_explode type {} prop 0x{:08X} (prop type {}, weapon {}) owner {} sync id {} in {}",
+              xbow::LoadU32(base, xbow::kLevelFrames), type, prop, base[prop + xbow::kPropType],
+              weapon ? int(base[obj + xbow::kObjWeaponNum]) : -1, xbow::OwnerPlayer(base, obj),
+              int32_t(xbow::LoadU32(base, prop + xbow::kPropSyncId)), xbow::DescribeParent(base, prop));
+}
+
+// TEMP_XBOW: a fire path just made a bolt (r3 = its object). `path` = which one.
+void PdXbowBoltCreatedLog(uint8_t* base, uint32_t obj, const char* path) {
+  namespace xbow = pd::crossbow;
+  REXLOG_INFO("[xbow] frame {}: bolt obj 0x{:08X} made by the {} fire path (current player {})",
+              xbow::LoadU32(base, xbow::kLevelFrames), obj, path, xbow::LoadU32(base, xbow::kGVars + 1196));
+}
+
+// TEMP_XBOW: the weapon tick's bolt branch (r27 = prop, r31 = obj). Logs a bolt
+// the first time it is seen and each time it lands or changes what it is in.
+void PdXbowBoltTickLog(uint8_t* base, uint32_t prop, uint32_t obj) {
+  namespace xbow = pd::crossbow;
+  const int phase = XbowPhase(xbow::LoadS16(base, obj + xbow::kObjTimer240));
+  const uint32_t parent = xbow::LoadU32(base, prop + xbow::kPropParent);
+  auto found = xbow_bolts.find(prop);
+  const bool is_new = found == xbow_bolts.end() || found->second.obj != obj;
+  XbowBoltState& state = xbow_bolts[prop];
+  if (is_new || state.phase != phase || state.parent != parent) {
+    REXLOG_INFO("[xbow] frame {}: bolt {} {}", xbow::LoadU32(base, xbow::kLevelFrames), kXbowPhaseNames[phase],
+                XbowDescribeBolt(base, prop, obj));
+  }
+  state = {obj, phase, parent, xbow_frame};
+}
+
+// TEMP_XBOW: the End key (pd_dev_hotkeys) asks for a list of the live bolts; the
+// game thread writes it at its next frame.
+void PdXbowRequestDump() {
+  xbow_dump_wanted = true;
+}
+
+// TEMP_XBOW: each frame (from PdNoteGameFrame, game thread). A bolt the weapon
+// tick has not seen for 2 s is gone (exploded, picked up or freed).
+void PdXbowFrame(uint8_t* base) {
+  namespace xbow = pd::crossbow;
+  ++xbow_frame;
+  for (auto it = xbow_bolts.begin(); it != xbow_bolts.end();) {
+    if (xbow_frame - it->second.last_frame > 120) {
+      REXLOG_INFO("[xbow] bolt prop 0x{:08X} obj 0x{:08X} gone", it->first, it->second.obj);
+      it = xbow_bolts.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  if (xbow_dump_wanted.exchange(false)) {
+    REXLOG_INFO("[xbow] dump, frame {}: {} live bolts", xbow::LoadU32(base, xbow::kLevelFrames), xbow_bolts.size());
+    for (const auto& [prop, state] : xbow_bolts) {
+      REXLOG_INFO("[xbow]   {}", XbowDescribeBolt(base, prop, state.obj));
+    }
+  }
+}
+// ---- end TEMP_XBOW ---------------------------------------------------------------
+
+// ---- The detonator crossbow (pd_crossbow.h) --------------------------------------
+REXCVAR_DEFINE_BOOL(pd_xbow_detonator, false, "PerfectDark",
+                    "The crossbow's secondary function detonates every bolt you have fired. Every "
+                    "player in a match needs the same setting");
+REXCVAR_DEFINE_STRING(pd_xbow_explosion, "medium", "PerfectDark",
+                      "With pd_xbow_detonator, each bolt's explosion: small (the Phoenix's), medium "
+                      "(a SuperDragon grenade's), large (a rocket's), or an explosion type 1-25");
+
+// Each frame (game thread): gives the crossbow its secondary function, the remote
+// mine's Detonate while pd_xbow_detonator is on, its own lethal bolt otherwise.
+// The crossbow's definition is shared by every player, so this is the same for
+// everyone on this PC; the primary (the 1-damage bolt that makes the target dizzy)
+// never changes.
+void PdXbowApplyFunctions(uint8_t* base) {
+  namespace xbow = pd::crossbow;
+  const uint32_t wanted = REXCVAR_GET(pd_xbow_detonator) ? xbow::kMineDetonate : xbow::kCrossbowLethal;
+  const uint32_t slot = xbow::kCrossbowDef + xbow::kSecondaryFunction;
+  if (xbow::LoadU32(base, slot) == wanted) return;
+  StoreU32(base, slot, wanted);
+  REXLOG_INFO("[xbow] crossbow secondary function: {}", wanted == xbow::kMineDetonate ? "Detonate" : "the game's");
+}
+
+namespace {
+// Marks a bolt for deletion: its timer at 1 (= at rest, so nothing in its branch
+// runs again before the object is freed), then the DELETING flag, as the game's
+// mine branch sets it after an explosion.
+void XbowDeleteBolt(uint8_t* base, uint32_t obj) {
+  namespace xbow = pd::crossbow;
+  base[obj + xbow::kObjTimer240] = 0;
+  base[obj + xbow::kObjTimer240 + 1] = 1;
+  StoreU32(base, obj + xbow::kObjHidden, xbow::LoadU32(base, obj + xbow::kObjHidden) | xbow::kHiddenDeleting);
+}
+
+// Before a bolt stuck in a wall or floor explodes: points its scorch mark the
+// way the surface faces. prop_explode puts the scorch of an object stuck to a
+// surface (a mine) at the object's position plus its up axis (realrot row 1)
+// times the bottom of its model, facing along that up axis. A mine lies flat on
+// the surface, so its up axis is the surface's normal; a bolt keeps the line it
+// flew along, so its up axis runs along the wall and the scorch stood out of it.
+// This casts a ray along the bolt's flight line (realrot row 2, the way its tip
+// points) to find the surface and its normal, then turns the bolt's up axis to
+// that normal and moves the bolt so the scorch lands on the surface. The bolt is
+// deleted right after its explosion, so nothing else sees these changes.
+void XbowAlignScorch(PPCContext& ctx, uint8_t* base, uint32_t prop, uint32_t obj) {
+  namespace xbow = pd::crossbow;
+  if (xbow::LoadU32(base, prop + xbow::kPropParent)) return;  // stuck in a player: no scorch
+  const uint32_t model = xbow::LoadU32(base, obj + xbow::kObjModel);
+  if (!model) return;
+  PPCContext call = ctx;
+  call.r3.u64 = model;
+  sub_82202DA8(call, base);  // the model's bounding-box node
+  if (!call.r3.u32) return;
+  const uint32_t bbox = xbow::LoadU32(base, call.r3.u32 + 4);  // {?, xmin, xmax, ymin, ymax, zmin, zmax}
+  if (!bbox) return;
+  const float ymin = LoadF32(base, bbox + 12);
+  const float zmax = LoadF32(base, bbox + 24);
+
+  float pos[3], forward[3];
+  for (int i = 0; i < 3; ++i) {
+    pos[i] = LoadF32(base, prop + xbow::kPropPos + uint32_t(i) * 4);
+    forward[i] = LoadF32(base, obj + xbow::kObjRealRot + uint32_t(6 + i) * 4);  // row 2, times the scale
+  }
+  // The ray: from the bolt's tail (its tip mirrored) to 3 bolt lengths ahead.
+  // Points in guest memory, because the game's collision test reads them there:
+  // the stack below the game's own stack pointer is free scratch space.
+  const uint32_t from = ctx.r1.u32 - 0x400;
+  const uint32_t to = from + 16;
+  const uint32_t hit = from + 32;
+  const uint32_t normal = from + 48;
+  for (int i = 0; i < 3; ++i) {
+    StoreF32(base, from + uint32_t(i) * 4, pos[i] - forward[i] * zmax);
+    StoreF32(base, to + uint32_t(i) * 4, pos[i] + forward[i] * zmax * 3.0f);
+  }
+  call = ctx;
+  call.r1.u64 = from - 0x200;  // the game's functions get stack below the scratch points
+  call.r3.u64 = from;
+  call.r4.u64 = prop + xbow::kPropRooms;
+  call.r5.u64 = to;
+  call.r6.u64 = xbow::kCdTypeBg;
+  sub_820E4E88(call, base);  // cd_test_los_oobok_findclosest_autoflags: 0 = it hit something
+  if (call.r3.s32 != 0) {
+    REXLOG_INFO("[xbow] bolt prop 0x{:08X}: no surface along its line, scorch left as is", prop);  // TEMP_XBOW
+    return;
+  }
+  call.r3.u64 = hit;
+  call.r4.u64 = 0;
+  call.r5.u64 = 0;
+  sub_820DDDC0(call, base);  // cd_get_obstacle_pos
+  call.r3.u64 = normal;
+  sub_820E7070(call, base);  // cd_get_obstacle_normal
+
+  float n[3], at[3];
+  for (int i = 0; i < 3; ++i) {
+    n[i] = LoadF32(base, normal + uint32_t(i) * 4);
+    at[i] = LoadF32(base, hit + uint32_t(i) * 4);
+  }
+  const float length = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+  if (length < 0.001f) return;
+  float facing = 0.0f;  // the normal must face back towards where the bolt came from
+  for (int i = 0; i < 3; ++i) {
+    n[i] /= length;
+    facing += n[i] * forward[i];
+  }
+  if (facing > 0.0f) {
+    for (float& c : n) c = -c;
+  }
+  // Up axis = the normal; position = the surface point minus normal * ymin, so
+  // prop_explode's "position + up * ymin" is the surface point itself.
+  for (int i = 0; i < 3; ++i) {
+    StoreF32(base, obj + xbow::kObjRealRot + uint32_t(3 + i) * 4, n[i]);
+    StoreF32(base, prop + xbow::kPropPos + uint32_t(i) * 4, at[i] - n[i] * ymin);
+  }
+  REXLOG_INFO("[xbow] bolt prop 0x{:08X}: scorch on the surface at ({:.0f} {:.0f} {:.0f}) facing ({:.2f} {:.2f} {:.2f})",  // TEMP_XBOW
+              prop, at[0], at[1], at[2], n[0], n[1], n[2]);
+}
+}  // namespace
+
+// weapon_tick's bolt branch (sub_82214A40 at 0x82215080; r27 = prop, r31 = obj),
+// on every PC for every bolt each tick. When the bolt's owner presses Detonate
+// (their bit in g_PlayersDetonatingMines; every PC sees every player's press):
+//   - on the owner's own PC the bolt explodes exactly as the game's remote-mine
+//     branch explodes a mine (prop_explode, then the object is deleted); the
+//     explosion is sent to the other PCs. If no explosion slot is free it stays
+//     pending and is tried again at the next tick.
+//   - on every other PC this copy of the bolt is just deleted: the explosion
+//     arrives from the owner's PC.
+// True = done: the hook jumps past the rest of the bolt branch.
+bool PdXbowBoltTick(PPCContext& ctx, uint8_t* base, uint32_t prop, uint32_t obj) {
+  namespace xbow = pd::crossbow;
+  PdXbowBoltTickLog(base, prop, obj);  // TEMP_XBOW
+  if (!REXCVAR_GET(pd_xbow_detonator)) return false;
+
+  const int owner = xbow::OwnerPlayer(base, obj);
+  const bool detonating = (xbow::LoadU32(base, xbow::kDetonatingMines) >> owner) & 1;
+  const auto pending = xbow::g_pending.find(prop);
+  const bool was_pending = pending != xbow::g_pending.end() && pending->second == obj;
+  if (!detonating && !was_pending) return false;
+
+  if (!xbow::IsLocalPlayer(base, owner)) {
+    XbowDeleteBolt(base, obj);
+    REXLOG_INFO("[xbow] bolt prop 0x{:08X}: remote owner {} detonated, copy deleted", prop, owner);  // TEMP_XBOW
+    return true;
+  }
+
+  if (!was_pending) XbowAlignScorch(ctx, base, prop, obj);
+  PPCContext call = ctx;
+  call.r3.u64 = prop;
+  call.r4.u64 = xbow::ParseExplosion(REXCVAR_GET(pd_xbow_explosion));
+  sub_82205A18(call, base);  // prop_explode: false if no explosion slot is free
+  if (!call.r3.u32) {
+    if (!was_pending) {
+      REXLOG_INFO("[xbow] bolt prop 0x{:08X}: no free explosion yet, pending", prop);  // TEMP_XBOW
+    }
+    xbow::g_pending[prop] = obj;  // try again next tick, as the game does for a mine
+    return false;
+  }
+  if (was_pending) xbow::g_pending.erase(pending);
+  XbowDeleteBolt(base, obj);
+  return true;
+}
+
 // Each frame on a joined PC (from PdNoteGameFrame).
 void PdMpMusicFrame(uint8_t* base) {
   namespace netplay = rex::kernel::xam::netplay;
@@ -1072,6 +1338,8 @@ void PdMpMusicFrame(uint8_t* base) {
 void PdNoteGameFrame(uint8_t* base) {
   PdMpMusicFrame(base);
   PdWeaponsFrame();
+  PdXbowApplyFunctions(base);
+  PdXbowFrame(base);  // TEMP_XBOW
   PerfectDarkApp::NoteGameStage(
       _byteswap_ulong(*reinterpret_cast<const uint32_t*>(base + 0x826492E0)),   // stage
       _byteswap_ulong(*reinterpret_cast<const uint32_t*>(base + 0x82648BF8 + 0x0C)));  // level frames

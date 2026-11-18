@@ -75,6 +75,7 @@ REXCVAR_DECLARE(bool, pd_dev_hotkeys);
 void PdInstallCrashReport();
 // Keeps the game on a hybrid CPU's performance cores (main.cpp, HANDOVER 4ba).
 void PdPreferPerformanceCores();
+void PdXbowRequestDump();  // TEMP_XBOW (main.cpp)
 REXCVAR_DECLARE(bool, pd_story_complete);
 REXCVAR_DECLARE(bool, pd_frame_stats);
 REXCVAR_DECLARE(bool, pd_menu_mouse);
@@ -573,6 +574,8 @@ class PerfectDarkInputTracker : public rex::ui::ImGuiDialog {
   bool f7_was_down_ = false;
   // TEMP_MENU_MOUSE: F3 dumps the live menu dialog state.
   bool f3_was_down_ = false;
+  // TEMP_XBOW: End lists the live crossbow bolts (PdXbowRequestDump, main.cpp).
+  bool end_was_down_ = false;
   // TEMP_MENU_SCAN: F5 triggers the sub_82343458 register trace.
   bool f5_was_down_ = false;
   // TEMP_LIGHT_DIAG: Insert arms the pixel-constant draw capture.
@@ -9217,6 +9220,13 @@ inline void PerfectDarkInputTracker::OnDraw(ImGuiIO& /*io*/) {
       PerfectDarkApp::DebugFindMenuState();
     }
     f3_was_down_ = f3_down;
+
+    // TEMP_XBOW
+    bool end_down = (GetAsyncKeyState(VK_END) & 0x8000) != 0;
+    if (end_down && !end_was_down_) {
+      PdXbowRequestDump();
+    }
+    end_was_down_ = end_down;
 
     // TEMP_MENU_SCAN
     bool f10_down = (GetAsyncKeyState(VK_F10) & 0x8000) != 0;
