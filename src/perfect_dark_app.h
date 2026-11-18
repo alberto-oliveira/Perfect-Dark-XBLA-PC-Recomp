@@ -50,6 +50,7 @@
 #include "pd_test_input.h"  // native-renderer branch: test pipe input
 #include "pd_native_vk_out.h"  // Graphics API: pd::native_vk::VulkanUsable
 #include "pd_update.h"         // Check for Updates
+#include "pd_weapons.h"        // pd_mp_weapons: weapon slots 7-16, shuffled respawns
 #include <rex/input/sdl/sdl_input_driver.h>
 #include <rex/cvar.h>
 #include <rex/diag_timing.h>
@@ -80,6 +81,7 @@ REXCVAR_DECLARE(int32_t, pd_mp_facing_delay_ms);
 REXCVAR_DECLARE(double, pd_shine);
 REXCVAR_DECLARE(bool, pd_view_bob);
 REXCVAR_DECLARE(bool, pd_light_capture);
+REXCVAR_DECLARE(bool, pd_mp_weapon_shuffle);
 #include <rex/logging/api.h>
 #include <rex/logging/macros.h>
 #include <rex/rex_app.h>
@@ -5034,6 +5036,7 @@ class PerfectDarkApp : public rex::ReXApp {
     }
     done = true;
     PatchPlayerSetupMenus();
+    PatchWeaponsMenu();
     PatchGamerCardPrompt();
     menu_patched_ = true;
     REXLOG_INFO("[menu_patch] text bank found after {} check(s); installing PC menu rows",
@@ -6178,6 +6181,234 @@ class PerfectDarkApp : public rex::ReXApp {
                 "setup 0x{:08X}{}",
                 control_items, hud_items, setup_items,
                 (name_label && name_handler) ? "" : " - no Player Name row (thunks failed)");
+  }
+
+  // ---- Weapons dialog: slots 7-16, Shuffle Respawns, Randomize ----------------
+  // Game Setup > Weapons has the weapon set, a label, then the slot dropdowns
+  // 1-6, which are the game's own (g_MpSetup.weapons). The patch adds 10 slot
+  // dropdowns for slots 7-16, which edit pd_mp_weapons (pd_weapons.h), then a
+  // Shuffle Respawns row (pd_mp_weapon_shuffle) and a Randomize All Slots button.
+  // Only the host's settings count in a network match.
+  static constexpr uint32_t kWeaponsDef = 0x825DD810;
+  static constexpr uint32_t kWeaponsItems = 0x825DD748;
+  static constexpr int kWeaponsRows = 9;       // Set, separator, label, slots 1-6
+  static constexpr int kWeaponsFirstSlot = 3;  // the row of slot 1
+  static constexpr int kWeaponsSeparator = 1;
+  static constexpr uint32_t kWeaponsSlotHandler = 0x821D52F8;
+  static constexpr uint32_t kTextSlot1 = 0x50B0;                 // slot 1's label
+  static constexpr uint32_t kWeaponSet = 0x82648BF8 + 1839;      // g_Vars: the weapon set
+  static constexpr uint8_t kWeaponSetCustom = 19;
+  static constexpr uint32_t kWeaponLabelSize = 32;
+  // guest: the 10 slot labels, then "Shuffle Respawns" and "Randomize All Slots"
+  static inline uint32_t weapon_strings_ = 0;
+
+  // Calls a game function from a menu thunk, with `r3` as its argument; returns its r3.
+  static uint32_t CallGame(PPCContext& ctx, uint8_t* base, PPCFunc* fn, uint32_t r3) {
+    PPCContext call = ctx;
+    call.r3.u64 = r3;
+    fn(call, base);
+    return call.r3.u32;
+  }
+
+  // Whether weapon table entry `index` is unlocked (mpIsFeatureUnlocked, sub_8219C168).
+  static bool WeaponUnlocked(PPCContext& ctx, uint8_t* base, int index) {
+    const uint8_t feature = base[pd::weapons::kWeaponTable + uint32_t(index) * pd::weapons::kWeaponEntrySize + 5] & 0x7F;
+    return CallGame(ctx, base, sub_8219C168, feature) != 0;
+  }
+
+  // Slots 7-16 as the menu shows them: pd_mp_weapons, Disabled where it lists none.
+  static std::vector<uint8_t> MenuExtraSlots() {
+    std::vector<uint8_t> slots =
+        pd::weapons::ParseExtraSlots(rex::cvar::GetFlagByName("pd_mp_weapons"), false);
+    slots.resize(pd::weapons::kExtraSlotCount, pd::weapons::kIndexDisabled);
+    return slots;
+  }
+  static void SaveExtraSlots(const std::vector<uint8_t>& slots) {
+    const std::string list = pd::weapons::FormatExtraSlots(slots);
+    if (rex::cvar::SetFlagByName("pd_mp_weapons", list)) SavePcSettings();
+    REXLOG_INFO("[weapons] menu: pd_mp_weapons = \"{}\"", list);
+  }
+
+  // Slot 7 + `extra`'s dropdown. The list is the game's own: its length and names
+  // come from the functions slots 1-6 use (sub_821CC250, sub_821CC2A0).
+  static void WeaponSlotRow(PPCContext& ctx, uint8_t* base, int extra) {
+    PerfectDarkApp* app = current_instance_;
+    auto* mem = (app && app->runtime()) ? app->runtime()->memory() : nullptr;
+    const uint32_t op = ctx.r3.u32;
+    const uint32_t data = ctx.r5.u32;
+    const auto unlocked = [&](int i) { return WeaponUnlocked(ctx, base, i); };
+    uint32_t ret = 0;
+    if (mem && data) {
+      switch (op) {
+        case 1:  // how many options
+          WriteGuestU32(mem, data, CallGame(ctx, base, sub_821CC250, 0));
+          break;
+        case 3:  // the name of option *data
+          ret = CallGame(ctx, base, sub_821CC2A0, ReadGuestU32(mem, data));
+          break;
+        case 6: {  // option *data was picked
+          std::vector<uint8_t> slots = MenuExtraSlots();
+          slots[extra] = pd::weapons::IndexFromOption(int(ReadGuestU32(mem, data)), unlocked);
+          SaveExtraSlots(slots);
+          break;
+        }
+        case 7:  // the option the row shows
+          WriteGuestU32(mem, data, uint32_t(pd::weapons::OptionFromIndex(MenuExtraSlots()[extra], unlocked)));
+          break;
+        default:
+          break;
+      }
+    }
+    ctx.r3.u64 = ret;
+  }
+
+  // Slot 7 + `extra`'s label: the game's own slot 1 label with its "1" made the
+  // slot's number, so it reads like the rows above it in every language.
+  static uint32_t WeaponSlotLabel(PPCContext& ctx, uint8_t* base, int extra) {
+    const uint32_t out = weapon_strings_ + uint32_t(extra) * kWeaponLabelSize;
+    const uint32_t text = CallGame(ctx, base, sub_821886E8, kTextSlot1);  // text id -> string
+    std::string label;
+    for (uint32_t i = 0; text && i < kWeaponLabelSize && base[text + i]; ++i) label += char(base[text + i]);
+    while (!label.empty() && label.back() == '\n') label.pop_back();
+    const std::string number = std::to_string(pd::weapons::kGameSlotCount + 1 + extra);
+    const size_t one = label.find('1');
+    if (one != std::string::npos) {
+      label.replace(one, 1, number);
+    } else {
+      label += " " + number;
+    }
+    label = label.substr(0, kWeaponLabelSize - 2) + "\n";  // game strings end "\n\0"
+    std::memcpy(base + out, label.c_str(), label.size() + 1);
+    return out;
+  }
+
+  template <int N>
+  static void PdWeaponSlotLabel(PPCContext& ctx, uint8_t* base) {
+    ctx.r3.u64 = WeaponSlotLabel(ctx, base, N);
+  }
+  template <int N>
+  static void PdWeaponSlotHandler(PPCContext& ctx, uint8_t* base) {
+    WeaponSlotRow(ctx, base, N);
+  }
+  template <std::size_t... I>
+  static void FillWeaponSlotThunks(std::index_sequence<I...>, PPCFunc** labels, PPCFunc** handlers) {
+    ((labels[I] = &PdWeaponSlotLabel<int(I)>, handlers[I] = &PdWeaponSlotHandler<int(I)>), ...);
+  }
+
+  // Shuffle Respawns: Off / On.
+  static bool GetWeaponShuffle() { return REXCVAR_GET(pd_mp_weapon_shuffle); }
+  static void SetWeaponShuffle(bool on) {
+    if (rex::cvar::SetFlagByName("pd_mp_weapon_shuffle", on ? "true" : "false")) SavePcSettings();
+  }
+  static void PdWeaponShuffleLabel(PPCContext& ctx, uint8_t*) {
+    ctx.r3.u64 = weapon_strings_ + 10 * kWeaponLabelSize;
+  }
+  static void PdWeaponShuffleHandler(PPCContext& ctx, uint8_t*) {
+    PdTwoStateHandler(ctx, kStrOff, kStrOn, &GetWeaponShuffle, &SetWeaponShuffle);
+  }
+
+  // Randomize All Slots: every slot, 1-16, gets a random unlocked weapon (no
+  // Nothing, Shield or Disabled), each a different one while there are enough.
+  static void PdWeaponRandomizeLabel(PPCContext& ctx, uint8_t*) {
+    ctx.r3.u64 = weapon_strings_ + 11 * kWeaponLabelSize;
+  }
+  static void PdWeaponRandomizeHandler(PPCContext& ctx, uint8_t* base) {
+    namespace weapons = pd::weapons;
+    if (ctx.r3.u32 == 6) {  // pressed
+      std::vector<uint8_t> pool;
+      for (int i = 0; i < weapons::kWeaponTableCount; ++i) {
+        if (i == weapons::kIndexNothing || i == weapons::kIndexShield || i == weapons::kIndexDisabled) continue;
+        if (WeaponUnlocked(ctx, base, i)) pool.push_back(uint8_t(i));
+      }
+      if (!pool.empty()) {
+        std::mt19937 rng(std::random_device{}());
+        std::shuffle(pool.begin(), pool.end(), rng);
+        std::vector<uint8_t> picks;
+        for (int i = 0; i < weapons::kMaxSlots; ++i) picks.push_back(pool[size_t(i) % pool.size()]);
+        // Slots 1-6 are the game's: written as its slot dropdowns would, and the
+        // weapon set becomes Custom, as after choosing a slot by hand.
+        for (int i = 0; i < weapons::kGameSlotCount; ++i) base[weapons::kGameSlots + uint32_t(i)] = picks[size_t(i)];
+        base[kWeaponSet] = kWeaponSetCustom;
+        SaveExtraSlots(std::vector<uint8_t>(picks.begin() + weapons::kGameSlotCount, picks.end()));
+        REXLOG_INFO("[weapons] menu: randomized {}", weapons::DescribeSlots(base, picks));
+      }
+    }
+    ctx.r3.u64 = 0;
+  }
+
+  static void PatchWeaponsMenu() {
+    PerfectDarkApp* app = current_instance_;
+    if (!app || !app->runtime() || !app->runtime()->memory()) return;
+    auto* mem = app->runtime()->memory();
+    auto* fd = app->runtime()->function_dispatcher();
+    if (!fd) return;
+    if (ReadGuestU32(mem, kWeaponsDef + 8) != kWeaponsItems) {
+      REXLOG_INFO("[menu_patch] weapons dialog patched already");
+      return;
+    }
+    // Only rebuild the dialog if it still looks like the one this was written for.
+    const uint32_t slot1 = kWeaponsItems + uint32_t(kWeaponsFirstSlot) * 20;
+    const uint32_t end = kWeaponsItems + uint32_t(kWeaponsRows) * 20;
+    if (ReadGuestU32(mem, slot1) >> 24 != 0x0C || ReadGuestU32(mem, slot1 + 8) != kTextSlot1 ||
+        ReadGuestU32(mem, slot1 + 16) != kWeaponsSlotHandler || ReadGuestU32(mem, end) >> 24 != 0x1D) {
+      REXLOG_INFO("[menu_patch] weapons dialog is not as expected (slot 1: {:08X} {:08X} {:08X}, end {:08X}); "
+                  "left alone",
+                  ReadGuestU32(mem, slot1), ReadGuestU32(mem, slot1 + 8), ReadGuestU32(mem, slot1 + 16),
+                  ReadGuestU32(mem, end));
+      return;
+    }
+
+    constexpr int kExtra = pd::weapons::kExtraSlotCount;
+    weapon_strings_ = mem->SystemHeapAlloc(12 * kWeaponLabelSize);
+    // The game's rows, the extra slots, a separator, Shuffle Respawns, Randomize, the end.
+    const uint32_t items = mem->SystemHeapAlloc(uint32_t(kWeaponsRows + kExtra + 4) * 20);
+    PPCFunc* labels[kExtra];
+    PPCFunc* handlers[kExtra];
+    FillWeaponSlotThunks(std::make_index_sequence<kExtra>{}, labels, handlers);
+    const uint32_t shuffle_label = fd->AllocateThunk(&PdWeaponShuffleLabel, 0);
+    const uint32_t shuffle_handler = fd->AllocateThunk(&PdWeaponShuffleHandler, 0);
+    const uint32_t randomize_label = fd->AllocateThunk(&PdWeaponRandomizeLabel, 0);
+    const uint32_t randomize_handler = fd->AllocateThunk(&PdWeaponRandomizeHandler, 0);
+    if (!weapon_strings_ || !items || !shuffle_label || !shuffle_handler || !randomize_label ||
+        !randomize_handler) {
+      REXLOG_INFO("[menu_patch] weapons dialog: out of guest memory or thunks; left alone");
+      return;
+    }
+    WriteGuestBytes(mem, weapon_strings_ + 10 * kWeaponLabelSize, "Shuffle Respawns\n", 18);
+    WriteGuestBytes(mem, weapon_strings_ + 11 * kWeaponLabelSize, "Randomize All Slots\n", 21);
+
+    uint32_t out = items;
+    for (int i = 0; i < kWeaponsRows; ++i, out += 20) {
+      CopyMenuItem(mem, kWeaponsItems + uint32_t(i) * 20, out);
+    }
+    // Slots 7-16: like slot 1's row (type and flags), with this mod's label and handler.
+    for (int i = 0; i < kExtra; ++i, out += 20) {
+      const uint32_t label = fd->AllocateThunk(labels[i], 0);
+      const uint32_t handler = fd->AllocateThunk(handlers[i], 0);
+      CopyMenuItem(mem, slot1, out);
+      WriteGuestU32(mem, out + 8, label);
+      WriteGuestU32(mem, out + 12, uint32_t(pd::weapons::kGameSlotCount + i));
+      WriteGuestU32(mem, out + 16, handler);
+    }
+    CopyMenuItem(mem, kWeaponsItems + uint32_t(kWeaponsSeparator) * 20, out);
+    out += 20;
+    WriteGuestU32(mem, out + 0, 0x0C000000);  // dropdown: Off / On
+    WriteGuestU32(mem, out + 4, 0);
+    WriteGuestU32(mem, out + 8, shuffle_label);
+    WriteGuestU32(mem, out + 12, 0);
+    WriteGuestU32(mem, out + 16, shuffle_handler);
+    out += 20;
+    WriteGuestU32(mem, out + 0, 0x04000000);  // selectable: one press
+    WriteGuestU32(mem, out + 4, 0);
+    WriteGuestU32(mem, out + 8, randomize_label);
+    WriteGuestU32(mem, out + 12, 0);
+    WriteGuestU32(mem, out + 16, randomize_handler);
+    out += 20;
+    WriteMenuEnd(mem, out);
+
+    WriteGuestU32(mem, kWeaponsDef + 8, items);
+    REXLOG_INFO("[menu_patch] weapons dialog rebuilt: items 0x{:08X}, slots 7-{}", items,
+                pd::weapons::kMaxSlots);
   }
 
   static void PatchVideoOptionsMenu() {

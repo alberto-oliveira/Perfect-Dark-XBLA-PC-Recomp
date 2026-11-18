@@ -277,3 +277,33 @@ return = true
 address = 0x822426B8
 name = "PdHookChooseTrack"
 return = true
+
+# More multiplayer weapons (pd_mp_weapons, pd_weapons.h). setupCreateProps
+# (sub_821FFCC8), before the stage's props are made: this stage's weapon slots are
+# decided (a joined PC gets the host's) and its weapon pickups noted.
+[[midasm_hook]]
+address = 0x821FFCC8
+name = "PdHookSetupCreateProps"
+
+# mpGetMpWeaponByLocation (sub_821CC458, r3 = spawn location): with extra slots it
+# answers over all of them, returning the weapon table entry in r3.
+[[midasm_hook]]
+address = 0x821CC458
+name = "PdHookWeaponByLocation"
+registers = ["r3"]
+return_on_true = true
+
+# propEnable (sub_821F7518, r3 = prop): every PC calls it when a weapon pickup
+# respawns. With pd_mp_weapon_shuffle the pickup first becomes a different weapon.
+[[midasm_hook]]
+address = 0x821F7518
+name = "PdHookPropEnable"
+registers = ["r3"]
+
+# setupCreateProps' ammo-crate case (`cmpwi r10,0` at loc_8220089C; r10 = the
+# weapon's first ammo quantity, r31 = the crate): 0 skips the crate. With
+# pd_mp_weapon_shuffle a crate next to a no-ammo pickup is made anyway, empty.
+[[midasm_hook]]
+address = 0x8220089C
+name = "PdHookCrateWithoutAmmo"
+registers = ["r10", "r31"]
