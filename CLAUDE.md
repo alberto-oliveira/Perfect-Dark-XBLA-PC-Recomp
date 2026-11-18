@@ -11,7 +11,7 @@ This file describes the workflow for perfect dark modding using Claude Code. Som
 - Development focus is on netplay, you can disregard local play.
 - Break-down your work in smaller steps to be commitable.
 - You can commit and push the work yourself, but if any new functionality requires in-game debugging, don't commit before I confirm to you the results.
-- I will open a feature branch for each mod; when done developing the mod, you can open a PR to main for my review.
+- I will open a feature branch for each mod, from `dev`; when done developing the mod, you can open a PR to `dev` for my review.
 - I intend to learn from your mod development, so make sure your code is as straightforward as possible and contains comments to explain complex parts.
 - When requiring in-game testing, provide me:
     - The build command
@@ -24,8 +24,13 @@ This file describes the workflow for perfect dark modding using Claude Code. Som
 
 - The N64 poison work stays on the `handicap-mod` branch as part of the handicap mod.
 - Debug code (hooks and functions tagged `TEMP_*`) is committed while a mod is in development. When it is removed in a cleanup, its code is first copied into the debug bank at `tools/debug-bank/`: plain source files kept only so the code can be recovered later. They are not built and don't need to compile. Each entry notes what it was for, the hook addresses and toml entries it used, and the commit it was removed in.
-- The test-copy scripts in `tools/` are committed on `handicap-mod`.
-- Pull requests always target the fork: `gh pr create --repo alberto-oliveira/Perfect-Dark-XBLA-PC-Recomp --base main` (on a fork, `gh` defaults to the parent repository).
+- The test-copy scripts in `tools/` are committed (on `main` and `dev`).
+- Pull requests always target the fork's `dev` branch: `gh pr create --repo alberto-oliveira/Perfect-Dark-XBLA-PC-Recomp --base dev` (on a fork, `gh` defaults to the parent repository).
+
+## Branches (2026-11-18)
+
+- `dev` is the integration branch: mod branches start from `dev`, and their PRs go to `dev`.
+- `main` only receives `dev` when I decide to; Claude doesn't open PRs to `main`.
 
 ## Ground-rules
 
