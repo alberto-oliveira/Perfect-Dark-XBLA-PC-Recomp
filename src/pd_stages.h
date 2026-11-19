@@ -265,6 +265,269 @@ inline int SoloStartPad(const uint8_t* setup, uint32_t size) {
   return -1;
 }
 
+// ---- The solo AI lists: which lifts the mission switches on --------------------------
+//
+// A lift moves by itself, but the bots only know how to ride it once an AI list
+// has run activate_lift(lift number, tag) for it (it fills the game's lift table,
+// g_Lifts, which the bots' route finding reads). The solo setup's own AI lists
+// hold those commands, so we copy them from there.
+
+constexpr uint32_t kAiCommandLengths = 0x825CA130;  // u16 per opcode: the command's length in bytes
+constexpr uint32_t kAiCommandCount = 0x1E0;         // opcodes in the N64 table
+constexpr uint16_t kAiEndList = 0x0004;
+constexpr uint16_t kAiPrint = 0x00B5;               // the one command with a variable length (a string)
+constexpr uint16_t kAiActivateLift = 0x018D;        // activate_lift(lift number, tag): 4 bytes
+
+struct LiftActivation {
+  uint8_t lift;  // lift number (1-9, the game's g_Lifts index)
+  uint8_t tag;   // tag id of the lift object
+};
+
+// Walks every AI list of a setup file (`lengths` = the game's command length
+// table, a host pointer) and collects its activate_lift commands, without repeats.
+inline std::vector<LiftActivation> SoloLiftActivations(const uint8_t* setup, uint32_t size,
+                                                       const uint8_t* lengths) {
+  std::vector<LiftActivation> found;
+  if (size < 0x20) return found;
+  // The ailists table: {u32 list offset, u32 id} pairs, ending in offset 0.
+  for (uint32_t entry = U32(setup + 0x18); entry + 8 <= size; entry += 8) {
+    const uint32_t list = U32(setup + entry);
+    if (list == 0) break;
+    uint32_t at = list;
+    for (int guard = 0; guard < 100000 && at + 2 <= size; ++guard) {
+      const uint16_t op = U16(setup + at);
+      if (op == kAiEndList) break;
+      if (op >= kAiCommandCount) break;  // not a command we know: stop reading this list
+      uint32_t length = U16(lengths + op * 2);
+      if (op == kAiPrint) {
+        length = 2;
+        while (at + length < size && setup[at + length] != 0) ++length;
+        ++length;
+      }
+      if (op == kAiActivateLift && at + 4 <= size) {
+        const LiftActivation lift{setup[at + 2], setup[at + 3]};
+        const bool seen = std::any_of(found.begin(), found.end(), [&](const LiftActivation& f) {
+          return f.lift == lift.lift && f.tag == lift.tag;
+        });
+        if (!seen) found.push_back(lift);
+      }
+      if (length == 0) break;
+      at += length;
+    }
+  }
+  return found;
+}
+
+// ---- The solo objects: what the arena keeps -----------------------------------------
+//
+// The solo setup's props are a list of commands, each an object or a link
+// between objects. Some fields point at another command by RELATIVE INDEX (the
+// target's place in the list minus this command's place): a door's sibling, a
+// lift's doors, a lift door link, a tag, an object inside another object. When
+// we leave commands out, every such index has to be recounted.
+//
+// Kept: the level's furniture - doors, lifts, glass, crates and other scenery.
+// Left out: the mission - guards and what they carry, objectives, keys, weapons
+// and ammo (the arena gets its own), cameras and guns that shoot, vehicles the
+// AI drives, and every link that needs them.
+
+// Object fields (struct defaultobj and the N64's per-type structs).
+constexpr uint32_t kObjPad = 0x06;     // s16 pad number; with kFlagInside: relative index of the owner
+constexpr uint32_t kObjFlags = 0x08;   // u32
+constexpr uint32_t kObjFlags2 = 0x0C;  // u32
+constexpr uint32_t kDoorKeyFlags = 0x74;  // u32: which keys open it (0 = none needed)
+constexpr uint32_t kDoorSibling = 0xBC;   // s32 relative index of the door that opens with it, or 0
+constexpr uint32_t kLiftDoors = 0x64;     // 4 x s32 relative index of the lift's doors, or 0
+constexpr uint32_t kLinkLiftDoorDoor = 0x04;  // lift_door command: s32 relative index of the door
+constexpr uint32_t kLinkLiftDoorLift = 0x08;  //   ... and of the lift
+constexpr uint32_t kTagId = 0x04;      // tag command: u16 tag id
+constexpr uint32_t kTagOffset = 0x06;  //   ... and s16 relative index of the tagged object
+
+constexpr uint32_t kFlagAssignedToChr = 0x00004000;  // carried by a guard (pad = the guard)
+constexpr uint32_t kFlagInside = 0x00008000;         // inside another object (pad = its owner)
+constexpr uint32_t kFlagCannotActivate = 0x02000000; // pressing B on it does nothing
+constexpr uint32_t kFlagLiftDeactivated = 0x10000000;  // a lift that stands still (on doors: has a portal)
+constexpr uint32_t kFlag2ExcludeA = 0x00000010;      // not on Agent difficulty
+constexpr uint32_t kFlag2Difficulties = 0x000000F0;  // not on Agent / Special Agent / Perfect Agent / Perfect Dark
+constexpr uint32_t kFlag2PlayerCounts = 0x01C00000;  // not with 2 / 3 / 4 players
+constexpr uint32_t kFlag2OneWayLocks = 0x18000000;   // locked from the front / from the back
+
+constexpr uint8_t kTypeDoor = 0x01;
+constexpr uint8_t kTypeSingleMonitor = 0x0A;
+constexpr uint8_t kTypeLinkLiftDoor = 0x13;
+constexpr uint8_t kTypeTag = 0x16;
+constexpr uint8_t kTypeLift = 0x30;
+constexpr uint8_t kTypeEnd = 0x34;
+
+// The object types an arena keeps (a tag or lift door link is kept when what it
+// links is kept: see CopySoloProps).
+inline bool KeptType(uint8_t type) {
+  switch (type) {
+    case 0x01:  // door
+    case 0x02:  // door scale
+    case 0x03:  // basic (furniture, boxes, plants...)
+    case 0x0A:  // single monitor
+    case 0x0B:  // multi monitor
+    case 0x0C:  // hanging monitors
+    case 0x0F:  // debris
+    case 0x24:  // gas bottle
+    case 0x29:  // (a basic object kind)
+    case 0x2A:  // glass
+    case 0x2B:  // safe
+    case 0x2F:  // tinted glass
+    case 0x30:  // lift
+    case 0x33:  // hoverbike
+    case 0x35:  // hover prop (hovering crates and beds)
+    case 0x36:  // fan
+    case 0x3B:  // escalator step
+      return true;
+    default:
+      return false;
+  }
+}
+
+// One command of the solo setup's props, found by the caller with the game's own
+// command length function (setup_get_cmd_length).
+struct SoloCommand {
+  uint32_t offset = 0;  // bytes from the start of the setup file
+  uint32_t words = 0;   // its length in 4-byte words
+};
+
+struct CopiedProps {
+  std::vector<uint8_t> bytes;  // the kept commands, links recounted (no end marker)
+  std::vector<LiftActivation> lifts;  // the activate_lift commands whose lift was kept
+  std::map<uint8_t, int> kept, dropped;  // per object type, for the log
+  int unlocked = 0;       // doors that needed a key or were locked one way
+  int still_closed = 0;   // doors the player cannot open (left as they are)
+  int unlinked = 0;       // links cleared because their target was left out
+};
+
+inline CopiedProps CopySoloProps(const uint8_t* setup, uint32_t size, const std::vector<SoloCommand>& cmds,
+                                 const std::vector<LiftActivation>& solo_lifts) {
+  CopiedProps out;
+  const size_t n = cmds.size();
+  const auto type_of = [&](size_t i) { return setup[cmds[i].offset + 3]; };
+  const auto at = [&](size_t i, uint32_t field) { return setup + cmds[i].offset + field; };
+  // The command a relative index points at, or n if it is outside the list.
+  const auto target = [&](size_t i, int32_t relative) {
+    const int64_t t = int64_t(i) + relative;
+    return (t >= 0 && t < int64_t(n)) ? size_t(t) : n;
+  };
+
+  // 1. Each command on its own: its type, the Agent difficulty, not on a guard.
+  std::vector<bool> keep(n, false);
+  for (size_t i = 0; i < n; ++i) {
+    const uint8_t type = type_of(i);
+    if (!KeptType(type) || cmds[i].words < 5) continue;
+    const uint32_t flags = U32(at(i, kObjFlags));
+    const uint32_t flags2 = U32(at(i, kObjFlags2));
+    if (flags2 & kFlag2ExcludeA) continue;  // another difficulty's copy of the object
+    if (flags & kFlagAssignedToChr) continue;
+    if (type == kTypeSingleMonitor && S16(at(i, kObjPad)) < 0 && !(flags & kFlagInside)) continue;  // hangs off something
+    keep[i] = true;
+  }
+  // 2. An object inside another one goes only with its owner (repeated, as an
+  // owner can itself be inside something).
+  for (bool changed = true; changed;) {
+    changed = false;
+    for (size_t i = 0; i < n; ++i) {
+      if (!keep[i] || !(U32(at(i, kObjFlags)) & kFlagInside)) continue;
+      const size_t owner = target(i, S16(at(i, kObjPad)));
+      if (owner == n || !keep[owner]) {
+        keep[i] = false;
+        changed = true;
+      }
+    }
+  }
+  // 3. Links: a lift door link needs its door and lift; a tag is kept only for a
+  // kept lift (the lift AI list finds the lift by its tag).
+  for (size_t i = 0; i < n; ++i) {
+    const uint8_t type = type_of(i);
+    if (type == kTypeLinkLiftDoor && cmds[i].words >= 3) {
+      const size_t door = target(i, S32(at(i, kLinkLiftDoorDoor)));
+      const size_t lift = target(i, S32(at(i, kLinkLiftDoorLift)));
+      keep[i] = door != n && lift != n && keep[door] && keep[lift];
+    } else if (type == kTypeTag && cmds[i].words >= 2) {
+      const size_t tagged = target(i, S16(at(i, kTagOffset)));
+      keep[i] = tagged != n && keep[tagged] && type_of(tagged) == kTypeLift;
+    }
+  }
+
+  // The kept commands' new places in the list.
+  std::vector<int32_t> new_index(n, -1);
+  int32_t count = 0;
+  for (size_t i = 0; i < n; ++i) {
+    if (keep[i]) new_index[i] = count++;
+  }
+  // A relative index recounted for the new list; 0 (no link) if its target was left out.
+  const auto relink = [&](size_t i, int32_t relative) -> int32_t {
+    if (relative == 0) return 0;
+    const size_t t = target(i, relative);
+    if (t == n || !keep[t]) {
+      ++out.unlinked;
+      return 0;
+    }
+    return new_index[t] - new_index[i];
+  };
+  const auto put32 = [](uint8_t* p, uint32_t v) {
+    p[0] = uint8_t(v >> 24); p[1] = uint8_t(v >> 16); p[2] = uint8_t(v >> 8); p[3] = uint8_t(v);
+  };
+  const auto put16 = [](uint8_t* p, uint16_t v) { p[0] = uint8_t(v >> 8); p[1] = uint8_t(v); };
+
+  // 4. Copy the kept commands and fix them up.
+  std::vector<uint8_t> kept_tags;
+  for (size_t i = 0; i < n; ++i) {
+    const uint8_t type = type_of(i);
+    if (!keep[i]) {
+      ++out.dropped[type];
+      continue;
+    }
+    ++out.kept[type];
+    const size_t start = out.bytes.size();
+    out.bytes.insert(out.bytes.end(), at(i, 0), at(i, 0) + cmds[i].words * 4);
+    uint8_t* cmd = out.bytes.data() + start;
+
+    if (type == kTypeLinkLiftDoor) {
+      put32(cmd + kLinkLiftDoorDoor, uint32_t(relink(i, S32(cmd + kLinkLiftDoorDoor))));
+      put32(cmd + kLinkLiftDoorLift, uint32_t(relink(i, S32(cmd + kLinkLiftDoorLift))));
+      continue;
+    }
+    if (type == kTypeTag) {
+      put16(cmd + kTagOffset, uint16_t(relink(i, S16(cmd + kTagOffset))));
+      kept_tags.push_back(uint8_t(U16(cmd + kTagId)));
+      continue;
+    }
+
+    // An object. Every difficulty and player count gets it (only Agent's copies
+    // were kept), so every PC makes the same objects.
+    uint32_t flags = U32(cmd + kObjFlags);
+    uint32_t flags2 = U32(cmd + kObjFlags2) & ~(kFlag2Difficulties | kFlag2PlayerCounts);
+    if (flags & kFlagInside) put16(cmd + kObjPad, uint16_t(relink(i, S16(cmd + kObjPad))));
+
+    if (type == kTypeDoor && cmds[i].words * 4 >= kDoorSibling + 4) {
+      // Unlocked: no key needed, no one-way lock. Doors the player can never
+      // open (only the mission's scripts did) stay closed.
+      if (U32(cmd + kDoorKeyFlags) != 0 || (flags2 & kFlag2OneWayLocks)) ++out.unlocked;
+      put32(cmd + kDoorKeyFlags, 0);
+      flags2 &= ~kFlag2OneWayLocks;
+      if (flags & kFlagCannotActivate) ++out.still_closed;
+      put32(cmd + kDoorSibling, uint32_t(relink(i, S32(cmd + kDoorSibling))));
+    } else if (type == kTypeLift && cmds[i].words * 4 >= kLiftDoors + 16) {
+      flags &= ~kFlagLiftDeactivated;  // every lift runs from the start
+      for (uint32_t d = 0; d < 4; ++d) {
+        put32(cmd + kLiftDoors + d * 4, uint32_t(relink(i, S32(cmd + kLiftDoors + d * 4))));
+      }
+    }
+    put32(cmd + kObjFlags, flags);
+    put32(cmd + kObjFlags2, flags2);
+  }
+
+  for (const LiftActivation& lift : solo_lifts) {
+    if (std::find(kept_tags.begin(), kept_tags.end(), lift.tag) != kept_tags.end()) out.lifts.push_back(lift);
+  }
+  return out;
+}
+
 // ---- Building the multiplayer setup ----------------------------------------------------
 
 constexpr int kMaxSpawns = 24;  // the game's spawn list holds 24 (g_SpawnPoints)
@@ -284,10 +547,24 @@ inline const std::vector<uint8_t>& StartSimulantsList() {
   return list;
 }
 
+// The background list 0x1001: switches on the stage's lifts for the bots, as the
+// arenas' own setups do (activate_lift for each), then idles.
+inline std::vector<uint8_t> StartLiftsList(const std::vector<LiftActivation>& lifts) {
+  std::vector<uint8_t> list;
+  for (const LiftActivation& lift : lifts) {
+    list.insert(list.end(), {0x01, 0x8D, lift.lift, lift.tag});  // activate_lift(lift, tag)
+  }
+  list.insert(list.end(), {0x00, 0x05, 0xFD, 0x00, 0x00});  // set_ailist(CHR_SELF, GAILIST_IDLE)
+  list.insert(list.end(), {0x00, 0x04});                    // endlist
+  return list;
+}
+
 // Writes a big-endian setup file in a host buffer, section by section.
 class SetupWriter {
  public:
-  std::vector<int> spawn_pads;  // intro spawn(pad) commands
+  std::vector<int> spawn_pads;       // intro spawn(pad) commands
+  std::vector<uint8_t> props;        // object commands, without the end marker
+  std::vector<LiftActivation> lifts; // for the lift AI list
 
   std::vector<uint8_t> Build() const {
     std::vector<uint8_t> out(0x20, 0);  // the header, filled in at the end
@@ -299,25 +576,33 @@ class SetupWriter {
     }
     Word(out, 12);  // INTROCMD_END
 
-    const uint32_t props = Here(out);
+    const uint32_t props_offset = Here(out);
+    out.insert(out.end(), props.begin(), props.end());
     Word(out, 0x34);  // OBJTYPE_END
 
     const uint32_t paths = Here(out);
     Word(out, 0);  // pads = none: no paths
     Word(out, 0);
 
+    // The AI lists: the table of {offset, id} first, then the lists' bytes.
+    std::vector<std::pair<uint32_t, std::vector<uint8_t>>> lists = {{0x1000, StartSimulantsList()}};
+    if (!lifts.empty()) lists.push_back({0x1001, StartLiftsList(lifts)});
     const uint32_t ailists = Here(out);
-    const uint32_t list_offset = ailists + 2 * 8;  // after one {list, id} and the terminator
-    Word(out, list_offset);
-    Word(out, 0x1000);
+    uint32_t list_offset = ailists + uint32_t(lists.size() + 1) * 8;  // after the table and its terminator
+    for (const auto& [id, bytes] : lists) {
+      Word(out, list_offset);
+      Word(out, id);
+      list_offset += uint32_t((bytes.size() + 3) / 4 * 4);
+    }
     Word(out, 0);  // terminator
     Word(out, 0);
-    const std::vector<uint8_t>& list = StartSimulantsList();
-    out.insert(out.end(), list.begin(), list.end());
-    while (out.size() % 4) out.push_back(0);
+    for (const auto& [id, bytes] : lists) {
+      out.insert(out.end(), bytes.begin(), bytes.end());
+      while (out.size() % 4) out.push_back(0);
+    }
 
     Put(out, 0x0C, intro);
-    Put(out, 0x10, props);
+    Put(out, 0x10, props_offset);
     Put(out, 0x14, paths);
     Put(out, 0x18, ailists);
     return out;

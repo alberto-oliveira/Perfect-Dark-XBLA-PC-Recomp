@@ -1090,8 +1090,28 @@ uint32_t PdSoloStageSetup(PPCContext& ctx, uint8_t* base, uint32_t loaded) {
     return loaded;
   }
 
+  // The solo setup's props, one command at a time (each command's length comes
+  // from the game's own setup_get_cmd_length, sub_821FD198).
+  std::vector<stages::SoloCommand> cmds;
+  {
+    const uint32_t solo_guest = uint32_t(solo.data - base);
+    uint32_t offset = stages::U32(solo.data + 0x10);
+    for (int n = 0; n < 10000 && offset + 4 <= solo.size; ++n) {
+      if (solo.data[offset + 3] == stages::kTypeEnd) break;
+      const uint32_t words = CallGuest(sub_821FD198, ctx, base, solo_guest + offset);
+      if (words == 0 || offset + words * 4 > solo.size) break;
+      cmds.push_back({offset, words});
+      offset += words * 4;
+    }
+  }
+  const std::vector<stages::LiftActivation> solo_lifts =
+      stages::SoloLiftActivations(solo.data, solo.size, base + stages::kAiCommandLengths);
+  const stages::CopiedProps props = stages::CopySoloProps(solo.data, solo.size, cmds, solo_lifts);
+
   stages::SetupWriter writer;
   for (const stages::Pad& pad : spawns) writer.spawn_pads.push_back(pad.num);
+  writer.props = props.bytes;
+  writer.lifts = props.lifts;
   const std::vector<uint8_t> setup = writer.Build();
 
   // The new setup goes in the stage's memory too (the allocator file_load_to_new
@@ -1103,26 +1123,27 @@ uint32_t PdSoloStageSetup(PPCContext& ctx, uint8_t* base, uint32_t loaded) {
   }
   std::memcpy(base + buffer, setup.data(), setup.size());
 
-  REXLOG_INFO("[stages] stage 0x{:02X}: built its multiplayer setup ({} bytes at 0x{:08X}): {} spawn points",
-              stagenum, setup.size(), buffer, spawns.size());
+  int kept_total = 0;
+  for (const auto& [type, count] : props.kept) kept_total += count;
+  REXLOG_INFO("[stages] stage 0x{:02X}: built its multiplayer setup ({} bytes at 0x{:08X}): {} spawn points, "
+              "{} of the solo setup's {} commands kept, {} doors unlocked, {} lifts switched on",
+              stagenum, setup.size(), buffer, spawns.size(), kept_total, cmds.size(), props.unlocked,
+              props.lifts.size());
 
-  // TEMP_STAGES: what the stage's files hold, for the next steps.
+  // TEMP_STAGES: what the stage's files hold and what was kept, for checking.
   {
-    const auto object_words = [&](uint32_t obj) { return CallGuest(sub_821FD198, ctx, base, obj); };
-    std::map<uint8_t, int> counts;
-    const uint32_t solo_guest = uint32_t(solo.data - base);
-    uint32_t obj = solo_guest + stages::U32(solo.data + 0x10);
-    for (int n = 0; n < 5000 && obj + 4 <= solo_guest + solo.size; ++n) {
-      const uint8_t type = base[obj + 3];
-      if (type == 0x34) break;  // OBJTYPE_END
-      ++counts[type];
-      const uint32_t words = object_words(obj);
-      if (words == 0) break;
-      obj += words * 4;
-    }
     REXLOG_INFO("[stages] TEMP pads file: {} pads, {} waypoints, {} bytes; solo setup {} bytes, start pad {}",
                 pads.NumPads(), pads.WaypointPads().size(), pads.size, solo.size, start_pad);
-    REXLOG_INFO("[stages] TEMP solo setup objects: {}", stages::DescribeTypeCounts(counts));
+    REXLOG_INFO("[stages] TEMP kept: {}", stages::DescribeTypeCounts(props.kept));
+    REXLOG_INFO("[stages] TEMP left out: {}", stages::DescribeTypeCounts(props.dropped));
+    REXLOG_INFO("[stages] TEMP doors the player cannot open (left closed): {}; links cleared: {}",
+                props.still_closed, props.unlinked);
+    for (const stages::LiftActivation& lift : solo_lifts) {
+      const bool kept = std::any_of(props.lifts.begin(), props.lifts.end(), [&](const stages::LiftActivation& l) {
+        return l.lift == lift.lift && l.tag == lift.tag;
+      });
+      REXLOG_INFO("[stages] TEMP solo activate_lift({}, tag {}): {}", lift.lift, lift.tag, kept ? "kept" : "lift left out");
+    }
     for (const stages::Pad& pad : spawns) {
       REXLOG_INFO("[stages] TEMP spawn pad {}: ({:.0f}, {:.0f}, {:.0f}) room {} flags 0x{:05X}", pad.num, pad.x,
                   pad.y, pad.z, pad.room, pad.flags);
