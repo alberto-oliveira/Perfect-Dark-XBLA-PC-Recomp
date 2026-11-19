@@ -49,8 +49,6 @@ void PdPropEnable(PPCContext& ctx, uint8_t* base, uint32_t prop);
 bool PdMakeCrateWithoutAmmo(uint8_t* base, uint32_t crate_obj);
 uint32_t PdSoloStageSetup(PPCContext& ctx, uint8_t* base, uint32_t loaded);
 uint32_t PdStageNameText(const uint8_t* base, uint32_t offset, uint32_t text);
-void PdNetPropertyLog(const uint8_t* base, uint32_t property, uint32_t value);
-
 namespace {
 // The calling guest thread's full context and guest memory, for a hook that needs
 // more than its registers.
@@ -316,11 +314,6 @@ void PdHookStageNameTextR10(PPCRegister& r4, PPCRegister& r10) {
 }
 void PdHookStageNameTextR8(PPCRegister& r4, PPCRegister& r8) {
   r4.u64 = PdStageNameText(HookBase(), r8.u32, r4.u32);
-}
-
-// TEMP_STAGES: the network session's property setter (sub_822F0850), at its start.
-void PdHookNetPropertyLog(PPCRegister& r3, PPCRegister& r4) {
-  PdNetPropertyLog(HookBase(), r3.u32, r4.u32);
 }
 
 // Before `bl 0x821d0b28` (set handicap: slot r3, value r4) in the join path, which

@@ -353,10 +353,3 @@ registers = ["r4", "r10"]
 address = 0x822812E8
 name = "PdHookStageNameTextR8"
 registers = ["r4", "r8"]
-
-# TEMP_STAGES: the network session's property setter (sub_822F0850, r3 property,
-# r4 value) logs each change and the property's allowed range.
-[[midasm_hook]]
-address = 0x822F0850
-name = "PdHookNetPropertyLog"
-registers = ["r3", "r4"]
