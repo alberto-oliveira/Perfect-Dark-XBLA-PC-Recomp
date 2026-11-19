@@ -216,21 +216,34 @@ inline bool UsableForSpawn(const Pad& pad) {
 // Picks up to `count` pads spread over the stage: the first is the one nearest to
 // `start`, then each next one is the candidate farthest from every pad picked so
 // far ("farthest point sampling"). Same input, same result, on every PC.
-inline std::vector<Pad> PickSpread(const std::vector<Pad>& candidates, const Pad& start, size_t count) {
+//
+// With `avoid` (pads already in use, e.g. the spawn points) the picks keep away
+// from those too, and the first pick is the candidate farthest from them
+// (`start` is then not used).
+inline float Distance2(const Pad& a, const Pad& b) {
+  const float dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+  return dx * dx + dy * dy + dz * dz;
+}
+
+inline std::vector<Pad> PickSpread(const std::vector<Pad>& candidates, const Pad& start, size_t count,
+                                   const std::vector<Pad>& avoid = {}) {
   std::vector<Pad> picked;
   if (candidates.empty() || count == 0) return picked;
-  const auto dist2 = [](const Pad& a, const Pad& b) {
-    const float dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
-    return dx * dx + dy * dy + dz * dz;
-  };
-  // nearest[i] = squared distance from candidate i to the closest picked pad.
-  std::vector<float> nearest(candidates.size());
+  const auto dist2 = Distance2;
+  // nearest[i] = squared distance from candidate i to the closest picked (or avoided) pad.
+  std::vector<float> nearest(candidates.size(), INFINITY);
   size_t first = 0;
-  for (size_t i = 0; i < candidates.size(); ++i) {
-    if (dist2(candidates[i], start) < dist2(candidates[first], start)) first = i;
+  if (avoid.empty()) {
+    for (size_t i = 0; i < candidates.size(); ++i) {
+      if (dist2(candidates[i], start) < dist2(candidates[first], start)) first = i;
+    }
+  } else {
+    for (size_t i = 0; i < candidates.size(); ++i) {
+      for (const Pad& a : avoid) nearest[i] = std::min(nearest[i], dist2(candidates[i], a));
+      if (nearest[i] > nearest[first]) first = i;
+    }
   }
   size_t next = first;
-  for (size_t i = 0; i < candidates.size(); ++i) nearest[i] = INFINITY;
   while (picked.size() < count) {
     picked.push_back(candidates[next]);
     nearest[next] = -1;  // taken
@@ -648,6 +661,106 @@ inline std::vector<Pad> ChooseSpawns(const PadsFile& pads, int start_pad) {
   }
   if (!has_start) start = candidates.front();
   return PickSpread(candidates, start, kMaxSpawns);
+}
+
+// ---- Weapon spawns ---------------------------------------------------------------------
+//
+// An arena's weapon spawn is a weapon object whose weapon number is a spawn
+// LOCATION, 240 + 0..15: when the stage is made, setupPlaceWeapon asks which
+// weapon that location gets (mpGetMpWeaponByLocation, which the weapons mod
+// answers over its 16 slots) and puts that weapon there. Ammo crates placed
+// right after a weapon spawn are filled with that weapon's ammo.
+
+constexpr int kWeaponLocations = 16;            // locations 240-255
+constexpr float kCrateMaxDistance = 400.0f;     // a crate's pad: at most this far from its weapon
+constexpr float kCrateMaxHeight = 120.0f;       // ...and about the same floor height
+
+struct WeaponSpawn {
+  Pad pad;
+  int crate_pad = -1;  // -1 = no crate (no pad close enough)
+};
+
+// The weapon spawns: 16 waypoints spread over the stage and kept away from the
+// spawn points (so nobody is born standing on a gun), each with an ammo crate on
+// the nearest free waypoint, if one is close and on the same floor.
+inline std::vector<WeaponSpawn> ChooseWeaponSpawns(const PadsFile& pads, const std::vector<Pad>& spawns) {
+  std::vector<Pad> candidates;
+  Pad pad;
+  for (const int num : pads.WaypointPads()) {
+    if (!pads.Read(num, &pad) || !UsableForSpawn(pad)) continue;
+    const bool is_spawn = std::any_of(spawns.begin(), spawns.end(), [&](const Pad& s) { return s.num == num; });
+    if (!is_spawn) candidates.push_back(pad);
+  }
+  std::vector<WeaponSpawn> weapons;
+  for (const Pad& p : PickSpread(candidates, Pad{}, kWeaponLocations, spawns)) weapons.push_back({p, -1});
+
+  // Crates: nearest candidate not already used by a weapon or another crate.
+  std::vector<int> used;
+  for (const WeaponSpawn& w : weapons) used.push_back(w.pad.num);
+  for (WeaponSpawn& w : weapons) {
+    float best = kCrateMaxDistance * kCrateMaxDistance;
+    for (const Pad& c : candidates) {
+      if (std::find(used.begin(), used.end(), c.num) != used.end()) continue;
+      if (std::fabs(c.y - w.pad.y) > kCrateMaxHeight) continue;
+      const float d = Distance2(c, w.pad);
+      if (d < best) {
+        best = d;
+        w.crate_pad = c.num;
+      }
+    }
+    if (w.crate_pad >= 0) used.push_back(w.crate_pad);
+  }
+  return weapons;
+}
+
+// The object commands (N64 props.h macros weapon() and ammocratemulti()).
+// A generic object: {scale << 16 | type, model << 16 | pad, flags, flags2,
+// flags3, 14 zero words, maxdamage, 0, 0, 0x0fff0000}, then the type's own words.
+constexpr uint32_t kObjFlagFall = 0x00000001;  // drops to the floor below its pad
+constexpr uint16_t kModelMultiAmmoCrate = 0x00C1;
+
+inline void AppendGenericObject(std::vector<uint8_t>& out, uint8_t type, uint16_t model, int pad,
+                                uint32_t maxdamage) {
+  const auto word = [&](uint32_t v) {
+    out.insert(out.end(), {uint8_t(v >> 24), uint8_t(v >> 16), uint8_t(v >> 8), uint8_t(v)});
+  };
+  word(0x0100u << 16 | type);  // scale 0x100 = 1.0
+  word(uint32_t(model) << 16 | (uint32_t(pad) & 0xFFFF));
+  word(kObjFlagFall);
+  word(0);  // flags2
+  word(0);  // flags3
+  for (int i = 0; i < 14; ++i) word(0);
+  word(maxdamage);
+  word(0);
+  word(0);
+  word(0x0FFF0000);
+}
+
+// weapon(0x0100, 0, pad, OBJFLAG_FALL, 0, 0, 240 + location): 26 words.
+inline void AppendWeaponSpawn(std::vector<uint8_t>& out, int pad, int location) {
+  AppendGenericObject(out, 0x08, 0, pad, 1000);
+  const uint32_t weapon = uint32_t(240 + location);
+  out.insert(out.end(), {uint8_t(weapon), 0, 0, 0});  // weapon number in the top byte
+  out.insert(out.end(), {0x00, 0xFF, 0xFF, 0xFF});
+  out.insert(out.end(), {0, 0, 0, 0});
+}
+
+// ammocratemulti(0x0100, MODEL_MULTI_AMMO_CRATE, pad, OBJFLAG_FALL, 0, 0, 1000):
+// 42 words; its 19 ammo slots {u16 model, u16 quantity} start empty (0xFFFF, 0)
+// and the game fills them from the weapon before it.
+inline void AppendAmmoCrate(std::vector<uint8_t>& out, int pad) {
+  AppendGenericObject(out, 0x14, kModelMultiAmmoCrate, pad, 1000);
+  for (int i = 0; i < 19; ++i) out.insert(out.end(), {0xFF, 0xFF, 0x00, 0x00});
+}
+
+// All the weapon spawns and their crates as object commands, in location order.
+inline std::vector<uint8_t> WeaponSpawnCommands(const std::vector<WeaponSpawn>& weapons) {
+  std::vector<uint8_t> out;
+  for (size_t i = 0; i < weapons.size() && i < size_t(kWeaponLocations); ++i) {
+    AppendWeaponSpawn(out, weapons[i].pad.num, int(i));
+    if (weapons[i].crate_pad >= 0) AppendAmmoCrate(out, weapons[i].crate_pad);
+  }
+  return out;
 }
 
 // ---- TEMP_STAGES: debug descriptions ----------------------------------------------------

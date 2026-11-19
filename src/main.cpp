@@ -1108,9 +1108,14 @@ uint32_t PdSoloStageSetup(PPCContext& ctx, uint8_t* base, uint32_t loaded) {
       stages::SoloLiftActivations(solo.data, solo.size, base + stages::kAiCommandLengths);
   const stages::CopiedProps props = stages::CopySoloProps(solo.data, solo.size, cmds, solo_lifts);
 
+  const std::vector<stages::WeaponSpawn> weapons = stages::ChooseWeaponSpawns(pads, spawns);
+
   stages::SetupWriter writer;
   for (const stages::Pad& pad : spawns) writer.spawn_pads.push_back(pad.num);
-  writer.props = props.bytes;
+  // The weapon spawns first, as in the arenas' own setups; the solo objects after
+  // them (their links are relative, so moving the block changes nothing).
+  writer.props = stages::WeaponSpawnCommands(weapons);
+  writer.props.insert(writer.props.end(), props.bytes.begin(), props.bytes.end());
   writer.lifts = props.lifts;
   const std::vector<uint8_t> setup = writer.Build();
 
@@ -1126,9 +1131,9 @@ uint32_t PdSoloStageSetup(PPCContext& ctx, uint8_t* base, uint32_t loaded) {
   int kept_total = 0;
   for (const auto& [type, count] : props.kept) kept_total += count;
   REXLOG_INFO("[stages] stage 0x{:02X}: built its multiplayer setup ({} bytes at 0x{:08X}): {} spawn points, "
-              "{} of the solo setup's {} commands kept, {} doors unlocked, {} lifts switched on",
-              stagenum, setup.size(), buffer, spawns.size(), kept_total, cmds.size(), props.unlocked,
-              props.lifts.size());
+              "{} weapon spawns, {} of the solo setup's {} commands kept, {} doors unlocked, {} lifts switched on",
+              stagenum, setup.size(), buffer, spawns.size(), weapons.size(), kept_total, cmds.size(),
+              props.unlocked, props.lifts.size());
 
   // TEMP_STAGES: what the stage's files hold and what was kept, for checking.
   {
@@ -1143,6 +1148,11 @@ uint32_t PdSoloStageSetup(PPCContext& ctx, uint8_t* base, uint32_t loaded) {
         return l.lift == lift.lift && l.tag == lift.tag;
       });
       REXLOG_INFO("[stages] TEMP solo activate_lift({}, tag {}): {}", lift.lift, lift.tag, kept ? "kept" : "lift left out");
+    }
+    for (size_t i = 0; i < weapons.size(); ++i) {
+      const stages::Pad& pad = weapons[i].pad;
+      REXLOG_INFO("[stages] TEMP weapon location {}: pad {} ({:.0f}, {:.0f}, {:.0f}), crate pad {}", i, pad.num,
+                  pad.x, pad.y, pad.z, weapons[i].crate_pad);
     }
     for (const stages::Pad& pad : spawns) {
       REXLOG_INFO("[stages] TEMP spawn pad {}: ({:.0f}, {:.0f}, {:.0f}) room {} flags 0x{:05X}", pad.num, pad.x,
