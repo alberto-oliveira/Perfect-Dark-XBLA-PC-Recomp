@@ -50,6 +50,7 @@
 #include "pd_test_input.h"  // native-renderer branch: test pipe input
 #include "pd_native_vk_out.h"  // Graphics API: pd::native_vk::VulkanUsable
 #include "pd_update.h"         // Check for Updates
+#include "pd_handicap.h"       // pd_handicaps: online handicaps by gamertag
 #include "pd_weapons.h"        // pd_mp_weapons: weapon slots 7-16, shuffled respawns
 #include <rex/input/sdl/sdl_input_driver.h>
 #include <rex/cvar.h>
@@ -1480,6 +1481,61 @@ class PerfectDarkApp : public rex::ReXApp {
   // Items that keep a selection of their own inside them: a list, the player
   // stats list, and a dropdown while it is open.
   static bool MenuItemIsList(uint32_t type) { return type == 0x02 || type == 0x0F; }
+
+  // For the F3 menu log: what kind of row an item is, by the same numbering.
+  static const char* MenuItemTypeName(uint32_t type) {
+    switch (type) {
+      case 0x01: return "label";
+      case 0x02: return "list";
+      case 0x04: return "selectable";
+      case 0x06: return "objectives";
+      case 0x08: return "slider";
+      case 0x09: return "checkbox";
+      case 0x0B: return "separator";
+      case 0x0C: return "dropdown";
+      case 0x0D: return "keyboard";
+      case 0x0E: return "ranking";
+      case 0x0F: return "player stats";
+      case 0x11: return "carousel";
+      case 0x12: return "model";
+      case 0x15: return "meter";
+      case 0x17: return "marquee";
+      case 0x19: return "controller";
+      case 0x1A:
+      case 0x1B:
+      case 0x1C: return "panel";
+      case 0x1D: return "end";
+      default: return "?";
+    }
+  }
+
+  // For the F3 menu log: an item's text and what choosing it does. Its text
+  // (+0x08) is a text id, or the guest function that makes the label; its last
+  // field (+0x10) is the menu it opens when flag 0x4 is set, otherwise its
+  // handler. Label functions are not called here: this runs on the UI thread.
+  static std::string DescribeMenuItem(rex::memory::Memory* mem, uint32_t item) {
+    const uint32_t type = ReadGuestU32(mem, item) >> 24;
+    const uint32_t flags = ReadGuestU32(mem, item + 4);
+    const uint32_t text = ReadGuestU32(mem, item + 8);
+    const uint32_t last = ReadGuestU32(mem, item + 16);
+    std::string label;
+    if (type == 0x0B || type == 0x1D) {
+      label = "";
+    } else if (text >= 0x82000000 && text < 0x826E0000) {
+      label = fmt::format(" text from function 0x{:08X}", text);
+    } else if (text != 0 && text < 0x10000) {
+      const std::string s = GuestText(mem, text);
+      label = s.empty() ? fmt::format(" text {:04X} (not loaded)", text)
+                        : fmt::format(" \"{}\" ({:04X})", s, text);
+    }
+    std::string action;
+    if (type == 0x04 && (flags & 0x4) && last) {
+      action = fmt::format(", opens menu 0x{:08X}", last);
+    } else if (last >= 0x82000000 && last < 0x826E0000) {
+      action = fmt::format(", handler 0x{:08X}", last);
+    }
+    return fmt::format(" [{}{}]{}", MenuItemTypeName(type), action, label);
+  }
   static constexpr uint32_t kMenuItemDropdown = 0x0C;
   static constexpr uint32_t kMenuItemSlider = 0x08;
   static constexpr uint32_t kMenuItemCarousel = 0x11;
@@ -2389,10 +2445,11 @@ class PerfectDarkApp : public rex::ReXApp {
         list_info = fmt::format(" list cur {} index {} target {} view {}", list.curoffsety,
                                 list.index, list.targetoffsety, list.viewheight);
       }
-      REXLOG_INFO("[menumouse]   x {:.0f}..{:.0f} y {:.0f}..{:.0f} item 0x{:08X} type {:02X} "
+      REXLOG_INFO("[menumouse]   x {:.0f}..{:.0f} y {:.0f}..{:.0f} item 0x{:08X} type {:02X}{} "
                   "block {}{}{}{}", row.left, row.right, row.top, row.bottom, row.item,
-                  ReadGuestU32(mem, row.item) >> 24, row.block, row.focusable ? "" : " (no focus)",
-                  list_info, row.item == focus ? "  <- focus" : "");
+                  ReadGuestU32(mem, row.item) >> 24, DescribeMenuItem(mem, row.item), row.block,
+                  row.focusable ? "" : " (no focus)", list_info,
+                  row.item == focus ? "  <- focus" : "");
     }
   }
 
@@ -5037,6 +5094,8 @@ class PerfectDarkApp : public rex::ReXApp {
     done = true;
     PatchPlayerSetupMenus();
     PatchWeaponsMenu();
+    PatchHandicapRow(kLobbySettingsLocalDef, kLobbySettingsLocalItems);
+    PatchHandicapRow(kLobbySettingsNetDef, kLobbySettingsNetItems, BuildNetHandicapDialog());
     PatchGamerCardPrompt();
     menu_patched_ = true;
     REXLOG_INFO("[menu_patch] text bank found after {} check(s); installing PC menu rows",
@@ -5333,6 +5392,130 @@ class PerfectDarkApp : public rex::ReXApp {
     std::string text;
     for (int i = 0; p && i < 40 && p[i] && p[i] != '\n'; ++i) text += char(p[i]);
     return text;
+  }
+
+  // ---- Handicaps: the host's table --------------------------------------------
+  //
+  // The host's handicaps are pd_handicaps with the online lobby's slider values
+  // (session_handicaps_) on top. The sliders are only kept until hosting ends
+  // or the game closes. The menu handlers (game thread) and TickNetHandicaps
+  // both use them, hence the mutex.
+  static inline std::mutex handicap_mutex_;
+  static inline std::unordered_map<std::string, uint8_t> session_handicaps_;  // lower-cased gamertag -> byte
+
+  // This PC's own pd_handicaps, parsed again only when the setting changes.
+  static std::unordered_map<std::string, uint8_t> OwnHandicaps() {
+    std::lock_guard<std::mutex> lock(handicap_mutex_);
+    static std::string parsed_from;
+    static std::unordered_map<std::string, uint8_t> own;
+    const std::string list = rex::cvar::GetFlagByName("pd_handicaps");
+    if (list != parsed_from) {
+      own = pd::handicap::Parse(list);
+      parsed_from = list;
+    }
+    return own;
+  }
+
+  // pd_handicaps with the sliders' values on top.
+  static std::unordered_map<std::string, uint8_t> HostHandicaps() {
+    std::unordered_map<std::string, uint8_t> table = OwnHandicaps();
+    std::lock_guard<std::mutex> lock(handicap_mutex_);
+    for (const auto& [name, value] : session_handicaps_) table[name] = value;
+    return table;
+  }
+
+  // pd_handicaps: each PC writes the listed players' handicaps into its own
+  // config table during a match. Hits are calculated on the shooter's PC from
+  // its own table, so in a network match every PC must use the same list: the
+  // host's. The host sends its list (pd::handicap::EncodeBlob) and the joined
+  // PCs use only that one, never their own; with no list from the host (an
+  // older build) they apply no handicaps.
+  static void TickNetHandicaps() {
+    namespace netplay = rex::kernel::xam::netplay;
+    static int frames = 0;
+    if (++frames % 60 != 0) return;
+
+    // The list this PC applies. This part runs in the lobby too, so a host has
+    // sent its list, and a joined PC has heard it, before the match starts.
+    std::unordered_map<std::string, uint8_t> own = OwnHandicaps();
+    static std::unordered_map<std::string, uint8_t> from_host;  // joined PC: the host's list
+    static uint32_t heard_seq = 0;       // joined PC: the host's message last decoded
+    static bool warned_no_list = false;  // joined PC: "no list from the host" logged
+    static bool was_hosting = false;     // host: hosting on the last tick
+    static std::vector<uint8_t> sent;    // host: the message it last sent
+    const std::unordered_map<std::string, uint8_t>* table = &own;
+    if (netplay::IsJoinedSession()) {
+      table = &from_host;
+      was_hosting = false;
+      netplay::HostBlob blob;
+      // Asking every tick keeps the SDK polling the host (twice a second).
+      if (netplay::LatestHostBlob(pd::handicap::kBlobKey, &blob)) {
+        if (blob.seq != heard_seq) {
+          heard_seq = blob.seq;
+          from_host.clear();
+          if (pd::handicap::DecodeBlob(blob.data, &from_host)) {
+            REXLOG_INFO("[handicap] host's list #{}: {} entries", blob.seq, from_host.size());
+          } else {
+            REXLOG_WARN("[handicap] the host's list #{} is from another version: no handicaps", blob.seq);
+          }
+        }
+      } else if (!warned_no_list) {
+        // Normal for a few seconds after joining; it stays this way if the host
+        // has a build without this feature.
+        REXLOG_INFO("[handicap] no list from the host yet: no handicaps until one arrives");
+        warned_no_list = true;
+      }
+    } else {
+      // Not joined: a new session starts from scratch (the SDK also forgets
+      // what it heard when a PC leaves a session).
+      from_host.clear();
+      heard_seq = 0;
+      warned_no_list = false;
+      const bool hosting = netplay::IsHostingSession();
+      if (hosting) {
+        // pd_handicaps with the sliders on top, sent again whenever it
+        // changes (a slider moved, or the setting edited). Sent even when
+        // empty, so the joined PCs know the host has no list.
+        own = HostHandicaps();
+        const std::vector<uint8_t> blob = pd::handicap::EncodeBlob(own, netplay::kMaxHostBlob);
+        if (!was_hosting || blob != sent) {
+          netplay::SetHostBlob(pd::handicap::kBlobKey, blob.data(), blob.size());
+          sent = blob;
+          REXLOG_INFO("[handicap] sent {} entries to the joined PCs", blob[1]);
+        }
+      } else {
+        // Not hosting either: the sliders belong to the session that ended.
+        std::lock_guard<std::mutex> lock(handicap_mutex_);
+        if (!session_handicaps_.empty()) {
+          session_handicaps_.clear();
+          REXLOG_INFO("[handicap] hosting ended: slider values cleared");
+        }
+      }
+      was_hosting = hosting;
+    }
+    if (table->empty()) return;
+
+    // During a match only: write each listed player's handicap byte.
+    PerfectDarkApp* app = current_instance_;
+    auto* mem = (app && app->runtime()) ? app->runtime()->memory() : nullptr;
+    if (!mem || ReadGuestU32(mem, 0x82648BF8 + 1336) == 0) return;  // g_Vars: MP match running
+    for (uint32_t i = 0; i < 8; ++i) {
+      const uint32_t cfg = 0x82641950 + i * 216;
+      std::string name;
+      for (uint32_t k = 0; k < 16; ++k) {
+        const uint8_t c = ReadGuestU8(mem, cfg + 75 + k);  // real gamertag (network match only)
+        if (!c || c == '\n') break;
+        name += char(c);
+      }
+      if (name.empty()) continue;
+      const auto it = table->find(pd::handicap::LowerTrim(name));
+      if (it == table->end()) continue;
+      uint8_t* p = mem->TranslateVirtual<uint8_t*>(cfg + 0xCD);
+      if (p && *p != it->second) {
+        REXLOG_INFO("[handicap] cfg {} '{}': {} -> {}", i, name, *p, it->second);
+        *p = it->second;
+      }
+    }
   }
 
   static void TickMatchDetails() {
@@ -6065,6 +6248,24 @@ class PerfectDarkApp : public rex::ReXApp {
     for (int w = 1; w < 5; ++w) WriteGuestU32(mem, at + uint32_t(w) * 4, 0);
   }
 
+  // ---- Combat Simulator Game Setttings -------------------------------------
+  // Options below will be used to patch the game settings with the (already
+  // existing) handicap settings
+  static constexpr uint32_t kHandicapRow  = 0x825E044C;
+  
+  static constexpr uint32_t kLobbySettingsLocalDef = 0x825DEB2C;
+  static constexpr uint32_t kLobbySettingsLocalItems = 0x825DEB48;
+
+  static constexpr uint32_t kLobbySettingsNetDef = 0x825FAF74;
+  static constexpr uint32_t kLobbySettingsNetItems = 0x825FAE70;
+
+  // Rows Before Handicap: Scenario, Options, Arena, Weapons, Limits, Simulants
+  static constexpr int kLobbySettingsRowsBefore = 6;
+  // Rows After Handicap: Teams, Sep, Load Set., Save Set., Sep, Finished
+  static constexpr int kLobbySettingsRowsAfter = 6;
+  static constexpr int kLobbySettingsSimulants = 5; // Simulants row position
+  static constexpr int kLobbySettingsEnd = 12;      // End marker row position
+
   // ---- the Xbox "gamer card" prompt ----------------------------------------
   // Pages that list players - the Combat Simulator's Player Ranking tab and
   // the leaderboards - offered a Y button, "View Gamer Profile" on the console
@@ -6409,6 +6610,244 @@ class PerfectDarkApp : public rex::ReXApp {
     WriteGuestU32(mem, kWeaponsDef + 8, items);
     REXLOG_INFO("[menu_patch] weapons dialog rebuilt: items 0x{:08X}, slots 7-{}", items,
                 pd::weapons::kMaxSlots);
+  }
+
+  // ---- Online Handicaps dialog (handicap mod part 3) ---------------------------
+  //
+  // The vanilla Handicaps dialog (0x825DE0BC) has 4 sliders, one per player
+  // config, and in an online lobby only shows the host's: joined players reach
+  // the configs only when the match starts. The online Game Setup page gets
+  // its own copy of the dialog instead: 8 sliders, one per player in the
+  // lobby's list (pd::handicap::LobbyPlayers), labelled with their gamertags.
+  // Moving one stores the byte for that gamertag in session_handicaps_, and
+  // TickNetHandicaps sends the result to the joined PCs. Only the host sees
+  // the sliders. The local Game Setup page keeps the vanilla dialog.
+  static constexpr uint32_t kHandicapDialogDef = 0x825DE0BC;
+  static constexpr uint32_t kHandicapDialogItems = 0x825DE030;  // 4 sliders, separator, Restore Defaults, end
+  static constexpr uint32_t kHandicapSliderHandler = 0x821D7860;
+  static constexpr uint32_t kHandicapRestoreHandler = 0x821D79B8;
+  static constexpr int kHandicapSeparatorRow = 4;
+  static constexpr int kHandicapRestoreRow = 5;
+  static constexpr int kHandicapEndRow = 6;
+  static constexpr int kHandicapSliders = pd::handicap::kLobbyRecordCount;  // 8
+  static constexpr uint32_t kHandicapLabelSize = 24;
+  static inline uint32_t handicap_labels_ = 0;  // guest buffer: one label string per slider
+
+  // The byte the host uses for a lower-cased gamertag: a slider's value, else
+  // pd_handicaps, else 128 (100%).
+  static uint8_t HostHandicapFor(const std::string& key) {
+    const auto table = HostHandicaps();
+    const auto it = table.find(key);
+    return it == table.end() ? 128 : it->second;
+  }
+
+  // Slider `row`'s player, or "" when the lobby has fewer players.
+  static std::string HandicapRowPlayer(const uint8_t* base, int row) {
+    const std::vector<std::string> players = pd::handicap::LobbyPlayers(base);
+    return size_t(row) < players.size() ? players[size_t(row)] : std::string();
+  }
+
+  // Slider `row`'s handler, following the vanilla one (sub_821D7860): r3 = op,
+  // r5 = data. Op 9: write the value to *data. Op 6: the player set *data.
+  // Op 10: write the value's text into the buffer at *(data + 4). Op 24:
+  // return 1 to hide the row.
+  static void HandicapSliderRow(PPCContext& ctx, uint8_t* base, int row) {
+    const uint32_t op = ctx.r3.u32;
+    const uint32_t data = ctx.r5.u32;
+    const std::string name = HandicapRowPlayer(base, row);
+    const std::string key = pd::handicap::LowerTrim(name);
+    uint32_t ret = 0;
+    switch (op) {
+      case 9:  // get
+        if (data) pd::handicap::StoreU32(base, data, HostHandicapFor(key));
+        break;
+      case 6:  // set
+        if (data && !key.empty()) {
+          const uint8_t value = uint8_t(std::min<uint32_t>(pd::handicap::LoadU32(base, data), 255));
+          std::lock_guard<std::mutex> lock(handicap_mutex_);
+          session_handicaps_[key] = value;
+        }
+        break;
+      case 10: {  // the value as text, like the vanilla "100%"
+        const uint32_t buffer = data ? pd::handicap::LoadU32(base, data + 4) : 0;
+        if (buffer) {
+          const std::string text = fmt::format("{:.0f}%", pd::handicap::PercentFromByte(HostHandicapFor(key)));
+          std::memcpy(base + buffer, text.c_str(), text.size() + 1);
+        }
+        break;
+      }
+      case 24:  // hidden: no player at this row, or this PC is not the host
+        ret = (name.empty() || !rex::kernel::xam::netplay::IsHostingSession()) ? 1 : 0;
+        break;
+      default:
+        break;
+    }
+    ctx.r3.u64 = ret;
+  }
+
+  // Slider `row`'s label: the player's gamertag (game strings end "\n").
+  static uint32_t HandicapSliderLabel(uint8_t* base, int row) {
+    const uint32_t out = handicap_labels_ + uint32_t(row) * kHandicapLabelSize;
+    const std::string label = HandicapRowPlayer(base, row).substr(0, kHandicapLabelSize - 2) + "\n";
+    std::memcpy(base + out, label.c_str(), label.size() + 1);
+    return out;
+  }
+
+  template <int N>
+  static void PdHandicapSliderLabel(PPCContext& ctx, uint8_t* base) {
+    ctx.r3.u64 = HandicapSliderLabel(base, N);
+  }
+  template <int N>
+  static void PdHandicapSliderHandler(PPCContext& ctx, uint8_t* base) {
+    HandicapSliderRow(ctx, base, N);
+  }
+  template <std::size_t... I>
+  static void FillHandicapSliderThunks(std::index_sequence<I...>, PPCFunc** labels, PPCFunc** handlers) {
+    ((labels[I] = &PdHandicapSliderLabel<int(I)>, handlers[I] = &PdHandicapSliderHandler<int(I)>), ...);
+  }
+
+  // Restore Defaults (op 6 = pressed): forget the sliders, so every player is
+  // back to pd_handicaps.
+  static void PdHandicapRestoreHandler(PPCContext& ctx, uint8_t*) {
+    if (ctx.r3.u32 == 6) {
+      std::lock_guard<std::mutex> lock(handicap_mutex_);
+      session_handicaps_.clear();
+    }
+    ctx.r3.u64 = 0;
+  }
+
+  // Builds the online Handicaps dialog; returns its address, or 0 (the online
+  // page then keeps the vanilla dialog).
+  static uint32_t BuildNetHandicapDialog() {
+    PerfectDarkApp* app = current_instance_;
+    if (!app || !app->runtime() || !app->runtime()->memory()) return 0;
+    auto* mem = app->runtime()->memory();
+    auto* fd = app->runtime()->function_dispatcher();
+    if (!fd) return 0;
+    // Only copy a dialog that still looks like the one this was written for.
+    const uint32_t slider = kHandicapDialogItems;
+    const uint32_t restore = kHandicapDialogItems + uint32_t(kHandicapRestoreRow) * 20;
+    const uint32_t end = kHandicapDialogItems + uint32_t(kHandicapEndRow) * 20;
+    if (ReadGuestU32(mem, kHandicapDialogDef + 8) != kHandicapDialogItems || ReadGuestU32(mem, slider) >> 24 != 0x08 ||
+        ReadGuestU32(mem, slider + 16) != kHandicapSliderHandler ||
+        ReadGuestU32(mem, restore + 16) != kHandicapRestoreHandler || ReadGuestU32(mem, end) >> 24 != 0x1D) {
+      REXLOG_INFO("[menu_patch] handicaps dialog is not as expected (items {:08X}, slider {:08X} {:08X}, "
+                  "restore {:08X}, end {:08X}); online page keeps the vanilla dialog",
+                  ReadGuestU32(mem, kHandicapDialogDef + 8), ReadGuestU32(mem, slider),
+                  ReadGuestU32(mem, slider + 16), ReadGuestU32(mem, restore + 16), ReadGuestU32(mem, end));
+      return 0;
+    }
+
+    // The sliders, a separator, Restore Defaults, the end.
+    const uint32_t def = mem->SystemHeapAlloc(24);
+    const uint32_t items = mem->SystemHeapAlloc(uint32_t(kHandicapSliders + 3) * 20);
+    handicap_labels_ = mem->SystemHeapAlloc(uint32_t(kHandicapSliders) * kHandicapLabelSize);
+    const uint32_t restore_handler = fd->AllocateThunk(&PdHandicapRestoreHandler, 0);
+    if (!def || !items || !handicap_labels_ || !restore_handler) {
+      REXLOG_INFO("[menu_patch] handicaps dialog: out of guest memory or thunks; online page keeps the vanilla dialog");
+      return 0;
+    }
+    PPCFunc* labels[kHandicapSliders];
+    PPCFunc* handlers[kHandicapSliders];
+    FillHandicapSliderThunks(std::make_index_sequence<kHandicapSliders>{}, labels, handlers);
+
+    uint32_t out = items;
+    for (int i = 0; i < kHandicapSliders; ++i, out += 20) {
+      // Like the vanilla slider (type, flags, maximum 255), with this mod's
+      // label and handler; byte 1 (the player slot) is set to the row number.
+      CopyMenuItem(mem, slider, out);
+      WriteGuestU32(mem, out, (ReadGuestU32(mem, slider) & 0xFF00FFFF) | (uint32_t(i) << 16));
+      WriteGuestU32(mem, out + 8, fd->AllocateThunk(labels[i], 0));
+      WriteGuestU32(mem, out + 16, fd->AllocateThunk(handlers[i], 0));
+    }
+    CopyMenuItem(mem, kHandicapDialogItems + uint32_t(kHandicapSeparatorRow) * 20, out);
+    out += 20;
+    CopyMenuItem(mem, restore, out);
+    WriteGuestU32(mem, out + 16, restore_handler);
+    out += 20;
+    WriteMenuEnd(mem, out);
+
+    // The dialog: the vanilla one (type, title, ...) with these rows.
+    for (uint32_t w = 0; w < 24; w += 4) WriteGuestU32(mem, def + w, ReadGuestU32(mem, kHandicapDialogDef + w));
+    WriteGuestU32(mem, def + 8, items);
+    REXLOG_INFO("[menu_patch] online handicaps dialog built: def 0x{:08X}, items 0x{:08X}", def, items);
+    return def;
+  }
+
+  // `dialog`, when not 0, replaces the dialog the copied Handicaps row opens.
+  static void PatchHandicapRow(uint32_t current_lobby_def, uint32_t current_lobby_items, uint32_t dialog = 0) {
+
+    REXLOG_INFO("[menu_patch] rebuilding adv. setup - def: 0x{:08X}, items: 0x{:08X}", current_lobby_def, current_lobby_items);
+
+    PerfectDarkApp* app = current_instance_;
+    if (!app || !app->runtime() || !app->runtime()->memory()) return;
+    auto* mem = app->runtime()->memory();
+    if (ReadGuestU32(mem, current_lobby_def + 8) != current_lobby_items){
+      REXLOG_INFO("  - [menu_patch] adv. setup has been patched already; returning.");
+      return;
+    }
+
+    // Only rebuild pages that still look like the ones this was written for.
+    const uint32_t simulants_opt = current_lobby_items + uint32_t(kLobbySettingsSimulants) * 20;
+    // The original number of elements is 12, hence why read + 12*20 for the end marker
+    const uint32_t adv_setup_end_marker = current_lobby_items + uint32_t(kLobbySettingsEnd) * 20;
+    if (
+      ReadGuestU32(mem, simulants_opt) >> 24 != 0x04 ||                // Simulants type
+      ReadGuestU32(mem, simulants_opt + 8) != 0x00005019 ||            // Simulants text
+      ReadGuestU32(mem, simulants_opt + 16) != 0x825DE27C ||           // Simulants option
+      ReadGuestU32(mem, kHandicapRow) >> 24 != 0x04 ||                 // Handicap type
+      ReadGuestU32(mem, kHandicapRow + 8) != 0x000054B9 ||             // Handicap text
+      ReadGuestU32(mem, kHandicapRow + 16) != 0x825DE0BC ||            // Handicap option
+      ReadGuestU32(mem, adv_setup_end_marker) >> 24 != 0x1D            // Adv. Setup End marker
+      
+    ) {
+      REXLOG_INFO("[menu_patch] lobby setup pages are not as expected; reads below:");
+      auto read_res = ReadGuestU32(mem, simulants_opt) >> 24;
+      auto fail = read_res != 0x04;
+      REXLOG_INFO("  - [menu_patch] [fail:{}] simulants_opt[0] is: 0x{:08X}; should be: 0x04",fail, read_res);
+      read_res = ReadGuestU32(mem, simulants_opt + 8);
+      fail = read_res != 0x00005019;
+      REXLOG_INFO("  - [menu_patch] [fail:{}] simulants_opt[8] is: 0x{:08X}; should be: 0x00005019",fail, read_res);
+      read_res = ReadGuestU32(mem, simulants_opt + 16);
+      fail = read_res != 0x825DE27C;
+      REXLOG_INFO("  - [menu_patch] [fail:{}] simulants_opt[16] is: 0x{:08X}; should be: 0x825DE27C",fail, read_res);
+      read_res = ReadGuestU32(mem, kHandicapRow) >> 24;
+      fail = read_res != 0x04;
+      REXLOG_INFO("  - [menu_patch] [fail:{}] kHandicapRow[0] is: 0x{:08X}; should be: 0x04",fail, read_res);
+      read_res = ReadGuestU32(mem, kHandicapRow + 8);
+      fail = read_res != 0x000054B9;
+      REXLOG_INFO("  - [menu_patch] [fail:{}] kHandicapRow[8] is: 0x{:08X}; should be: 0x000054B9",fail, read_res);
+      read_res = ReadGuestU32(mem, kHandicapRow + 16);
+      fail = read_res != 0x825DE0BC;
+      REXLOG_INFO("  - [menu_patch] [fail:{}] kHandicapRow[16] is: 0x{:08X}; should be: 0x825DE0BC",fail, read_res);
+      read_res = ReadGuestU32(mem, adv_setup_end_marker) >> 24;
+      fail = read_res != 0x1D;
+      REXLOG_INFO("  - [menu_patch] [fail:{}] adv_setup_end_marker[0] is: 0x{:08X}; should be: 0x1D",fail, read_res);
+      return;
+    }
+
+    const uint32_t heap = mem->SystemHeapAlloc(1024);
+    if (!heap) return;
+    const uint32_t adv_setup_items = heap; // 12 rows before -> 13 rows after
+
+    uint32_t out = adv_setup_items;
+    // Copies Scenario, Options, Arena, Weapons, Limits, Simulants
+    for (int i = 0; i < kLobbySettingsRowsBefore; ++i, out += 20) {
+      CopyMenuItem(mem, current_lobby_items + uint32_t(i) * 20, out);
+    }
+    // Adds the "Handicap" row
+    CopyMenuItem(mem, kHandicapRow, out);
+    if (dialog) WriteGuestU32(mem, out + 16, dialog);  // the online page's own dialog
+    out += 20;
+    // Copies Teams, Sep, Save, Load, Sep, Finished
+    for (int i = kLobbySettingsRowsBefore; i < kLobbySettingsRowsBefore+kLobbySettingsRowsAfter; ++i, out += 20) {
+      CopyMenuItem(mem, current_lobby_items + uint32_t(i) * 20, out);
+    }
+    WriteMenuEnd(mem, out);
+
+    WriteGuestU32(mem, current_lobby_def + 8, adv_setup_items);
+
+    REXLOG_INFO("  - [menu_patch] adv. setup rebuilt: adv. settings 0x{:08X}", adv_setup_items);
   }
 
   static void PatchVideoOptionsMenu() {
@@ -8717,6 +9156,7 @@ inline void PerfectDarkInputTracker::OnDraw(ImGuiIO& /*io*/) {
   PerfectDarkApp::TickCutsceneSkip();
   PerfectDarkApp::DrawMenuCursor();
   PerfectDarkApp::TickMatchDetails();
+  PerfectDarkApp::TickNetHandicaps();
   PerfectDarkApp::DrawPrivateMatchNotice();
   PerfectDarkApp::TickControllerPrompts();
   PerfectDarkApp::TickTitlePrompt();
@@ -8769,6 +9209,7 @@ inline void PerfectDarkInputTracker::OnDraw(ImGuiIO& /*io*/) {
 
     // Everything below is a developer diagnostic (see pd_dev_hotkeys).
     if (!REXCVAR_GET(pd_dev_hotkeys)) return;
+
 
     // TEMP_MENU_MOUSE
     bool f3_down = (GetAsyncKeyState(VK_F3) & 0x8000) != 0;
