@@ -5394,20 +5394,76 @@ class PerfectDarkApp : public rex::ReXApp {
     return text;
   }
 
-  // Option A (pd_handicaps): every machine applies the same list to its own
-  // config table. Hits are calculated on the shooter's machine from its own
-  // table, so every copy must hold the same list.
+  // pd_handicaps: each PC writes the listed players' handicaps into its own
+  // config table during a match. Hits are calculated on the shooter's PC from
+  // its own table, so in a network match every PC must use the same list: the
+  // host's. The host sends its list (pd::handicap::EncodeBlob) and the joined
+  // PCs use only that one, never their own; with no list from the host (an
+  // older build) they apply no handicaps.
   static void TickNetHandicaps() {
+    namespace netplay = rex::kernel::xam::netplay;
     static int frames = 0;
     if (++frames % 60 != 0) return;
-    const std::string list = rex::cvar::GetFlagByName("pd_handicaps");
-    if (list.empty()) return;
+
+    // This PC's own list, parsed again only when the setting changes.
     static std::string parsed_from;
-    static std::unordered_map<std::string, uint8_t> table;
+    static std::unordered_map<std::string, uint8_t> own;
+    const std::string list = rex::cvar::GetFlagByName("pd_handicaps");
     if (list != parsed_from) {
-      table = pd::handicap::Parse(list);
+      own = pd::handicap::Parse(list);
       parsed_from = list;
     }
+
+    // The list this PC applies. This part runs in the lobby too, so a host has
+    // sent its list, and a joined PC has heard it, before the match starts.
+    static std::unordered_map<std::string, uint8_t> from_host;  // joined PC: the host's list
+    static uint32_t heard_seq = 0;       // joined PC: the host's message last decoded
+    static bool warned_no_list = false;  // joined PC: "no list from the host" logged
+    static bool was_hosting = false;     // host: hosting on the last tick
+    static std::string sent_from;        // host: the setting its last message was made from
+    const std::unordered_map<std::string, uint8_t>* table = &own;
+    if (netplay::IsJoinedSession()) {
+      table = &from_host;
+      was_hosting = false;
+      netplay::HostBlob blob;
+      // Asking every tick keeps the SDK polling the host (twice a second).
+      if (netplay::LatestHostBlob(pd::handicap::kBlobKey, &blob)) {
+        if (blob.seq != heard_seq) {
+          heard_seq = blob.seq;
+          from_host.clear();
+          if (pd::handicap::DecodeBlob(blob.data, &from_host)) {
+            REXLOG_INFO("[handicap] host's list #{}: {} entries", blob.seq, from_host.size());
+            REXLOG_INFO("[handicap] host's list: {}", pd::handicap::Describe(from_host));  // TEMP_HCAP
+          } else {
+            REXLOG_WARN("[handicap] the host's list #{} is from another version: no handicaps", blob.seq);
+          }
+        }
+      } else if (!warned_no_list) {
+        // Normal for a few seconds after joining; it stays this way if the host
+        // has a build without this feature.
+        REXLOG_INFO("[handicap] no list from the host yet: no handicaps until one arrives");
+        warned_no_list = true;
+      }
+    } else {
+      // Not joined: a new session starts from scratch (the SDK also forgets
+      // what it heard when a PC leaves a session).
+      from_host.clear();
+      heard_seq = 0;
+      warned_no_list = false;
+      const bool hosting = netplay::IsHostingSession();
+      if (hosting && (!was_hosting || list != sent_from)) {
+        // Sent even when empty, so the joined PCs know the host has no list.
+        const std::vector<uint8_t> blob = pd::handicap::EncodeBlob(own, netplay::kMaxHostBlob);
+        netplay::SetHostBlob(pd::handicap::kBlobKey, blob.data(), blob.size());
+        sent_from = list;
+        REXLOG_INFO("[handicap] sent {} entries to the joined PCs", blob[1]);
+        REXLOG_INFO("[handicap] sent list: {}", pd::handicap::Describe(own));  // TEMP_HCAP
+      }
+      was_hosting = hosting;
+    }
+    if (table->empty()) return;
+
+    // During a match only: write each listed player's handicap byte.
     PerfectDarkApp* app = current_instance_;
     auto* mem = (app && app->runtime()) ? app->runtime()->memory() : nullptr;
     if (!mem || ReadGuestU32(mem, 0x82648BF8 + 1336) == 0) return;  // g_Vars: MP match running
@@ -5420,8 +5476,8 @@ class PerfectDarkApp : public rex::ReXApp {
         name += char(c);
       }
       if (name.empty()) continue;
-      const auto it = table.find(pd::handicap::LowerTrim(name));
-      if (it == table.end()) continue;
+      const auto it = table->find(pd::handicap::LowerTrim(name));
+      if (it == table->end()) continue;
       uint8_t* p = mem->TranslateVirtual<uint8_t*>(cfg + 0xCD);
       if (p && *p != it->second) {
         REXLOG_INFO("[handicap] cfg {} '{}': {} -> {}", i, name, *p, it->second);
