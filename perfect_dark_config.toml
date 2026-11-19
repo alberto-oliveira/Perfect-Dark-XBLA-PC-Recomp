@@ -332,9 +332,3 @@ address = 0x8210960C
 name = "PdHookPoisonTickLocalOnly"
 registers = ["r31"]
 jump_address_on_true = 0x82109610
-
-# TEMP_POISON: log poison set (chr_set_poisoned's MP store).
-[[midasm_hook]]
-address = 0x82109448
-name = "PdHookPoisonSetLog"
-registers = ["r10", "r31"]

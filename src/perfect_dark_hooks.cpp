@@ -320,8 +320,6 @@ bool PdHookKeepPoisonOnRespawn(PPCRegister& r11) {
     chr[856] = uint8_t(uint16_t(cap) >> 8);
     chr[857] = uint8_t(cap);
   }
-  REXLOG_INFO("[poison] respawn chr 0x{:08X} frame {}: counter {} -> {}", r11.u32,  // TEMP_POISON
-              LoadU32(base, 0x82648BF8 + 0x0C), poison, poison > cap ? cap : poison);
   chr[767] = 0;  // blurnumtimesdied: the blur fades (deaths + 1) times faster
   return true;
 }
@@ -334,23 +332,6 @@ static int PoisonVictimPlayer(uint8_t* base, uint32_t chr) {
     if (player && LoadU32(base, player + 188) == prop) return i;
   }
   return -1;
-}
-
-// TEMP_POISON: the victim's bondhealth, or -99 if it is not a player.
-static float PoisonVictimHealth(uint8_t* base, uint32_t chr) {
-  const int i = PoisonVictimPlayer(base, chr);
-  if (i < 0) return -99.0f;
-  const uint32_t bits = LoadU32(base, LoadU32(base, 0x82648BF8 + 100 + uint32_t(i) * 4) + 228);
-  float health;
-  std::memcpy(&health, &bits, 4);
-  return health;
-}
-
-// TEMP_POISON: chr_set_poisoned's MP store `sth r10,856(r31)` (r10 = the new counter).
-void PdHookPoisonSetLog(PPCRegister& r10, PPCRegister& r31) {
-  uint8_t* base = HookBase();
-  REXLOG_INFO("[poison] set chr 0x{:08X} frame {}: counter -> {}, health {:.3f}", r31.u32,
-              LoadU32(base, 0x82648BF8 + 0x0C), int16_t(r10.u16), PoisonVictimHealth(base, r31.u32));
 }
 
 // chr_tick_poisoned's MP damage call (`bl 0x8212dd90`, 1.3 every 720 of the
@@ -368,10 +349,5 @@ bool PdHookPoisonTickLocalOnly(PPCRegister& r31) {
     const uint32_t cfg = LoadU32(base, 0x82648BF8 + 132 + uint32_t(player) * 128 + 112);
     remote = cfg < 8 && int8_t(base[0x82641950 + cfg * 216 + 109]) < 0;
   }
-  const bool skip = remote && PdN64Poison(base);
-  const int16_t counter = int16_t((base[r31.u32 + 856] << 8) | base[r31.u32 + 857]);
-  REXLOG_INFO("[poison] tick chr 0x{:08X} frame {}: counter {}, health before {:.3f}, {}",  // TEMP_POISON
-              r31.u32, LoadU32(base, 0x82648BF8 + 0x0C), counter, PoisonVictimHealth(base, r31.u32),
-              skip ? "skipped (remote player)" : "applied");
-  return skip;
+  return remote && PdN64Poison(base);
 }
