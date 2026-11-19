@@ -47,6 +47,9 @@ void PdSetupCreateProps(PPCContext& ctx, uint8_t* base);
 bool PdWeaponByLocation(const uint8_t* base, int32_t location, uint32_t* entry);
 void PdPropEnable(PPCContext& ctx, uint8_t* base, uint32_t prop);
 bool PdMakeCrateWithoutAmmo(uint8_t* base, uint32_t crate_obj);
+uint32_t PdSoloStageSetup(PPCContext& ctx, uint8_t* base, uint32_t loaded);
+uint32_t PdStageNameText(const uint8_t* base, uint32_t offset, uint32_t text);
+void PdNetPropertyLog(const uint8_t* base, uint32_t property, uint32_t value);
 
 namespace {
 // The calling guest thread's full context and guest memory, for a hook that needs
@@ -295,6 +298,29 @@ void PdHookPropEnable(PPCRegister& r3) {
 // it (r10 is reloaded right after, so nothing else sees the change).
 void PdHookCrateWithoutAmmo(PPCRegister& r10, PPCRegister& r31) {
   if (r10.s32 <= 0 && PdMakeCrateWithoutAmmo(HookBase(), r31.u32)) r10.u64 = 1;
+}
+
+// ---- Solo stages as arenas (pd_stages.h) ------------------------------------------
+
+// setup_load_files, after `bl file_load_to_new` loaded the stage's setup file (r3 =
+// the buffer, about to be kept as the stage's setup). A solo stage's multiplayer
+// setup is an empty stub: r3 becomes the setup the mod builds for it.
+void PdHookSoloStageSetup(PPCRegister& r3) {
+  r3.u64 = PdSoloStageSetup(HookContext(), HookBase(), r3.u32);
+}
+
+// The arena name lists, before `bl 0x8226c9f0` (text lookup, r4 = text id) with the
+// entry's offset in r10 / r8: a stage not in the arena table gets a real name.
+void PdHookStageNameTextR10(PPCRegister& r4, PPCRegister& r10) {
+  r4.u64 = PdStageNameText(HookBase(), r10.u32, r4.u32);
+}
+void PdHookStageNameTextR8(PPCRegister& r4, PPCRegister& r8) {
+  r4.u64 = PdStageNameText(HookBase(), r8.u32, r4.u32);
+}
+
+// TEMP_STAGES: the network session's property setter (sub_822F0850), at its start.
+void PdHookNetPropertyLog(PPCRegister& r3, PPCRegister& r4) {
+  PdNetPropertyLog(HookBase(), r3.u32, r4.u32);
 }
 
 // Before `bl 0x821d0b28` (set handicap: slot r3, value r4) in the join path, which

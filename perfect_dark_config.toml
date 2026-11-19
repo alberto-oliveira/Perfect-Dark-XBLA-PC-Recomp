@@ -332,3 +332,31 @@ address = 0x8210960C
 name = "PdHookPoisonTickLocalOnly"
 registers = ["r31"]
 jump_address_on_true = 0x82109610
+
+# Solo stages as arenas (pd_solo_stages, pd_stages.h). setup_load_files right after
+# the setup file's load (`bl file_load_to_new` at 0x821FF7C4; r3 = the buffer): a
+# solo stage's empty multiplayer setup is replaced with one the mod builds.
+[[midasm_hook]]
+address = 0x821FF7C8
+name = "PdHookSoloStageSetup"
+registers = ["r3"]
+
+# The two arena name lists (sub_8227E590, sub_82281160), before their text lookup:
+# a stage missing from the arena table (offset r10 / r8 past its 17 entries) gets
+# the solo stage's name instead of a bad text id.
+[[midasm_hook]]
+address = 0x8227E6EC
+name = "PdHookStageNameTextR10"
+registers = ["r4", "r10"]
+
+[[midasm_hook]]
+address = 0x822812E8
+name = "PdHookStageNameTextR8"
+registers = ["r4", "r8"]
+
+# TEMP_STAGES: the network session's property setter (sub_822F0850, r3 property,
+# r4 value) logs each change and the property's allowed range.
+[[midasm_hook]]
+address = 0x822F0850
+name = "PdHookNetPropertyLog"
+registers = ["r3", "r4"]

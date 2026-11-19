@@ -4,6 +4,7 @@
 
 #include "perfect_dark_app.h"
 #include "pd_weapons.h"  // more multiplayer weapons, shuffled weapon spawns
+#include "pd_stages.h"   // the solo mission stages as Combat Simulator arenas
 
 #include <rex/chrono/clock.h>
 #include <rex/diag_timing.h>
@@ -1033,6 +1034,150 @@ void PdWeaponsFrame() {
   netplay::LatestHostBlob(pd::weapons::kBlobKey, &blob);
 }
 
+// ---- Solo stages as arenas (pd_stages.h) ---------------------------------------------
+
+REXCVAR_DEFINE_BOOL(pd_solo_stages, true, "PerfectDark",
+                    "Solo mission stages can be Combat Simulator arenas: their missing multiplayer "
+                    "setup (spawn points, ...) is built when the stage loads. Every player needs this "
+                    "build");
+// TEMP_STAGES: until the Arena menu offers the solo stages, this makes the host's
+// (or a local) match use one: a name from pd_stages.h (kStageKeys) or a stage number.
+REXCVAR_DEFINE_STRING(pd_solo_force_stage, "", "PerfectDark",
+                      "Testing: every match you host is played on this solo stage (e.g. "
+                      "\"defection\"); empty = the arena chosen in the menu");
+
+namespace {
+// Calls a game function with up to two arguments; returns its r3.
+template <typename Fn>
+uint32_t CallGuest(Fn fn, PPCContext& ctx, uint8_t* base, uint32_t r3, uint32_t r4 = 0) {
+  PPCContext call = ctx;
+  call.r3.u64 = r3;
+  call.r4.u64 = r4;
+  fn(call, base);
+  return call.r3.u32;
+}
+}  // namespace
+
+// setup_load_files, right after the multiplayer setup file was loaded (r3 = the
+// buffer). For a solo stage that file is an empty stub: this builds the stage's
+// multiplayer setup and returns it instead (else the buffer it was given).
+uint32_t PdSoloStageSetup(PPCContext& ctx, uint8_t* base, uint32_t loaded) {
+  namespace stages = pd::stages;
+  if (!REXCVAR_GET(pd_solo_stages)) return loaded;
+  if (stages::U32(base + stages::kMatchRunning) == 0) return loaded;  // the solo setup was loaded
+  const uint32_t index = stages::U32(base + stages::kStageIndex);
+  if (index >= stages::kStageCount) return loaded;
+  const uint8_t* entry = base + stages::kStages + index * stages::kStageEntrySize;
+  const int stagenum = stages::S16(entry + stages::kStageId);
+  if (stages::SoloStageIndex(base, uint32_t(stagenum)) < 0) return loaded;  // a real arena
+
+  // Load the stage's pads file and solo setup with the game's own loader
+  // (file_load_to_new: a new buffer in the stage's memory, freed with the stage).
+  // The game loads the pads file again itself a moment later.
+  const auto load = [&](uint16_t file, stages::PadsFile* out) {
+    const uint32_t buffer = CallGuest(sub_82197200, ctx, base, file, stages::kLoadMethodDefault);
+    out->data = base + buffer;
+    out->size = stages::U32(base + stages::kFileInfo + uint32_t(file) * 8);
+  };
+  stages::PadsFile pads, solo;
+  load(stages::U16(entry + stages::kStagePadsFile), &pads);
+  load(stages::U16(entry + stages::kStageSetupFile), &solo);
+
+  const int start_pad = stages::SoloStartPad(solo.data, solo.size);
+  const std::vector<stages::Pad> spawns = stages::ChooseSpawns(pads, start_pad);
+  if (spawns.empty()) {
+    REXLOG_ERROR("[stages] stage 0x{:02X}: no pad to spawn on; keeping the game's empty setup", stagenum);
+    return loaded;
+  }
+
+  stages::SetupWriter writer;
+  for (const stages::Pad& pad : spawns) writer.spawn_pads.push_back(pad.num);
+  const std::vector<uint8_t> setup = writer.Build();
+
+  // The new setup goes in the stage's memory too (the allocator file_load_to_new
+  // uses: size, pool 4 = the stage's).
+  const uint32_t buffer = CallGuest(sub_8218DB98, ctx, base, uint32_t(setup.size()), 4);
+  if (!buffer) {
+    REXLOG_ERROR("[stages] stage 0x{:02X}: no memory for the setup ({} bytes)", stagenum, setup.size());
+    return loaded;
+  }
+  std::memcpy(base + buffer, setup.data(), setup.size());
+
+  REXLOG_INFO("[stages] stage 0x{:02X}: built its multiplayer setup ({} bytes at 0x{:08X}): {} spawn points",
+              stagenum, setup.size(), buffer, spawns.size());
+
+  // TEMP_STAGES: what the stage's files hold, for the next steps.
+  {
+    const auto object_words = [&](uint32_t obj) { return CallGuest(sub_821FD198, ctx, base, obj); };
+    std::map<uint8_t, int> counts;
+    const uint32_t solo_guest = uint32_t(solo.data - base);
+    uint32_t obj = solo_guest + stages::U32(solo.data + 0x10);
+    for (int n = 0; n < 5000 && obj + 4 <= solo_guest + solo.size; ++n) {
+      const uint8_t type = base[obj + 3];
+      if (type == 0x34) break;  // OBJTYPE_END
+      ++counts[type];
+      const uint32_t words = object_words(obj);
+      if (words == 0) break;
+      obj += words * 4;
+    }
+    REXLOG_INFO("[stages] TEMP pads file: {} pads, {} waypoints, {} bytes; solo setup {} bytes, start pad {}",
+                pads.NumPads(), pads.WaypointPads().size(), pads.size, solo.size, start_pad);
+    REXLOG_INFO("[stages] TEMP solo setup objects: {}", stages::DescribeTypeCounts(counts));
+    for (const stages::Pad& pad : spawns) {
+      REXLOG_INFO("[stages] TEMP spawn pad {}: ({:.0f}, {:.0f}, {:.0f}) room {} flags 0x{:05X}", pad.num, pad.x,
+                  pad.y, pad.z, pad.room, pad.flags);
+    }
+  }
+  return buffer;
+}
+
+// The arena name lists (sub_8227E590, sub_82281160) read a stage's name id from a
+// 17-entry table, one entry past its end for a stage not in it (`offset` = the
+// entry * 4). For such a stage: the solo stage's own name, or "Random".
+uint32_t PdStageNameText(const uint8_t* base, uint32_t offset, uint32_t text) {
+  namespace stages = pd::stages;
+  if (offset < stages::kArenaNameCount * 4) return text;
+  const uint16_t name = stages::SoloStageName(base, base[stages::kMpSetupStage]);
+  return name ? name : stages::U32(base + stages::kArenaNameTexts + 16 * 4);
+}
+
+// Each frame (TEMP_STAGES): with pd_solo_force_stage, a PC that is not a joined
+// one keeps its arena set to that stage outside matches, so the host sends it to
+// the joined PCs with the rest of the match settings.
+void PdSoloStagesFrame(uint8_t* base) {
+  namespace netplay = rex::kernel::xam::netplay;
+  namespace stages = pd::stages;
+  static std::string last_text;
+  static uint8_t forced = 0;
+  const std::string text = REXCVAR_GET(pd_solo_force_stage);
+  if (text != last_text) {
+    last_text = text;
+    forced = stages::ParseStage(text);
+    if (!text.empty()) {
+      if (forced) REXLOG_INFO("[stages] TEMP forcing stage 0x{:02X} ({})", forced, text);
+      else REXLOG_WARN("[stages] pd_solo_force_stage \"{}\" is not a stage name or number", text);
+    }
+  }
+  if (!forced || netplay::IsJoinedSession()) return;
+  if (stages::U32(base + stages::kMatchRunning) != 0) return;
+  base[stages::kMpSetupStage] = forced;
+}
+
+// TEMP_STAGES: the network session's property setter (sub_822F0850: r3 the
+// property, r4 the new value). It refuses a value outside the property's range
+// (its descriptor's +88/+89); this logs every change, to learn whether the stage
+// property takes the solo stage numbers.
+void PdNetPropertyLog(const uint8_t* base, uint32_t property, uint32_t value) {
+  static std::map<uint32_t, uint32_t> last;  // property -> value last logged
+  const uint32_t desc = pd::stages::U32(base + property + 24);
+  const uint32_t current = base[property + 12];
+  auto it = last.find(property);
+  if (it != last.end() && it->second == (value & 0xFF)) return;
+  last[property] = value & 0xFF;
+  REXLOG_INFO("[stages] TEMP property 0x{:08X}: {} -> {} (range {}-{})", property, current, value & 0xFF,
+              desc ? base[desc + 88] : -1, desc ? base[desc + 89] : -1);
+}
+
 // Each frame on a joined PC (from PdNoteGameFrame).
 void PdMpMusicFrame(uint8_t* base) {
   namespace netplay = rex::kernel::xam::netplay;
@@ -1072,6 +1217,7 @@ void PdMpMusicFrame(uint8_t* base) {
 void PdNoteGameFrame(uint8_t* base) {
   PdMpMusicFrame(base);
   PdWeaponsFrame();
+  PdSoloStagesFrame(base);
   PerfectDarkApp::NoteGameStage(
       _byteswap_ulong(*reinterpret_cast<const uint32_t*>(base + 0x826492E0)),   // stage
       _byteswap_ulong(*reinterpret_cast<const uint32_t*>(base + 0x82648BF8 + 0x0C)));  // level frames
