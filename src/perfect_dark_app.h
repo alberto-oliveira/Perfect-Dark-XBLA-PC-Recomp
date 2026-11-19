@@ -52,6 +52,7 @@
 #include "pd_update.h"         // Check for Updates
 #include "pd_handicap.h"       // pd_handicaps: online handicaps by gamertag
 #include "pd_weapons.h"        // pd_mp_weapons: weapon slots 7-16, shuffled respawns
+#include "pd_stages.h"         // pd_solo_stages: the solo mission stages as arenas
 #include <rex/input/sdl/sdl_input_driver.h>
 #include <rex/cvar.h>
 #include <rex/diag_timing.h>
@@ -83,6 +84,7 @@ REXCVAR_DECLARE(double, pd_shine);
 REXCVAR_DECLARE(bool, pd_view_bob);
 REXCVAR_DECLARE(bool, pd_light_capture);
 REXCVAR_DECLARE(bool, pd_mp_weapon_shuffle);
+REXCVAR_DECLARE(bool, pd_solo_stages);
 #include <rex/logging/api.h>
 #include <rex/logging/macros.h>
 #include <rex/rex_app.h>
@@ -5094,6 +5096,7 @@ class PerfectDarkApp : public rex::ReXApp {
     done = true;
     PatchPlayerSetupMenus();
     PatchWeaponsMenu();
+    PatchArenaMenu();
     PatchHandicapRow(kLobbySettingsLocalDef, kLobbySettingsLocalItems);
     PatchHandicapRow(kLobbySettingsNetDef, kLobbySettingsNetItems, BuildNetHandicapDialog());
     PatchGamerCardPrompt();
@@ -6610,6 +6613,135 @@ class PerfectDarkApp : public rex::ReXApp {
     WriteGuestU32(mem, kWeaponsDef + 8, items);
     REXLOG_INFO("[menu_patch] weapons dialog rebuilt: items 0x{:08X}, slots 7-{}", items,
                 pd::weapons::kMaxSlots);
+  }
+
+  // ---- Arena list: the solo stages (pd_stages.h) ------------------------------
+  // Game Setup > Arena gets a fourth group, "Solo Missions", after the game's
+  // Dark / Classic / Random groups. Its entries are list index 17 and up, one
+  // per pd::stages::kSoloArenas stage, named with the game's short mission names.
+  static inline uint32_t arena_group_text_ = 0;  // guest: "Solo Missions\n"
+
+  // The Arena list's handler, in place of the game's sub_821DB818. A list handler
+  // gets an operation in r3 and a data pointer in r5:
+  //   1 how many entries (to *data)       2 how many groups (to *data)
+  //   3 entry *data's name (returned)     4 group *data's name (returned)
+  //   5 group *data's first entry (to data+8)
+  //   6 the player chose entry *data      7 which entry is chosen now (to *data)
+  //   27 how many entries can be chosen (to *data; the rest are locked)
+  // Anything about the game's own 17 entries goes to the game's handler.
+  static void PdArenaListHandler(PPCContext& ctx, uint8_t* base) {
+    namespace stages = pd::stages;
+    const uint32_t op = ctx.r3.u32;
+    const uint32_t data = ctx.r5.u32;
+    if (!REXCVAR_GET(pd_solo_stages) || !data || !arena_group_text_) {
+      sub_821DB818(ctx, base);
+      return;
+    }
+    uint8_t* p = base + data;
+    const uint32_t value = stages::U32(p);
+    // For ops 3 and 6: which solo stage entry *data is (outside 0..count-1: a game entry).
+    const int solo = int(value) - stages::kMpArenaCount;
+    const bool is_solo = solo >= 0 && solo < stages::kSoloArenaCount;
+    switch (op) {
+      case 1:
+        stages::Put32(p, uint32_t(stages::kMpArenaCount + stages::kSoloArenaCount));
+        ctx.r3.u64 = 0;
+        return;
+      case 2:
+        stages::Put32(p, uint32_t(stages::kMpArenaGroups + 1));
+        ctx.r3.u64 = 0;
+        return;
+      case 3:
+        if (is_solo) {
+          const uint16_t name = stages::SoloStageName(base, stages::kSoloArenas[solo]);
+          ctx.r3.u64 = CallGame(ctx, base, sub_821886E8, name);  // text id -> string
+          return;
+        }
+        break;
+      case 4:
+        if (value == uint32_t(stages::kMpArenaGroups)) {
+          ctx.r3.u64 = arena_group_text_;
+          return;
+        }
+        break;
+      case 5:
+        if (value == uint32_t(stages::kMpArenaGroups)) {
+          stages::Put32(p + 8, uint32_t(stages::kMpArenaCount));
+          ctx.r3.u64 = 0;
+          return;
+        }
+        break;
+      case 6:
+        if (is_solo) {
+          // The game's handler does everything choosing an arena needs: it writes
+          // the stage to g_MpSetup and, when hosting online, sends it to the joined
+          // PCs. It takes the stage from g_MpArenas, so entry 0 holds the solo
+          // stage just while the game's handler chooses entry 0.
+          uint8_t* entry0 = base + stages::kMpArenas;
+          const uint16_t saved = stages::U16(entry0);
+          stages::Put16(entry0, stages::kSoloArenas[solo]);
+          stages::Put32(p, 0);
+          sub_821DB818(ctx, base);
+          stages::Put16(entry0, saved);
+          stages::Put32(p, value);
+          REXLOG_INFO("[stages] arena menu: solo stage 0x{:02X} chosen", stages::kSoloArenas[solo]);
+          return;
+        }
+        break;
+      case 7: {
+        const int chosen = stages::SoloArenaIndex(base[stages::kMpSetupStage]);
+        if (chosen >= 0) {
+          stages::Put32(p, uint32_t(stages::kMpArenaCount + chosen));
+          ctx.r3.u64 = 0;
+          return;
+        }
+        break;
+      }
+      case 27:
+        // How many entries, from the top, can be chosen (to *data): the game's
+        // handler answers 17 in the full game and 1 in the trial (Skedar only,
+        // via a license check, sub_822580B8). Entries past it are shown locked,
+        // and choosing one leaves the dialog. In the full game the solo stages
+        // can be chosen too.
+        sub_821DB818(ctx, base);
+        if (stages::U32(p) == uint32_t(stages::kMpArenaCount)) {
+          stages::Put32(p, uint32_t(stages::kMpArenaCount + stages::kSoloArenaCount));
+        }
+        return;
+      default:
+        break;
+    }
+    sub_821DB818(ctx, base);
+  }
+
+  static void PatchArenaMenu() {
+    namespace stages = pd::stages;
+    PerfectDarkApp* app = current_instance_;
+    if (!app || !app->runtime() || !app->runtime()->memory()) return;
+    auto* mem = app->runtime()->memory();
+    auto* fd = app->runtime()->function_dispatcher();
+    if (!fd) return;
+    const uint32_t item = stages::kArenaDialogItems;
+    // Only patch the list if it still looks like the one this was written for.
+    if (ReadGuestU32(mem, item + stages::kMenuItemHandler) != stages::kArenaListHandler ||
+        ReadGuestU32(mem, item + stages::kMenuItemWidth) != stages::kArenaListWidth) {
+      REXLOG_INFO("[menu_patch] arena list is not as expected (width {:08X}, handler {:08X}); left alone",
+                  ReadGuestU32(mem, item + stages::kMenuItemWidth),
+                  ReadGuestU32(mem, item + stages::kMenuItemHandler));
+      return;
+    }
+    arena_group_text_ = mem->SystemHeapAlloc(32);
+    const uint32_t handler = fd->AllocateThunk(&PdArenaListHandler, 0);
+    if (!arena_group_text_ || !handler) {
+      arena_group_text_ = 0;
+      REXLOG_INFO("[menu_patch] arena list: out of guest memory or thunks; left alone");
+      return;
+    }
+    WriteGuestBytes(mem, arena_group_text_, "Solo Missions\n", 15);
+    WriteGuestU32(mem, item + stages::kMenuItemHandler, handler);
+    // Wider, for the solo stages' longer names.
+    WriteGuestU32(mem, item + stages::kMenuItemWidth, stages::kArenaListWidthSolo);
+    REXLOG_INFO("[menu_patch] arena list: {} solo stages added", stages::kSoloArenaCount);
   }
 
   // ---- Online Handicaps dialog (handicap mod part 3) ---------------------------

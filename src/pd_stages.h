@@ -91,38 +91,18 @@ inline float F32(const uint8_t* p) {
   std::memcpy(&value, &bits, 4);
   return value;
 }
+inline void Put16(uint8_t* p, uint16_t v) {
+  p[0] = uint8_t(v >> 8);
+  p[1] = uint8_t(v);
+}
+inline void Put32(uint8_t* p, uint32_t v) {
+  p[0] = uint8_t(v >> 24);
+  p[1] = uint8_t(v >> 16);
+  p[2] = uint8_t(v >> 8);
+  p[3] = uint8_t(v);
+}
 
 // ---- Solo stages --------------------------------------------------------------------
-
-// Short names for the pd_solo_force_stage setting (the game's own names have spaces
-// and capitals). Stage numbers as in g_SoloStages.
-struct StageKey {
-  const char* key;
-  uint8_t stagenum;
-};
-inline constexpr StageKey kStageKeys[] = {
-    {"defection", 0x30},  {"investigation", 0x33}, {"extraction", 0x22}, {"villa", 0x2C},
-    {"chicago", 0x1D},    {"g5", 0x1E},            {"infiltration", 0x2F}, {"rescue", 0x35},
-    {"escape", 0x19},     {"airbase", 0x27},       {"airforceone", 0x31}, {"crashsite", 0x1C},
-    {"pelagic", 0x21},    {"deepsea", 0x38},       {"defense", 0x2D},    {"attackship", 0x34},
-    {"skedarruins", 0x2A}, {"mbr", 0x37},          {"maiansos", 0x09},   {"war", 0x16},
-    {"duel", 0x4F},
-};
-
-// A stage number from a setting: one of the names above or a number ("48", "0x30").
-// 0 if it is neither.
-inline uint8_t ParseStage(std::string text) {
-  text.erase(std::remove_if(text.begin(), text.end(), [](unsigned char c) { return std::isspace(c); }),
-             text.end());
-  std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return char(std::tolower(c)); });
-  if (text.empty()) return 0;
-  for (const StageKey& k : kStageKeys) {
-    if (text == k.key) return k.stagenum;
-  }
-  char* end = nullptr;
-  const unsigned long value = std::strtoul(text.c_str(), &end, 0);
-  return (end && *end == 0 && value > 0 && value < 256) ? uint8_t(value) : 0;
-}
 
 // Which g_SoloStages entry a stage number is, or -1 (an arena, or not a stage).
 inline int SoloStageIndex(const uint8_t* base, uint32_t stagenum) {
@@ -136,6 +116,51 @@ inline int SoloStageIndex(const uint8_t* base, uint32_t stagenum) {
 inline uint16_t SoloStageName(const uint8_t* base, uint32_t stagenum) {
   const int i = SoloStageIndex(base, stagenum);
   return i < 0 ? 0 : U16(base + kSoloStages + uint32_t(i) * kSoloStageSize + kSoloStageName);
+}
+
+// ---- The Arena menu ---------------------------------------------------------------------
+//
+// Game Setup > Arena opens a dialog with one list item (dialog 0x825DDF80, items
+// 0x825DDF58). Its handler, sub_821DB818, serves the list from g_MpArenas: 17
+// entries of 6 bytes {s16 stage, u16 feature, u16 name text}, in three groups
+// (Dark 0-12, Classic 13-15, Random 16). The mod gives the list its own handler
+// (PerfectDarkApp::PdArenaListHandler), which adds a fourth group, "Solo
+// Missions", after them: list index 17 and up are the stages below.
+
+constexpr uint32_t kArenaDialogItems = 0x825DDF58;  // the list item (20 bytes), then the end
+constexpr uint32_t kArenaListHandler = 0x821DB818;
+constexpr uint32_t kMenuItemWidth = 8;     // a list item's +8: its width
+constexpr uint32_t kMenuItemHandler = 16;  // +16: its handler
+constexpr uint32_t kArenaListWidth = 0x78;  // the game's width (fits "G5 Building")
+constexpr uint32_t kArenaListWidthSolo = 0xB4;  // wide enough for "Carrington Institute"
+constexpr uint32_t kMpArenas = 0x825DD560;
+constexpr uint32_t kMpArenaSize = 6;
+constexpr int kMpArenaCount = 17;
+constexpr int kMpArenaGroups = 3;
+constexpr int kMpArenaRandomIndex = 16;  // "Random": stage 1, picked when the match starts
+
+// The solo stages the Arena menu offers, in menu order. Ported so far: the others
+// still load (pd_solo_stages builds any solo stage), they just are not listed.
+inline constexpr uint8_t kSoloArenas[] = {
+    0x30,  // dataDyne Central - Defection
+    0x33,  // dataDyne Research - Investigation
+    0x2C,  // Carrington Villa - Hostage One
+    0x1D,  // Chicago - Stealth
+    0x27,  // Air Base - Espionage
+    0x31,  // Air Force One - Antiterrorism
+    0x1C,  // Crash Site - Confrontation
+    0x21,  // Pelagic II - Exploration
+    0x2D,  // Carrington Institute - Defense
+    0x34,  // Attack Ship - Covert Assault
+};
+constexpr int kSoloArenaCount = int(sizeof(kSoloArenas));
+
+// Where a stage is in kSoloArenas, or -1.
+inline int SoloArenaIndex(uint32_t stagenum) {
+  for (int i = 0; i < kSoloArenaCount; ++i) {
+    if (kSoloArenas[i] == stagenum) return i;
+  }
+  return -1;
 }
 
 // ---- Pads file ------------------------------------------------------------------------

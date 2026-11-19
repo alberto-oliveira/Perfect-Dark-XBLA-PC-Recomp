@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <csignal>
 #include <filesystem>
+#include <random>
 #include <thread>
 #include <vector>
 
@@ -1040,12 +1041,6 @@ REXCVAR_DEFINE_BOOL(pd_solo_stages, true, "PerfectDark",
                     "Solo mission stages can be Combat Simulator arenas: their missing multiplayer "
                     "setup (spawn points, ...) is built when the stage loads. Every player needs this "
                     "build");
-// TEMP_STAGES: until the Arena menu offers the solo stages, this makes the host's
-// (or a local) match use one: a name from pd_stages.h (kStageKeys) or a stage number.
-REXCVAR_DEFINE_STRING(pd_solo_force_stage, "", "PerfectDark",
-                      "Testing: every match you host is played on this solo stage (e.g. "
-                      "\"defection\"); empty = the arena chosen in the menu");
-
 namespace {
 // Calls a game function with up to two arguments; returns its r3.
 template <typename Fn>
@@ -1172,26 +1167,35 @@ uint32_t PdStageNameText(const uint8_t* base, uint32_t offset, uint32_t text) {
   return name ? name : stages::U32(base + stages::kArenaNameTexts + 16 * 4);
 }
 
-// Each frame (TEMP_STAGES): with pd_solo_force_stage, a PC that is not a joined
-// one keeps its arena set to that stage outside matches, so the host sends it to
-// the joined PCs with the rest of the match settings.
-void PdSoloStagesFrame(uint8_t* base) {
-  namespace netplay = rex::kernel::xam::netplay;
+// The Arena row of Game Setup (its label, sub_821DA2C0) for a stage missing from
+// g_MpArenas, where the game would show an empty label: the solo stage's name, as
+// a string. 0 when the stage is not a solo stage either (the game's label stays).
+uint32_t PdArenaRowLabel(PPCContext& ctx, uint8_t* base) {
   namespace stages = pd::stages;
-  static std::string last_text;
-  static uint8_t forced = 0;
-  const std::string text = REXCVAR_GET(pd_solo_force_stage);
-  if (text != last_text) {
-    last_text = text;
-    forced = stages::ParseStage(text);
-    if (!text.empty()) {
-      if (forced) REXLOG_INFO("[stages] TEMP forcing stage 0x{:02X} ({})", forced, text);
-      else REXLOG_WARN("[stages] pd_solo_force_stage \"{}\" is not a stage name or number", text);
-    }
-  }
-  if (!forced || netplay::IsJoinedSession()) return;
-  if (stages::U32(base + stages::kMatchRunning) != 0) return;
-  base[stages::kMpSetupStage] = forced;
+  const uint16_t name = stages::SoloStageName(base, base[stages::kMpSetupStage]);
+  return name ? CallGuest(sub_821886E8, ctx, base, name) : 0;  // text id -> string
+}
+
+REXCVAR_DEFINE_BOOL(pd_solo_in_random, true, "PerfectDark",
+                    "The Random arena can also pick the solo mission stages offered in the Arena "
+                    "menu (only the host's setting counts online)");
+
+// The Random arena's pick (sub_821D51A0, which returns a stage number): the game
+// picks one of the 16 arenas. With pd_solo_in_random the solo stages of the Arena
+// menu join the draw, all with the same chance. False: the game picks. Online only
+// the host picks; the joined PCs get its stage.
+bool PdRandomArena(uint32_t* stage) {
+  namespace stages = pd::stages;
+  if (!REXCVAR_GET(pd_solo_stages) || !REXCVAR_GET(pd_solo_in_random)) return false;
+  const uint8_t* base = rex::system::kernel_state()->memory()->virtual_membase();
+  static std::mt19937 rng(std::random_device{}());
+  const int arenas = stages::kMpArenaRandomIndex;  // the 16 real arenas, not Random itself
+  std::uniform_int_distribution<int> pick(0, arenas + stages::kSoloArenaCount - 1);
+  const int i = pick(rng);
+  *stage = i < arenas ? uint32_t(stages::S16(base + stages::kMpArenas + uint32_t(i) * stages::kMpArenaSize))
+                      : stages::kSoloArenas[i - arenas];
+  REXLOG_INFO("[stages] random arena: stage 0x{:02X}", *stage);
+  return true;
 }
 
 // Each frame on a joined PC (from PdNoteGameFrame).
@@ -1233,7 +1237,6 @@ void PdMpMusicFrame(uint8_t* base) {
 void PdNoteGameFrame(uint8_t* base) {
   PdMpMusicFrame(base);
   PdWeaponsFrame();
-  PdSoloStagesFrame(base);
   PerfectDarkApp::NoteGameStage(
       _byteswap_ulong(*reinterpret_cast<const uint32_t*>(base + 0x826492E0)),   // stage
       _byteswap_ulong(*reinterpret_cast<const uint32_t*>(base + 0x82648BF8 + 0x0C)));  // level frames

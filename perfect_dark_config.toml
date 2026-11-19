@@ -353,3 +353,19 @@ registers = ["r4", "r10"]
 address = 0x822812E8
 name = "PdHookStageNameTextR8"
 registers = ["r4", "r8"]
+
+# The Arena row's label (sub_821DA2C0), on its path for a stage missing from
+# g_MpArenas (`lis r11` before it returns an empty string): a solo stage's name.
+[[midasm_hook]]
+address = 0x821DA300
+name = "PdHookArenaRowLabel"
+registers = ["r3"]
+return_on_true = true
+
+# The Random arena's pick (sub_821D51A0, returns a stage in r3): with
+# pd_solo_in_random the solo stages of the Arena menu can be picked too.
+[[midasm_hook]]
+address = 0x821D51A0
+name = "PdHookRandomArena"
+registers = ["r3"]
+return_on_true = true
