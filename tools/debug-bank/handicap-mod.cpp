@@ -344,3 +344,74 @@ end_was_down_ = end_down;
     pd_watch::ArmMemoryWriteWatch(mem, watched);
     REXLOG_INFO("[lobby] watching writes to 0x{:08X}-0x{:08X}", watched.front(), watched.back());
   }
+
+// ============================================================================
+// TEMP_HCAP and TEMP_LOBBY (part 3: the online lobby Handicaps sliders)
+// ============================================================================
+//
+// What for: checking the sliders in game (host log 076, client logs 035/036
+// and client 2's 015). The lobby dump compared the mod's reading of the lobby
+// list with the lobby screen; the HCAP logs showed each slider change, Restore
+// Defaults, and the full list the host sent and each client decoded, so the
+// logs could be compared line by line.
+//
+// Hooks / toml entries: none. Home ran DebugFindLobbyPlayers from the
+// pd_dev_hotkeys block of PerfectDarkInputTracker::OnDraw, with the member
+// `bool home_was_down_ = false;  // TEMP_LOBBY`.
+//
+// Removed in: "Move the lobby Handicaps sliders' debug code to the debug bank",
+// right after 2403b86.
+
+// ---- src/pd_handicap.h ------------------------------------------------------
+// (Describe: the same function as the TEMP_HCAP entry above, put back for
+// part 3.)
+
+// ---- src/perfect_dark_app.h: TickNetHandicaps ---------------------------------
+// Joined PC, after a successful DecodeBlob:
+REXLOG_INFO("[handicap] host's list: {}", pd::handicap::Describe(from_host));  // TEMP_HCAP
+// Host, after SetHostBlob:
+REXLOG_INFO("[handicap] sent list: {}", pd::handicap::Describe(own));  // TEMP_HCAP
+
+// ---- src/perfect_dark_app.h: HandicapSliderRow, op 6, after storing the value --
+if (value != before) {
+  REXLOG_INFO("[handicap] slider '{}': {} -> {} ({:.0f}%)", name, before, value,  // TEMP_HCAP
+              pd::handicap::PercentFromByte(value));
+}
+// (with `const uint8_t before = HostHandicapFor(key);` before the store)
+
+// ---- src/perfect_dark_app.h: PdHandicapRestoreHandler, after clearing ---------
+REXLOG_INFO("[handicap] sliders restored to pd_handicaps");  // TEMP_HCAP
+
+// ---- src/perfect_dark_app.h: OnDraw, pd_dev_hotkeys block ---------------------
+// TEMP_LOBBY: Home logs the online lobby's player records.
+const bool home_down = (GetAsyncKeyState(VK_HOME) & 0x8000) != 0;
+if (home_down && !home_was_down_) {
+  PerfectDarkApp::DebugFindLobbyPlayers();
+}
+home_was_down_ = home_down;
+
+// ---- src/perfect_dark_app.h: PerfectDarkApp static member --------------------
+  // TEMP_LOBBY: Home logs the online lobby's player records as the mod reads
+  // them (pd::handicap::LobbyPlayers), to check them against the lobby screen.
+  static void DebugFindLobbyPlayers() {
+    PerfectDarkApp* app = current_instance_;
+    if (!app || !app->runtime() || !app->runtime()->memory()) return;
+    auto* mem = app->runtime()->memory();
+    const uint8_t* base = mem->virtual_membase();
+    const uint32_t object = pd::handicap::LoadU32(base, pd::handicap::kNetObjectPtr);
+    REXLOG_INFO("[lobby] network object 0x{:08X}, hosting {}, joined {}", object,
+                rex::kernel::xam::netplay::IsHostingSession(), rex::kernel::xam::netplay::IsJoinedSession());
+    if (object == 0) return;
+    for (int i = 0; i < pd::handicap::kLobbyRecordCount; ++i) {
+      const uint32_t record = object + pd::handicap::kLobbyRecords + uint32_t(i) * pd::handicap::kLobbyRecordSize;
+      std::string name;
+      for (uint32_t k = 0; k < pd::handicap::kLobbyNameMax && base[record + pd::handicap::kLobbyRecordName + k]; ++k) {
+        name += char(base[record + pd::handicap::kLobbyRecordName + k]);
+      }
+      REXLOG_INFO("[lobby] record {}: in use {}, '{}'", i, base[record], name);
+    }
+    const std::vector<std::string> players = pd::handicap::LobbyPlayers(base);
+    std::string names;
+    for (const std::string& n : players) names += (names.empty() ? "" : ", ") + n;
+    REXLOG_INFO("[lobby] {} players: {}", players.size(), names);
+  }

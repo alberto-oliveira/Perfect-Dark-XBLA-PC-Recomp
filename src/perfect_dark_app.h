@@ -579,8 +579,6 @@ class PerfectDarkInputTracker : public rex::ui::ImGuiDialog {
   bool ins_was_down_ = false;
   // Insert with pd_light_capture: one frame's lighting capture.
   bool capture_was_down_ = false;
-  // TEMP_LOBBY: Home logs the online lobby's player records.
-  bool home_was_down_ = false;
   // TEMP_MENU_SCAN: F4 triggers the second (item-base) trace point.
   bool f4_was_down_ = false;
   // TEMP_MENU_SCAN: F1 arms a write-watch on a narrow range around the
@@ -5457,7 +5455,6 @@ class PerfectDarkApp : public rex::ReXApp {
           from_host.clear();
           if (pd::handicap::DecodeBlob(blob.data, &from_host)) {
             REXLOG_INFO("[handicap] host's list #{}: {} entries", blob.seq, from_host.size());
-            REXLOG_INFO("[handicap] host's list: {}", pd::handicap::Describe(from_host));  // TEMP_HCAP
           } else {
             REXLOG_WARN("[handicap] the host's list #{} is from another version: no handicaps", blob.seq);
           }
@@ -5485,7 +5482,6 @@ class PerfectDarkApp : public rex::ReXApp {
           netplay::SetHostBlob(pd::handicap::kBlobKey, blob.data(), blob.size());
           sent = blob;
           REXLOG_INFO("[handicap] sent {} entries to the joined PCs", blob[1]);
-          REXLOG_INFO("[handicap] sent list: {}", pd::handicap::Describe(own));  // TEMP_HCAP
         }
       } else {
         // Not hosting either: the sliders belong to the session that ended.
@@ -5520,31 +5516,6 @@ class PerfectDarkApp : public rex::ReXApp {
         *p = it->second;
       }
     }
-  }
-
-  // TEMP_LOBBY: Home logs the online lobby's player records as the mod reads
-  // them (pd::handicap::LobbyPlayers), to check them against the lobby screen.
-  static void DebugFindLobbyPlayers() {
-    PerfectDarkApp* app = current_instance_;
-    if (!app || !app->runtime() || !app->runtime()->memory()) return;
-    auto* mem = app->runtime()->memory();
-    const uint8_t* base = mem->virtual_membase();
-    const uint32_t object = pd::handicap::LoadU32(base, pd::handicap::kNetObjectPtr);
-    REXLOG_INFO("[lobby] network object 0x{:08X}, hosting {}, joined {}", object,
-                rex::kernel::xam::netplay::IsHostingSession(), rex::kernel::xam::netplay::IsJoinedSession());
-    if (object == 0) return;
-    for (int i = 0; i < pd::handicap::kLobbyRecordCount; ++i) {
-      const uint32_t record = object + pd::handicap::kLobbyRecords + uint32_t(i) * pd::handicap::kLobbyRecordSize;
-      std::string name;
-      for (uint32_t k = 0; k < pd::handicap::kLobbyNameMax && base[record + pd::handicap::kLobbyRecordName + k]; ++k) {
-        name += char(base[record + pd::handicap::kLobbyRecordName + k]);
-      }
-      REXLOG_INFO("[lobby] record {}: in use {}, '{}'", i, base[record], name);
-    }
-    const std::vector<std::string> players = pd::handicap::LobbyPlayers(base);
-    std::string names;
-    for (const std::string& n : players) names += (names.empty() ? "" : ", ") + n;
-    REXLOG_INFO("[lobby] {} players: {}", players.size(), names);
   }
 
   static void TickMatchDetails() {
@@ -6693,15 +6664,8 @@ class PerfectDarkApp : public rex::ReXApp {
       case 6:  // set
         if (data && !key.empty()) {
           const uint8_t value = uint8_t(std::min<uint32_t>(pd::handicap::LoadU32(base, data), 255));
-          const uint8_t before = HostHandicapFor(key);
-          {
-            std::lock_guard<std::mutex> lock(handicap_mutex_);
-            session_handicaps_[key] = value;
-          }
-          if (value != before) {
-            REXLOG_INFO("[handicap] slider '{}': {} -> {} ({:.0f}%)", name, before, value,  // TEMP_HCAP
-                        pd::handicap::PercentFromByte(value));
-          }
+          std::lock_guard<std::mutex> lock(handicap_mutex_);
+          session_handicaps_[key] = value;
         }
         break;
       case 10: {  // the value as text, like the vanilla "100%"
@@ -6748,7 +6712,6 @@ class PerfectDarkApp : public rex::ReXApp {
     if (ctx.r3.u32 == 6) {
       std::lock_guard<std::mutex> lock(handicap_mutex_);
       session_handicaps_.clear();
-      REXLOG_INFO("[handicap] sliders restored to pd_handicaps");  // TEMP_HCAP
     }
     ctx.r3.u64 = 0;
   }
@@ -9247,12 +9210,6 @@ inline void PerfectDarkInputTracker::OnDraw(ImGuiIO& /*io*/) {
     // Everything below is a developer diagnostic (see pd_dev_hotkeys).
     if (!REXCVAR_GET(pd_dev_hotkeys)) return;
 
-    // TEMP_LOBBY: Home logs the online lobby's player records.
-    const bool home_down = (GetAsyncKeyState(VK_HOME) & 0x8000) != 0;
-    if (home_down && !home_was_down_) {
-      PerfectDarkApp::DebugFindLobbyPlayers();
-    }
-    home_was_down_ = home_down;
 
     // TEMP_MENU_MOUSE
     bool f3_down = (GetAsyncKeyState(VK_F3) & 0x8000) != 0;
