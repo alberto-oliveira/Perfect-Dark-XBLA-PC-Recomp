@@ -31,6 +31,17 @@ inline uint8_t ByteFromPercent(int percent) {
   return uint8_t(std::clamp<long>(std::lround(h), 0, 255));
 }
 
+// sub_821CB7F8 itself (N64 mp_handicap_to_value): handicap byte -> damage-taken
+// multiplier as a percentage, for the Handicaps sliders' text. 0 -> 10%, 128 -> 100%, 255 -> 1000%.
+inline double PercentFromByte(uint8_t h) {
+  if (h < 128) {
+    const double r = h / 127.0;
+    return (r * r * 0.9 + 0.1) * 100.0;
+  }
+  const double t = (h - 128) / 127.0 + 1.0;
+  return (3.0 * t * t - 2.0) * 100.0;
+}
+
 // Strips surrounding spaces/tabs and lowercases (gamertags compare case-insensitively).
 inline std::string LowerTrim(std::string s) {
   s.erase(0, s.find_first_not_of(" \t"));
@@ -64,6 +75,58 @@ inline std::vector<std::pair<std::string, uint8_t>> Sorted(const std::unordered_
   std::vector<std::pair<std::string, uint8_t>> entries(table.begin(), table.end());
   std::sort(entries.begin(), entries.end());
   return entries;
+}
+
+// ---- The online lobby's players ---------------------------------------------------
+//
+// In an online lobby the game has not put the joined players into its player
+// configs yet (they only get there when the match starts), but its network
+// object keeps a list of them for the lobby screen. sub_82289AA0 rebuilds that
+// list every frame: it clears all 8 records (sub_82284198), then fills one per
+// player in join order, the host first. Found with runtime scans and a write
+// watch (2026-11-19, host logs 072-075), then read in the generated code:
+//   network object = *(u32*)0x826646D4 (used by over a thousand game functions)
+//   records at object +1032, 48 bytes each:
+//     +0  1 = a player is in this record (the rebuild clears it first)
+//     +16 the player's XUID (8 bytes)
+//     +24 the gamertag (zero-terminated)
+
+constexpr uint32_t kNetObjectPtr = 0x826646D4;
+constexpr uint32_t kLobbyRecords = 1032;
+constexpr uint32_t kLobbyRecordSize = 48;
+constexpr int kLobbyRecordCount = 8;
+constexpr uint32_t kLobbyRecordName = 24;
+constexpr uint32_t kLobbyNameMax = 16;  // gamertags have at most 15 characters
+
+// Guest memory is big-endian.
+inline uint32_t LoadU32(const uint8_t* base, uint32_t address) {
+  const uint8_t* p = base + address;
+  return (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 8) | p[3];
+}
+inline void StoreU32(uint8_t* base, uint32_t address, uint32_t value) {
+  uint8_t* p = base + address;
+  p[0] = uint8_t(value >> 24);
+  p[1] = uint8_t(value >> 16);
+  p[2] = uint8_t(value >> 8);
+  p[3] = uint8_t(value);
+}
+
+// The lobby's gamertags in join order (the host first). Only meaningful on the
+// host while in an online lobby.
+inline std::vector<std::string> LobbyPlayers(const uint8_t* base) {
+  std::vector<std::string> players;
+  const uint32_t object = LoadU32(base, kNetObjectPtr);
+  if (object == 0) return players;
+  for (int i = 0; i < kLobbyRecordCount; ++i) {
+    const uint32_t record = object + kLobbyRecords + uint32_t(i) * kLobbyRecordSize;
+    if (base[record] != 1) break;  // the records in use come first
+    std::string name;
+    for (uint32_t k = 0; k < kLobbyNameMax && base[record + kLobbyRecordName + k]; ++k) {
+      name += char(base[record + kLobbyRecordName + k]);
+    }
+    players.push_back(name);
+  }
+  return players;
 }
 
 // ---- The host's message to the joined PCs ---------------------------------------
@@ -109,6 +172,17 @@ inline bool DecodeBlob(const std::vector<uint8_t>& blob, std::unordered_map<std:
   }
   *out = std::move(table);
   return true;
+}
+
+// TEMP_HCAP: the table as "name=byte, name=byte", to compare the host's and the
+// joined PCs' logs.
+inline std::string Describe(const std::unordered_map<std::string, uint8_t>& table) {
+  std::string text;
+  for (const auto& [name, value] : Sorted(table)) {
+    if (!text.empty()) text += ", ";
+    text += name + "=" + std::to_string(value);
+  }
+  return text.empty() ? "(empty)" : text;
 }
 
 }  // namespace pd::handicap

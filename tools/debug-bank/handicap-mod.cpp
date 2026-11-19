@@ -186,3 +186,161 @@ static void DebugFindName(const std::string& name) {
 PerfectDarkApp::DebugDumpPlayerSlots();
 PerfectDarkApp::DebugFindName("Zqhost");
 PerfectDarkApp::DebugFindName("Zqclient");
+
+// ============================================================================
+// TEMP_LOBBY (research R1-R3b)
+// ============================================================================
+//
+// What for: finding where the online lobby keeps its players (part 3, the
+// lobby Handicaps sliders). The vanilla Handicaps dialog only shows the host's
+// slider in an online lobby (slot mask g_MpSetup+22 stays 0x0001: joined
+// players reach the player configs only when the match starts).
+//   R1  (host log 072): every copy of the test gamertags in all guest memory.
+//       Found a list of 0x30-byte records (XUID + gamertag) in join order.
+//   R2  (log 073): dump around the list + every pointer into it. The list's
+//       address changes between runs (heap); counts found next to it were
+//       unrelated neighbours.
+//   R3  (log 074): pd_watch write watch on 3 words. Showed the list is cleared
+//       and rebuilt; pd_watch could not name the writers (no symbol file).
+//   R3b (log 075): every byte of the list watched, with the guest function of
+//       each write: sub_82284198 (clears the 8 records), sub_82289AA0 (fills
+//       them, every frame), sub_825AAB90 (string copy). Reading sub_82289AA0
+//       gave the result kept in src/pd_handicap.h (LobbyPlayers): records at
+//       *(0x826646D4) + 1032, 48 bytes, +0 in use, +16 XUID, +24 gamertag.
+//
+// Hooks / toml entries: none. Home ran DebugFindLobbyPlayers and End ran
+// pd_watch::DisarmMemoryWriteWatch, in the pd_dev_hotkeys block of
+// PerfectDarkInputTracker::OnDraw (src/perfect_dark_app.h), with the members
+// `bool home_was_down_ = false;` and `bool end_was_down_ = false;`.
+//
+// Removed in: the part 3 commit ("Add online lobby Handicaps sliders"); Home
+// then got a short dump of the lobby list instead.
+
+// ---- src/perfect_dark_app.h: pd_watch::VectoredHandler, after
+// `st.hits_by_symbol[GuestFunctionAt(rip)]++;` -------------------------------
+if (exact) {
+  // TEMP_LOBBY: a write to one of the exact addresses is always logged,
+  // with the guest function it came from (the build has no symbol file,
+  // so SymFromAddr below finds nothing).
+  REXLOG_INFO("[menu_watch] *** EXACT *** write to guest 0x{:08X} from {}", guest_addr, GuestFunctionAt(rip));
+}
+
+// ---- src/perfect_dark_app.h: OnDraw, pd_dev_hotkeys block ---------------------
+// TEMP_LOBBY: Home logs every place the test gamertags are stored.
+const bool home_down = (GetAsyncKeyState(VK_HOME) & 0x8000) != 0;
+if (home_down && !home_was_down_) {
+  PerfectDarkApp::DebugFindLobbyPlayers();
+}
+home_was_down_ = home_down;
+// TEMP_LOBBY: End stops the write watch Home started and lists the writers.
+const bool end_down = (GetAsyncKeyState(VK_END) & 0x8000) != 0;
+if (end_down && !end_was_down_) {
+  pd_watch::DisarmMemoryWriteWatch();
+}
+end_was_down_ = end_down;
+
+// ---- src/perfect_dark_app.h: PerfectDarkApp static member --------------------
+  // TEMP_LOBBY: where does the lobby keep its players? In an online lobby the
+  // game has not put the joined players into its player configs yet, but the
+  // lobby screen shows their gamertags, so they are somewhere in memory. This
+  // logs every copy of the test gamertags (ASCII, UTF-16 big- and little-endian)
+  // in all of the game's memory, with the bytes around each one, plus the slot
+  // mask that hides the vanilla Handicaps sliders. Pressing it after each join
+  // and leave shows which copies follow the lobby.
+  static void DebugFindLobbyPlayers() {
+    PerfectDarkApp* app = current_instance_;
+    if (!app || !app->runtime() || !app->runtime()->memory()) return;
+    auto* mem = app->runtime()->memory();
+    static int scan = 0;
+    ++scan;
+    REXLOG_INFO("[lobby] scan {}: hosting {}, joined {}, slot mask (g_MpSetup+22) 0x{:04X}", scan,
+                rex::kernel::xam::netplay::IsHostingSession(), rex::kernel::xam::netplay::IsJoinedSession(),
+                ReadGuestU32(mem, kMpSetup + 20) & 0xFFFF);
+    uint32_t host_record = 0;  // (R2) Zqhost's gamertag in the list of player records
+    // "Zqclient" also finds "Zqclient2": the dump shows the byte after it.
+    for (const std::string name : {"Zqhost", "Zqclient"}) {
+      std::string be, le;  // UTF-16 big-endian (the Xbox's) and little-endian
+      for (char c : name) {
+        be += '\0'; be += c;
+        le += c; le += '\0';
+      }
+      const std::pair<const char*, const std::string*> patterns[] = {{"ascii", &name}, {"utf16be", &be}, {"utf16le", &le}};
+      for (const auto& [kind, pat] : patterns) {
+        int hits = 0;
+        ForEachCommittedRegion(mem, [&](uint32_t region, uint32_t size) {
+          const uint8_t* p = mem->TranslateVirtual<const uint8_t*>(region);
+          if (!p || hits >= 40) return;
+          for (uint32_t i = 0; i + pat->size() <= size && hits < 40; ++i) {
+            if (p[i] != uint8_t((*pat)[0]) || std::memcmp(p + i, pat->data(), pat->size()) != 0) continue;
+            ++hits;
+            // 16 bytes before the name and 48 from it, as hex.
+            const uint32_t from = i >= 16 ? i - 16 : 0;
+            std::string hex;
+            for (uint32_t k = from; k < from + 64 && k < size; ++k) {
+              hex += fmt::format("{:02X}", p[k]);
+              if ((k - from) % 4 == 3) hex += ' ';
+            }
+            REXLOG_INFO("[lobby] '{}' {} at 0x{:08X} (dump from 0x{:08X}): {}", name, kind, region + i,
+                        region + from, hex);
+            // The list record: the gamertag right after an XUID (0x0009...).
+            if (name == "Zqhost" && pat == &name && i >= 8 && p[i - 8] == 0x00 && p[i - 7] == 0x09) {
+              host_record = region + i;
+            }
+          }
+        });
+        if (hits >= 40) REXLOG_INFO("[lobby] '{}' {}: stopped at 40 hits", name, kind);
+      }
+    }
+    // TEMP_LOBBY (R2): scan 1 found a list of player records at 0x40064FA8,
+    // 0x30 bytes each (an 8-byte XUID, then the gamertag), in join order and
+    // packed again when a player leaves, but with stale records left behind.
+    // To find its count: dump the memory around it, and every word in the
+    // game's memory that points into it (a count usually sits next to the
+    // pointer).
+    // The list is on the heap, so it is found again from Zqhost's record (in
+    // the first test, 0x40064FB0): 0x1B0 bytes before it to 0x250 after.
+    if (!host_record) {
+      REXLOG_INFO("[lobby] scan {} done (no list record for Zqhost found)", scan);
+      return;
+    }
+    const uint32_t kListFrom = (host_record - 0x1B0) & ~0x1Fu, kListTo = kListFrom + 0x400;
+    REXLOG_INFO("[lobby] Zqhost's record name at 0x{:08X}", host_record);
+    for (uint32_t a = kListFrom; a < kListTo; a += 32) {
+      std::string hex;
+      for (uint32_t k = 0; k < 32; k += 4) hex += fmt::format("{:08X} ", ReadGuestU32(mem, a + k));
+      REXLOG_INFO("[lobby] list 0x{:08X}: {}", a, hex);
+    }
+    int pointers = 0;
+    ForEachCommittedRegion(mem, [&](uint32_t region, uint32_t size) {
+      const uint8_t* p = mem->TranslateVirtual<const uint8_t*>(region);
+      if (!p || pointers >= 60) return;
+      for (uint32_t i = 0; i + 4 <= size && pointers < 60; i += 4) {
+        const uint32_t v = (uint32_t(p[i]) << 24) | (uint32_t(p[i + 1]) << 16) | (uint32_t(p[i + 2]) << 8) | p[i + 3];
+        if (v < kListFrom || v >= kListTo) continue;
+        ++pointers;
+        // The 8 words before the pointer and the 8 from it.
+        const uint32_t at = region + i;
+        std::string hex;
+        for (uint32_t k = at - 32; k < at + 32; k += 4) hex += fmt::format("{:08X} ", ReadGuestU32(mem, k));
+        REXLOG_INFO("[lobby] pointer 0x{:08X} -> 0x{:08X} (words from 0x{:08X}): {}", at, v, at - 32, hex);
+      }
+    });
+    REXLOG_INFO("[lobby] scan {} done ({} pointers into the list)", scan, pointers);
+
+    // TEMP_LOBBY (R3): R2 found the player count 0x1E0 bytes after Zqhost's
+    // gamertag (1, 2, 3, 2, 1 as players joined and left) and a second copy
+    // 0x188 bytes before it. The list is on the heap, so the mod needs the
+    // game's own way to reach it: watch which game functions write the count
+    // and the second record's gamertag while players join and leave (pd_watch
+    // logs the writer of every write to these addresses' memory page). End
+    // stops the watch and lists the writers.
+    // (R3b) The first watch showed the count is not at a fixed distance from
+    // the list (the neighbours differ between runs), and that the list is
+    // cleared and rebuilt on every join and leave. So every byte from 0x40
+    // before the first record to the 8th record's end is watched, and each
+    // write logs the game function it came from.
+    std::vector<uint32_t> watched;
+    for (uint32_t a = host_record - 0x58; a < host_record + 0x1C0; ++a) watched.push_back(a);
+    pd_watch::ArmMemoryWriteWatch(mem, watched);
+    REXLOG_INFO("[lobby] watching writes to 0x{:08X}-0x{:08X}", watched.front(), watched.back());
+  }
