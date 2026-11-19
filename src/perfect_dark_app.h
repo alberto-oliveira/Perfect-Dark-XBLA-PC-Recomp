@@ -5433,7 +5433,6 @@ class PerfectDarkApp : public rex::ReXApp {
           from_host.clear();
           if (pd::handicap::DecodeBlob(blob.data, &from_host)) {
             REXLOG_INFO("[handicap] host's list #{}: {} entries", blob.seq, from_host.size());
-            REXLOG_INFO("[handicap] host's list: {}", pd::handicap::Describe(from_host));  // TEMP_HCAP
           } else {
             REXLOG_WARN("[handicap] the host's list #{} is from another version: no handicaps", blob.seq);
           }
@@ -5457,7 +5456,6 @@ class PerfectDarkApp : public rex::ReXApp {
         netplay::SetHostBlob(pd::handicap::kBlobKey, blob.data(), blob.size());
         sent_from = list;
         REXLOG_INFO("[handicap] sent {} entries to the joined PCs", blob[1]);
-        REXLOG_INFO("[handicap] sent list: {}", pd::handicap::Describe(own));  // TEMP_HCAP
       }
       was_hosting = hosting;
     }

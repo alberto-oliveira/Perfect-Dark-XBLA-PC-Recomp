@@ -111,15 +111,4 @@ inline bool DecodeBlob(const std::vector<uint8_t>& blob, std::unordered_map<std:
   return true;
 }
 
-// TEMP_HCAP: the table as "name=byte, name=byte", to compare the host's and the
-// joined PCs' logs.
-inline std::string Describe(const std::unordered_map<std::string, uint8_t>& table) {
-  std::string text;
-  for (const auto& [name, value] : Sorted(table)) {
-    if (!text.empty()) text += ", ";
-    text += name + "=" + std::to_string(value);
-  }
-  return text.empty() ? "(empty)" : text;
-}
-
 }  // namespace pd::handicap

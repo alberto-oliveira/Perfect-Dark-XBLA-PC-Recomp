@@ -61,6 +61,42 @@ REXLOG_INFO("[poison] tick chr 0x{:08X} frame {}: counter {}, health before {:.3
             skip ? "skipped (remote player)" : "applied");
 
 // ============================================================================
+// TEMP_HCAP
+// ============================================================================
+//
+// What for: checking that the joined PCs decode exactly the list the host sent
+// (part 2: the host's pd_handicaps sent with netplay::SetHostBlob, key "HCAP").
+// Each log line writes the whole list sorted by name, so the host's and the
+// clients' logs can be compared line by line.
+//
+// Hooks / toml entries: none. The two log lines sat in
+// PerfectDarkApp::TickNetHandicaps (src/perfect_dark_app.h), next to the
+// "sent N entries" and "host's list #seq: N entries" lines that stay.
+//
+// Removed in: the commit that moved TEMP_HCAP here ("Move the handicap list
+// debug log to the debug bank"), right after ee44185.
+
+// ---- src/pd_handicap.h ------------------------------------------------------
+
+// TEMP_HCAP: the table as "name=byte, name=byte", to compare the host's and the
+// joined PCs' logs.
+inline std::string Describe(const std::unordered_map<std::string, uint8_t>& table) {
+  std::string text;
+  for (const auto& [name, value] : Sorted(table)) {
+    if (!text.empty()) text += ", ";
+    text += name + "=" + std::to_string(value);
+  }
+  return text.empty() ? "(empty)" : text;
+}
+
+// ---- src/perfect_dark_app.h (TickNetHandicaps) --------------------------------
+
+// Joined PC, after a successful DecodeBlob:
+REXLOG_INFO("[handicap] host's list: {}", pd::handicap::Describe(from_host));  // TEMP_HCAP
+// Host, after SetHostBlob:
+REXLOG_INFO("[handicap] sent list: {}", pd::handicap::Describe(own));  // TEMP_HCAP
+
+// ============================================================================
 // TEMP_NET_HANDICAP
 // ============================================================================
 //
