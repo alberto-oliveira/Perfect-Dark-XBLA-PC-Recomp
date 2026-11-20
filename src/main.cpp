@@ -1066,6 +1066,16 @@ uint32_t PdSoloStageSetup(PPCContext& ctx, uint8_t* base, uint32_t loaded) {
   const int stagenum = stages::S16(entry + stages::kStageId);
   if (stages::SoloStageIndex(base, uint32_t(stagenum)) < 0) return loaded;  // a real arena
 
+  // A scenario that needs hills or case spots, which the solo stages lack, is
+  // played as Combat. Every PC has the host's scenario, so all of them switch.
+  // The game creates the scenario's objects later, from the setup built below.
+  const uint8_t scenario = base[stages::kMpSetupScenario];
+  if (!stages::ScenarioPlayableOnSoloStage(scenario)) {
+    base[stages::kMpSetupScenario] = stages::kScenarioCombat;
+    REXLOG_WARN("[stages] stage 0x{:02X}: scenario {} needs spots solo stages lack; playing Combat", stagenum,
+                scenario);
+  }
+
   // Load the stage's pads file and solo setup with the game's own loader
   // (file_load_to_new: a new buffer in the stage's memory, freed with the stage).
   // The game loads the pads file again itself a moment later.

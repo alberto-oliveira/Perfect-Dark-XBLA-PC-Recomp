@@ -46,6 +46,20 @@ namespace pd::stages {
 constexpr uint32_t kGVars = 0x82648BF8;
 constexpr uint32_t kMatchRunning = kGVars + 1336;  // u32, nonzero while a multiplayer match runs
 constexpr uint32_t kMpSetupStage = 0x826418A9;     // g_MpSetup+17, u8: the arena's stage number
+constexpr uint32_t kMpSetupScenario = 0x826418A8;  // g_MpSetup+16, u8: the scenario (below)
+
+// Scenarios (the N64's MPSCENARIO_* numbers). The solo stages have no hills and no
+// briefcase or case spots, so only Combat and Pop a Cap can be played on them.
+constexpr uint8_t kScenarioCombat = 0;
+constexpr uint8_t kScenarioHoldTheBriefcase = 1;
+constexpr uint8_t kScenarioHackerCentral = 2;
+constexpr uint8_t kScenarioPopACap = 3;
+constexpr uint8_t kScenarioKingOfTheHill = 4;
+constexpr uint8_t kScenarioCaptureTheCase = 5;
+
+inline bool ScenarioPlayableOnSoloStage(uint8_t scenario) {
+  return scenario == kScenarioCombat || scenario == kScenarioPopACap;
+}
 
 // g_Stages: 61 entries of 0x38 bytes, the N64's table. g_StageIndex is the entry of
 // the stage being loaded.
