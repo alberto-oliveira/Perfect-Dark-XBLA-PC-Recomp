@@ -588,7 +588,7 @@ class PerfectDarkInputTracker : public rex::ui::ImGuiDialog {
   // sub_82343458 r3/r11 candidates (both proved byte-identical between
   // Horizontal/Vertical - watching for the actual write is the fallback).
   bool f1_was_down_ = false;
-  // TEMP_STAGES: the pad marking keys (pd_solo_mark_keys): Home, End, Page Up, Page Down.
+  // The pad marking keys (pd_solo_mark_keys): Home, End, Page Up, Delete, Page Down.
   bool mark_was_down_[5] = {};
 };
 
@@ -6747,7 +6747,7 @@ class PerfectDarkApp : public rex::ReXApp {
     REXLOG_INFO("[menu_patch] arena list: {} solo stages added", stages::kSoloArenaCount);
   }
 
-  // ---- TEMP_STAGES: pad marking keys (pd_solo_mark_keys) ----------------------
+  // ---- Pad marking keys (pd_solo_mark_keys) -----------------------------------
   // For hand-picking a solo stage's layout (pd_stage_layouts.h). In a match on a
   // solo stage, as player 1 (local or online host: g_Vars.players[0]):
   //   Home                     the pad nearest to you becomes a spawn point
@@ -6764,7 +6764,7 @@ class PerfectDarkApp : public rex::ReXApp {
   };
   static inline std::map<uint32_t, StageMarks> stage_marks_;  // by stage number
 
-  static void DebugMarkPad(MarkKey key) {
+  static void MarkPad(MarkKey key) {
     namespace stages = pd::stages;
     PerfectDarkApp* app = current_instance_;
     if (!app || !app->runtime() || !app->runtime()->memory()) return;
@@ -9448,7 +9448,7 @@ inline void PerfectDarkInputTracker::OnDraw(ImGuiIO& /*io*/) {
     }
     capture_was_down_ = capture_down;
 
-    // TEMP_STAGES: the pad marking keys, for hand-picked solo stage layouts.
+    // The pad marking keys, for hand-picked solo stage layouts.
     if (REXCVAR_GET(pd_solo_mark_keys)) {
       // Undo and Where have two keys each, in case a keyboard lacks one of them.
       // Home does Where while Shift is held, and Spawn otherwise.
@@ -9461,7 +9461,7 @@ inline void PerfectDarkInputTracker::OnDraw(ImGuiIO& /*io*/) {
         const bool down = (GetAsyncKeyState(kMarkKeys[i].vk) & 0x8000) != 0;
         if (down && !mark_was_down_[i] && app_ && app_->HasWindowFocus()) {
           const Mark action = (kMarkKeys[i].vk == VK_HOME && shift) ? Mark::Where : kMarkKeys[i].action;
-          PerfectDarkApp::DebugMarkPad(action);
+          PerfectDarkApp::MarkPad(action);
         }
         mark_was_down_[i] = down;
       }

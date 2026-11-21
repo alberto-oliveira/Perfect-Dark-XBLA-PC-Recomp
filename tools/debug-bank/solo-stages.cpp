@@ -137,3 +137,142 @@ void PdSoloStagesFrame(uint8_t* base) {
   if (stages::U32(base + stages::kMatchRunning) != 0) return;
   base[stages::kMpSetupStage] = forced;
 }
+
+// ============================================================================
+// TEMP_STAGES: setup build details in the log
+// ============================================================================
+//
+// What for: checking each solo stage's built multiplayer setup while the mod was
+// developed (steps 1-7): what the stage's pads file and solo setup hold, which
+// object types were kept or left out, doors left closed, links cleared, the
+// solo setup's activate_lift calls, and every weapon location and spawn pad
+// with its position. Comparing these lines between host and client logs showed
+// both PCs built the same setup (now checked automatically: CheckHostStageSetup).
+//
+// Hook / toml entry: none; the logs were at the end of PdSoloStageSetup in
+// src/main.cpp (called from the setup-load hook at 0x821FF7C8), and
+// DescribeTypeCounts / ObjectTypeName were in src/pd_stages.h.
+//
+// Removed in: "Move the solo stages' debug code to the debug bank".
+
+// ---- src/main.cpp, end of PdSoloStageSetup (before `return buffer;`) ---------
+
+  // TEMP_STAGES: what the stage's files hold and what was kept, for checking.
+  {
+    REXLOG_INFO("[stages] TEMP pads file: {} pads, {} waypoints, {} bytes; solo setup {} bytes, start pad {}",
+                pads.NumPads(), pads.WaypointPads().size(), pads.size, solo.size, start_pad);
+    REXLOG_INFO("[stages] TEMP hand-picked (pd_stage_layouts.h): {} spawn pads, {} weapon pads",
+                chosen_spawns.size(), chosen_weapons.size());
+    REXLOG_INFO("[stages] TEMP kept: {}", stages::DescribeTypeCounts(props.kept));
+    REXLOG_INFO("[stages] TEMP left out: {}", stages::DescribeTypeCounts(props.dropped));
+    REXLOG_INFO("[stages] TEMP doors the player cannot open (left closed): {}; links cleared: {}",
+                props.still_closed, props.unlinked);
+    for (const stages::LiftActivation& lift : solo_lifts) {
+      const bool kept = std::any_of(props.lifts.begin(), props.lifts.end(), [&](const stages::LiftActivation& l) {
+        return l.lift == lift.lift && l.tag == lift.tag;
+      });
+      REXLOG_INFO("[stages] TEMP solo activate_lift({}, tag {}): {}", lift.lift, lift.tag, kept ? "kept" : "lift left out");
+    }
+    for (size_t i = 0; i < weapons.size(); ++i) {
+      const stages::Pad& pad = weapons[i].pad;
+      REXLOG_INFO("[stages] TEMP weapon location {}: pad {} ({:.0f}, {:.0f}, {:.0f}), crate pad {}", i, pad.num,
+                  pad.x, pad.y, pad.z, weapons[i].crate_pad);
+    }
+    for (const stages::Pad& pad : spawns) {
+      REXLOG_INFO("[stages] TEMP spawn pad {}: ({:.0f}, {:.0f}, {:.0f}) room {} flags 0x{:05X}", pad.num, pad.x,
+                  pad.y, pad.z, pad.room, pad.flags);
+    }
+  }
+
+// ---- src/pd_stages.h --------------------------------------------------------
+// (needed #include <fmt/format.h> and <string>)
+
+// ---- TEMP_STAGES: debug descriptions ----------------------------------------------------
+
+// N64 object type names, for the solo setup's object counts in the log.
+inline const char* ObjectTypeName(uint8_t type) {
+  switch (type) {
+    case 0x01: return "door";
+    case 0x02: return "doorscale";
+    case 0x03: return "basic";
+    case 0x04: return "key";
+    case 0x05: return "alarm";
+    case 0x06: return "cctv";
+    case 0x07: return "ammocrate";
+    case 0x08: return "weapon";
+    case 0x09: return "chr";
+    case 0x0A: return "singlemonitor";
+    case 0x0B: return "multimonitor";
+    case 0x0C: return "hangingmonitors";
+    case 0x0D: return "autogun";
+    case 0x0E: return "linkguns";
+    case 0x0F: return "debris";
+    case 0x11: return "hat";
+    case 0x12: return "grenadeprob";
+    case 0x13: return "linkliftdoor";
+    case 0x14: return "multiammocrate";
+    case 0x15: return "shield";
+    case 0x16: return "tag";
+    case 0x17: return "beginobjective";
+    case 0x18: return "endobjective";
+    case 0x23: return "briefing";
+    case 0x24: return "gasbottle";
+    case 0x25: return "renameobj";
+    case 0x26: return "padlockeddoor";
+    case 0x27: return "truck";
+    case 0x28: return "heli";
+    case 0x2A: return "glass";
+    case 0x2B: return "safe";
+    case 0x2C: return "safeitem";
+    case 0x2D: return "tank";
+    case 0x2E: return "camerapreset";
+    case 0x2F: return "tintedglass";
+    case 0x30: return "lift";
+    case 0x31: return "conditionalscenery";
+    case 0x32: return "blockedpath";
+    case 0x33: return "hoverbike";
+    case 0x35: return "hoverprop";
+    case 0x36: return "fan";
+    case 0x37: return "hovercar";
+    case 0x38: return "padeffect";
+    case 0x39: return "chopper";
+    case 0x3A: return "mine";
+    case 0x3B: return "escastep";
+    default: return nullptr;  // objective conditions (0x19-0x22) and others: shown by number
+  }
+}
+
+// "door 52, chr 80, ..." from a count per object type.
+inline std::string DescribeTypeCounts(const std::map<uint8_t, int>& counts) {
+  std::string text;
+  for (const auto& [type, count] : counts) {
+    if (!text.empty()) text += ", ";
+    const char* name = ObjectTypeName(type);
+    text += name ? fmt::format("{} {}", name, count) : fmt::format("type 0x{:02X} {}", type, count);
+  }
+  return text;
+}
+
+// ============================================================================
+// TEMP_STAGES: pd_solo_fake_mismatch
+// ============================================================================
+//
+// What for: testing the warning of the setup check (CheckHostStageSetup in
+// src/main.cpp) with two matching builds: on a joined PC, it acted as if its
+// setup's fingerprint differed from the host's. Test 7.3 (host logs 089/090,
+// client 046-048) showed the warning on Defection and none on Skedar.
+//
+// Hook / toml entry: none; toml setting `pd_solo_fake_mismatch = true` on the
+// joined PC.
+//
+// Removed in: "Move the solo stages' debug code to the debug bank".
+
+// ---- src/main.cpp, before the weapons choice's `namespace {` ------------------
+
+// TEMP_STAGES: for testing the setup check (CheckHostStageSetup) on matching builds.
+REXCVAR_DEFINE_BOOL(pd_solo_fake_mismatch, false, "PerfectDark",
+                    "Testing: a joined PC acts as if its solo stage setup differed from the host's");
+
+// ---- src/main.cpp, CheckHostStageSetup: the comparison ------------------------
+
+//  } else if (host_fingerprint != stages::g_built_fingerprint || REXCVAR_GET(pd_solo_fake_mismatch)) {

@@ -698,10 +698,6 @@ REXCVAR_DEFINE_INT32(pd_mp_weapon_shuffle_seed, 0, "PerfectDark",
                      "With pd_mp_weapon_shuffle: 0 = new choices every match, any other number = "
                      "the same choices every time (for testing)");
 
-// TEMP_STAGES: for testing the setup check (CheckHostStageSetup) on matching builds.
-REXCVAR_DEFINE_BOOL(pd_solo_fake_mismatch, false, "PerfectDark",
-                    "Testing: a joined PC acts as if its solo stage setup differed from the host's");
-
 namespace {
 // A joined PC starts the stage at about the same time as the host, whose choice
 // arrives within a second (the joined PC asks twice a second).
@@ -784,7 +780,7 @@ void CheckHostStageSetup() {
   if (!found) {
     REXLOG_WARN("[stages] stage 0x{:02X}: no setup fingerprint from the host (an older build?)", built);
     netplay::ShowNotice("The host's game may be a different build: this stage may not match theirs");
-  } else if (host_fingerprint != stages::g_built_fingerprint || REXCVAR_GET(pd_solo_fake_mismatch)) {
+  } else if (host_fingerprint != stages::g_built_fingerprint) {
     REXLOG_WARN("[stages] stage 0x{:02X}: this PC's setup (fingerprint {:08X}) differs from the host's ({:08X}): "
                 "different builds", built, stages::g_built_fingerprint, host_fingerprint);
     netplay::ShowNotice("Your game is a different build from the host's: this stage doesn't match theirs");
@@ -1203,32 +1199,6 @@ uint32_t PdSoloStageSetup(PPCContext& ctx, uint8_t* base, uint32_t loaded) {
               stagenum, setup.size(), buffer, spawns.size(), weapons.size(), kept_total, cmds.size(),
               props.unlocked, props.lifts.size());
 
-  // TEMP_STAGES: what the stage's files hold and what was kept, for checking.
-  {
-    REXLOG_INFO("[stages] TEMP pads file: {} pads, {} waypoints, {} bytes; solo setup {} bytes, start pad {}",
-                pads.NumPads(), pads.WaypointPads().size(), pads.size, solo.size, start_pad);
-    REXLOG_INFO("[stages] TEMP hand-picked (pd_stage_layouts.h): {} spawn pads, {} weapon pads",
-                chosen_spawns.size(), chosen_weapons.size());
-    REXLOG_INFO("[stages] TEMP kept: {}", stages::DescribeTypeCounts(props.kept));
-    REXLOG_INFO("[stages] TEMP left out: {}", stages::DescribeTypeCounts(props.dropped));
-    REXLOG_INFO("[stages] TEMP doors the player cannot open (left closed): {}; links cleared: {}",
-                props.still_closed, props.unlinked);
-    for (const stages::LiftActivation& lift : solo_lifts) {
-      const bool kept = std::any_of(props.lifts.begin(), props.lifts.end(), [&](const stages::LiftActivation& l) {
-        return l.lift == lift.lift && l.tag == lift.tag;
-      });
-      REXLOG_INFO("[stages] TEMP solo activate_lift({}, tag {}): {}", lift.lift, lift.tag, kept ? "kept" : "lift left out");
-    }
-    for (size_t i = 0; i < weapons.size(); ++i) {
-      const stages::Pad& pad = weapons[i].pad;
-      REXLOG_INFO("[stages] TEMP weapon location {}: pad {} ({:.0f}, {:.0f}, {:.0f}), crate pad {}", i, pad.num,
-                  pad.x, pad.y, pad.z, weapons[i].crate_pad);
-    }
-    for (const stages::Pad& pad : spawns) {
-      REXLOG_INFO("[stages] TEMP spawn pad {}: ({:.0f}, {:.0f}, {:.0f}) room {} flags 0x{:05X}", pad.num, pad.x,
-                  pad.y, pad.z, pad.room, pad.flags);
-    }
-  }
   return buffer;
 }
 
@@ -1251,10 +1221,11 @@ uint32_t PdArenaRowLabel(PPCContext& ctx, uint8_t* base) {
   return name ? CallGuest(sub_821886E8, ctx, base, name) : 0;  // text id -> string
 }
 
-// TEMP_STAGES: the pad marking keys (PerfectDarkApp::DebugMarkPad).
+// The pad marking keys, for hand-picking solo stage layouts (PerfectDarkApp::MarkPad).
 REXCVAR_DEFINE_BOOL(pd_solo_mark_keys, false, "PerfectDark",
-                    "Testing: in a match on a solo stage, Home / End mark the pad you stand on as a spawn "
-                    "point / weapon spawn, Page Up undoes, Page Down logs the pads around you");
+                    "For hand-picking solo stage layouts (pd_stage_layouts.h): in a match on a solo stage, "
+                    "Home / End mark the pad you stand on as a spawn point / weapon spawn, Delete or Page Up "
+                    "undoes, Shift+Home or Page Down logs the pads around you");
 
 REXCVAR_DEFINE_BOOL(pd_solo_in_random, true, "PerfectDark",
                     "The Random arena can also pick the solo mission stages offered in the Arena "

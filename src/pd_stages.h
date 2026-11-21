@@ -29,15 +29,12 @@
 #pragma once
 
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <map>
 #include <string>
 #include <vector>
-
-#include <fmt/format.h>
 
 namespace pd::stages {
 
@@ -466,7 +463,7 @@ struct SoloCommand {
 struct CopiedProps {
   std::vector<uint8_t> bytes;  // the kept commands, links recounted (no end marker)
   std::vector<LiftActivation> lifts;  // the activate_lift commands whose lift was kept
-  std::map<uint8_t, int> kept, dropped;  // per object type, for the log
+  std::map<uint8_t, int> kept, dropped;  // per object type
   int unlocked = 0;       // doors that needed a key or were locked one way
   int still_closed = 0;   // doors the player cannot open (left as they are)
   int unlinked = 0;       // links cleared because their target was left out
@@ -835,72 +832,6 @@ inline std::vector<uint8_t> WeaponSpawnCommands(const std::vector<WeaponSpawn>& 
     if (weapons[i].crate_pad >= 0) AppendAmmoCrate(out, weapons[i].crate_pad);
   }
   return out;
-}
-
-// ---- TEMP_STAGES: debug descriptions ----------------------------------------------------
-
-// N64 object type names, for the solo setup's object counts in the log.
-inline const char* ObjectTypeName(uint8_t type) {
-  switch (type) {
-    case 0x01: return "door";
-    case 0x02: return "doorscale";
-    case 0x03: return "basic";
-    case 0x04: return "key";
-    case 0x05: return "alarm";
-    case 0x06: return "cctv";
-    case 0x07: return "ammocrate";
-    case 0x08: return "weapon";
-    case 0x09: return "chr";
-    case 0x0A: return "singlemonitor";
-    case 0x0B: return "multimonitor";
-    case 0x0C: return "hangingmonitors";
-    case 0x0D: return "autogun";
-    case 0x0E: return "linkguns";
-    case 0x0F: return "debris";
-    case 0x11: return "hat";
-    case 0x12: return "grenadeprob";
-    case 0x13: return "linkliftdoor";
-    case 0x14: return "multiammocrate";
-    case 0x15: return "shield";
-    case 0x16: return "tag";
-    case 0x17: return "beginobjective";
-    case 0x18: return "endobjective";
-    case 0x23: return "briefing";
-    case 0x24: return "gasbottle";
-    case 0x25: return "renameobj";
-    case 0x26: return "padlockeddoor";
-    case 0x27: return "truck";
-    case 0x28: return "heli";
-    case 0x2A: return "glass";
-    case 0x2B: return "safe";
-    case 0x2C: return "safeitem";
-    case 0x2D: return "tank";
-    case 0x2E: return "camerapreset";
-    case 0x2F: return "tintedglass";
-    case 0x30: return "lift";
-    case 0x31: return "conditionalscenery";
-    case 0x32: return "blockedpath";
-    case 0x33: return "hoverbike";
-    case 0x35: return "hoverprop";
-    case 0x36: return "fan";
-    case 0x37: return "hovercar";
-    case 0x38: return "padeffect";
-    case 0x39: return "chopper";
-    case 0x3A: return "mine";
-    case 0x3B: return "escastep";
-    default: return nullptr;  // objective conditions (0x19-0x22) and others: shown by number
-  }
-}
-
-// "door 52, chr 80, ..." from a count per object type.
-inline std::string DescribeTypeCounts(const std::map<uint8_t, int>& counts) {
-  std::string text;
-  for (const auto& [type, count] : counts) {
-    if (!text.empty()) text += ", ";
-    const char* name = ObjectTypeName(type);
-    text += name ? fmt::format("{} {}", name, count) : fmt::format("type 0x{:02X} {}", type, count);
-  }
-  return text;
 }
 
 // ---- Checking that every PC built the same setup ----------------------------
