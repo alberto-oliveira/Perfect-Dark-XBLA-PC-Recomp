@@ -85,6 +85,7 @@ REXCVAR_DECLARE(bool, pd_view_bob);
 REXCVAR_DECLARE(bool, pd_light_capture);
 REXCVAR_DECLARE(bool, pd_mp_weapon_shuffle);
 REXCVAR_DECLARE(bool, pd_solo_stages);
+REXCVAR_DECLARE(bool, pd_solo_mark_keys);
 #include <rex/logging/api.h>
 #include <rex/logging/macros.h>
 #include <rex/rex_app.h>
@@ -587,6 +588,8 @@ class PerfectDarkInputTracker : public rex::ui::ImGuiDialog {
   // sub_82343458 r3/r11 candidates (both proved byte-identical between
   // Horizontal/Vertical - watching for the actual write is the fallback).
   bool f1_was_down_ = false;
+  // TEMP_STAGES: the pad marking keys (pd_solo_mark_keys): Home, End, Page Up, Page Down.
+  bool mark_was_down_[5] = {};
 };
 
 class PerfectDarkApp : public rex::ReXApp {
@@ -6744,6 +6747,112 @@ class PerfectDarkApp : public rex::ReXApp {
     REXLOG_INFO("[menu_patch] arena list: {} solo stages added", stages::kSoloArenaCount);
   }
 
+  // ---- TEMP_STAGES: pad marking keys (pd_solo_mark_keys) ----------------------
+  // For hand-picking a solo stage's layout (pd_stage_layouts.h). In a match on a
+  // solo stage, as player 1 (local or online host: g_Vars.players[0]):
+  //   Home                     the pad nearest to you becomes a spawn point
+  //   End                      the pad nearest to you becomes a weapon spawn (in order: slot 1, 2...)
+  //   Page Up or Delete        undoes the last mark
+  //   Page Down or Shift+Home  logs where you are and the pads around you
+  // After each mark the log has the stage's marks so far as a table line. Marks
+  // are only kept until the game closes, and only change the stage once the line
+  // is in pd_stage_layouts.h (a new build).
+  enum class MarkKey { Spawn, Weapon, Undo, Where };
+  struct StageMarks {
+    std::vector<int> spawns, weapons;
+    std::vector<bool> last_was_weapon;  // for undo
+  };
+  static inline std::map<uint32_t, StageMarks> stage_marks_;  // by stage number
+
+  static void DebugMarkPad(MarkKey key) {
+    namespace stages = pd::stages;
+    PerfectDarkApp* app = current_instance_;
+    if (!app || !app->runtime() || !app->runtime()->memory()) return;
+    const uint8_t* base = app->runtime()->memory()->virtual_membase();
+
+    // The stage being played, if it is a solo stage in a match.
+    const uint32_t index = stages::U32(base + stages::kStageIndex);
+    if (stages::U32(base + stages::kMatchRunning) == 0 || index >= stages::kStageCount) {
+      REXLOG_INFO("[stages] mark: not in a match");
+      return;
+    }
+    const uint8_t* entry = base + stages::kStages + index * stages::kStageEntrySize;
+    const uint32_t stagenum = uint32_t(stages::S16(entry + stages::kStageId));
+    if (stages::SoloStageIndex(base, stagenum) < 0) {
+      REXLOG_INFO("[stages] mark: stage 0x{:02X} is not a solo stage", stagenum);
+      return;
+    }
+
+    // Player 0's position: g_Vars.players[0] (+100) -> its prop (+188) -> pos (+8).
+    const uint32_t player = stages::U32(base + stages::kGVars + 100);
+    const uint32_t prop = player ? stages::U32(base + player + 188) : 0;
+    // The stage's pads file, as the game loaded it, and its size.
+    const uint32_t pads_at = stages::U32(base + stages::kStageSetupPadsFile);
+    if (!prop || !pads_at) {
+      REXLOG_INFO("[stages] mark: no player or no pads file yet");
+      return;
+    }
+    stages::Pad me;
+    me.x = stages::F32(base + prop + 8);
+    me.y = stages::F32(base + prop + 12);
+    me.z = stages::F32(base + prop + 16);
+    stages::PadsFile pads;
+    pads.data = base + pads_at;
+    pads.size = stages::U32(base + stages::kFileInfo + uint32_t(stages::U16(entry + stages::kStagePadsFile)) * 8);
+
+    StageMarks& marks = stage_marks_[stagenum];
+    switch (key) {
+      case MarkKey::Spawn:
+      case MarkKey::Weapon: {
+        const std::vector<stages::Pad> nearest = stages::NearestPads(pads, me, 1, true);
+        if (nearest.empty()) {
+          REXLOG_INFO("[stages] mark: no pad near ({:.0f}, {:.0f}, {:.0f})", me.x, me.y, me.z);
+          return;
+        }
+        const stages::Pad& pad = nearest.front();
+        const bool weapon = key == MarkKey::Weapon;
+        std::vector<int>& list = weapon ? marks.weapons : marks.spawns;
+        list.push_back(pad.num);
+        marks.last_was_weapon.push_back(weapon);
+        REXLOG_INFO("[stages] mark: {} {} = pad {} ({:.0f}, {:.0f}, {:.0f}), {:.0f} units from you",
+                    weapon ? "weapon" : "spawn", list.size(), pad.num, pad.x, pad.y, pad.z,
+                    std::sqrt(stages::Distance2(pad, me)));
+        MessageBeep(MB_OK);
+        break;
+      }
+      case MarkKey::Undo: {
+        if (marks.last_was_weapon.empty()) {
+          REXLOG_INFO("[stages] mark: nothing to undo");
+          return;
+        }
+        std::vector<int>& list = marks.last_was_weapon.back() ? marks.weapons : marks.spawns;
+        REXLOG_INFO("[stages] mark: undid {} {} (pad {})", marks.last_was_weapon.back() ? "weapon" : "spawn",
+                    list.size(), list.back());
+        list.pop_back();
+        marks.last_was_weapon.pop_back();
+        MessageBeep(MB_ICONHAND);  // a different sound from a mark
+        break;
+      }
+      case MarkKey::Where: {
+        REXLOG_INFO("[stages] mark: you are at ({:.0f}, {:.0f}, {:.0f}) on stage 0x{:02X}", me.x, me.y, me.z,
+                    stagenum);
+        for (const stages::Pad& pad : stages::NearestPads(pads, me, 5, false)) {
+          REXLOG_INFO("[stages] mark:   pad {} ({:.0f}, {:.0f}, {:.0f}) {:.0f} away, flags 0x{:05X}, lift {}{}",
+                      pad.num, pad.x, pad.y, pad.z, std::sqrt(stages::Distance2(pad, me)), pad.flags, pad.lift,
+                      stages::UsableForSpawn(pad) ? "" : " (not usable)");
+        }
+        return;  // nothing changed: no table line
+      }
+    }
+    const auto join = [](const std::vector<int>& v) {
+      std::string s;
+      for (size_t i = 0; i < v.size(); ++i) s += (i ? ", " : "") + std::to_string(v[i]);
+      return s;
+    };
+    REXLOG_INFO("[stages] mark: table line: {{0x{:02X}, {{{}}}, {{{}}}}},", stagenum, join(marks.spawns),
+                join(marks.weapons));
+  }
+
   // ---- Online Handicaps dialog (handicap mod part 3) ---------------------------
   //
   // The vanilla Handicaps dialog (0x825DE0BC) has 4 sliders, one per player
@@ -9338,6 +9447,25 @@ inline void PerfectDarkInputTracker::OnDraw(ImGuiIO& /*io*/) {
       MessageBeep(MB_OK);  // heard: the capture was taken
     }
     capture_was_down_ = capture_down;
+
+    // TEMP_STAGES: the pad marking keys, for hand-picked solo stage layouts.
+    if (REXCVAR_GET(pd_solo_mark_keys)) {
+      // Undo and Where have two keys each, in case a keyboard lacks one of them.
+      // Home does Where while Shift is held, and Spawn otherwise.
+      using Mark = PerfectDarkApp::MarkKey;
+      const bool shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+      static constexpr struct { int vk; Mark action; } kMarkKeys[5] = {
+          {VK_HOME, Mark::Spawn}, {VK_END, Mark::Weapon}, {VK_PRIOR, Mark::Undo},
+          {VK_DELETE, Mark::Undo}, {VK_NEXT, Mark::Where}};
+      for (int i = 0; i < 5; ++i) {
+        const bool down = (GetAsyncKeyState(kMarkKeys[i].vk) & 0x8000) != 0;
+        if (down && !mark_was_down_[i] && app_ && app_->HasWindowFocus()) {
+          const Mark action = (kMarkKeys[i].vk == VK_HOME && shift) ? Mark::Where : kMarkKeys[i].action;
+          PerfectDarkApp::DebugMarkPad(action);
+        }
+        mark_was_down_[i] = down;
+      }
+    }
 
     // Everything below is a developer diagnostic (see pd_dev_hotkeys).
     if (!REXCVAR_GET(pd_dev_hotkeys)) return;

@@ -5,6 +5,7 @@
 #include "perfect_dark_app.h"
 #include "pd_weapons.h"  // more multiplayer weapons, shuffled weapon spawns
 #include "pd_stages.h"   // the solo mission stages as Combat Simulator arenas
+#include "pd_stage_layouts.h"  // their hand-picked spawn and weapon pads
 
 #include <rex/chrono/clock.h>
 #include <rex/diag_timing.h>
@@ -1089,7 +1090,13 @@ uint32_t PdSoloStageSetup(PPCContext& ctx, uint8_t* base, uint32_t loaded) {
   load(stages::U16(entry + stages::kStageSetupFile), &solo);
 
   const int start_pad = stages::SoloStartPad(solo.data, solo.size);
-  const std::vector<stages::Pad> spawns = stages::ChooseSpawns(pads, start_pad);
+  // Hand-picked spawn and weapon pads (pd_stage_layouts.h), if the stage has any.
+  const stages::StageLayout* layout = stages::FindStageLayout(uint32_t(stagenum));
+  const std::vector<int> no_pads;
+  const std::vector<int>& chosen_spawns = layout ? layout->spawns : no_pads;
+  const std::vector<int>& chosen_weapons = layout ? layout->weapons : no_pads;
+
+  const std::vector<stages::Pad> spawns = stages::ChooseSpawns(pads, start_pad, chosen_spawns);
   if (spawns.empty()) {
     REXLOG_ERROR("[stages] stage 0x{:02X}: no pad to spawn on; keeping the game's empty setup", stagenum);
     return loaded;
@@ -1113,7 +1120,7 @@ uint32_t PdSoloStageSetup(PPCContext& ctx, uint8_t* base, uint32_t loaded) {
       stages::SoloLiftActivations(solo.data, solo.size, base + stages::kAiCommandLengths);
   const stages::CopiedProps props = stages::CopySoloProps(solo.data, solo.size, cmds, solo_lifts);
 
-  const std::vector<stages::WeaponSpawn> weapons = stages::ChooseWeaponSpawns(pads, spawns);
+  const std::vector<stages::WeaponSpawn> weapons = stages::ChooseWeaponSpawns(pads, spawns, chosen_weapons);
 
   stages::SetupWriter writer;
   for (const stages::Pad& pad : spawns) writer.spawn_pads.push_back(pad.num);
@@ -1144,6 +1151,8 @@ uint32_t PdSoloStageSetup(PPCContext& ctx, uint8_t* base, uint32_t loaded) {
   {
     REXLOG_INFO("[stages] TEMP pads file: {} pads, {} waypoints, {} bytes; solo setup {} bytes, start pad {}",
                 pads.NumPads(), pads.WaypointPads().size(), pads.size, solo.size, start_pad);
+    REXLOG_INFO("[stages] TEMP hand-picked (pd_stage_layouts.h): {} spawn pads, {} weapon pads",
+                chosen_spawns.size(), chosen_weapons.size());
     REXLOG_INFO("[stages] TEMP kept: {}", stages::DescribeTypeCounts(props.kept));
     REXLOG_INFO("[stages] TEMP left out: {}", stages::DescribeTypeCounts(props.dropped));
     REXLOG_INFO("[stages] TEMP doors the player cannot open (left closed): {}; links cleared: {}",
@@ -1185,6 +1194,11 @@ uint32_t PdArenaRowLabel(PPCContext& ctx, uint8_t* base) {
   const uint16_t name = stages::SoloStageName(base, base[stages::kMpSetupStage]);
   return name ? CallGuest(sub_821886E8, ctx, base, name) : 0;  // text id -> string
 }
+
+// TEMP_STAGES: the pad marking keys (PerfectDarkApp::DebugMarkPad).
+REXCVAR_DEFINE_BOOL(pd_solo_mark_keys, false, "PerfectDark",
+                    "Testing: in a match on a solo stage, Home / End mark the pad you stand on as a spawn "
+                    "point / weapon spawn, Page Up undoes, Page Down logs the pads around you");
 
 REXCVAR_DEFINE_BOOL(pd_solo_in_random, true, "PerfectDark",
                     "The Random arena can also pick the solo mission stages offered in the Arena "

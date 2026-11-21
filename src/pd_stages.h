@@ -79,6 +79,10 @@ constexpr uint32_t kSoloStageSize = 12;
 constexpr int kSoloStageCount = 21;
 constexpr uint32_t kSoloStageName = 10;
 
+// g_StageSetup (the N64's struct stagesetup, filled in when a stage loads): +0x1C
+// the address of the stage's pads file.
+constexpr uint32_t kStageSetupPadsFile = 0x82643828 + 0x1C;
+
 // g_FileInfo: 8 bytes per file id: +0 the loaded size of the file's last load.
 constexpr uint32_t kFileInfo = 0x826302F0;
 
@@ -297,6 +301,20 @@ inline std::vector<Pad> PickSpread(const std::vector<Pad>& candidates, const Pad
     next = best;
   }
   return picked;
+}
+
+// The `count` pads nearest to a point, nearest first; with `usable_only`, only
+// pads a player can be put on (UsableForSpawn). For the pad marking keys.
+inline std::vector<Pad> NearestPads(const PadsFile& pads, const Pad& at, size_t count, bool usable_only) {
+  std::vector<Pad> all;
+  Pad pad;
+  for (int num = 0; num < pads.NumPads(); ++num) {
+    if (pads.Read(num, &pad) && (!usable_only || UsableForSpawn(pad))) all.push_back(pad);
+  }
+  std::sort(all.begin(), all.end(),
+            [&](const Pad& a, const Pad& b) { return Distance2(a, at) < Distance2(b, at); });
+  if (all.size() > count) all.resize(count);
+  return all;
 }
 
 // ---- Solo setup file -----------------------------------------------------------------
@@ -676,14 +694,19 @@ class SetupWriter {
   }
 };
 
-// Chooses the spawn pads of a solo stage: up to 24 of the bots' waypoints that a
-// player can stand on, spread over the stage, starting from the solo start pad.
-// Falls back to every usable pad if the stage has no waypoints, and to the solo
-// start pad alone if nothing else is usable (the game crashes with no spawn
-// point at all: it picks one with random() % count).
-inline std::vector<Pad> ChooseSpawns(const PadsFile& pads, int start_pad) {
+// Chooses the spawn pads of a solo stage. With hand-picked pads (`chosen`, from
+// pd_stage_layouts.h) those are the spawn points. Otherwise: up to 24 of the bots'
+// waypoints that a player can stand on, spread over the stage, starting from the
+// solo start pad. Falls back to every usable pad if the stage has no waypoints,
+// and to the solo start pad alone if nothing else is usable (the game crashes with
+// no spawn point at all: it picks one with random() % count).
+inline std::vector<Pad> ChooseSpawns(const PadsFile& pads, int start_pad, const std::vector<int>& chosen = {}) {
   std::vector<Pad> candidates;
   Pad pad;
+  for (const int num : chosen) {
+    if (candidates.size() < size_t(kMaxSpawns) && pads.Read(num, &pad)) candidates.push_back(pad);
+  }
+  if (!candidates.empty()) return candidates;
   for (const int num : pads.WaypointPads()) {
     if (pads.Read(num, &pad) && UsableForSpawn(pad)) candidates.push_back(pad);
   }
@@ -719,19 +742,31 @@ struct WeaponSpawn {
   int crate_pad = -1;  // -1 = no crate (no pad close enough)
 };
 
-// The weapon spawns: 16 waypoints spread over the stage and kept away from the
-// spawn points (so nobody is born standing on a gun), each with an ammo crate on
-// the nearest free waypoint, if one is close and on the same floor.
-inline std::vector<WeaponSpawn> ChooseWeaponSpawns(const PadsFile& pads, const std::vector<Pad>& spawns) {
-  std::vector<Pad> candidates;
-  Pad pad;
-  for (const int num : pads.WaypointPads()) {
-    if (!pads.Read(num, &pad) || !UsableForSpawn(pad)) continue;
-    const bool is_spawn = std::any_of(spawns.begin(), spawns.end(), [&](const Pad& s) { return s.num == num; });
-    if (!is_spawn) candidates.push_back(pad);
-  }
+// The weapon spawns, 16 of them (one per location). Hand-picked pads (`chosen`,
+// from pd_stage_layouts.h) take the first locations, in their order. The rest are
+// waypoints spread over the stage, kept away from the spawn points (so nobody is
+// born standing on a gun) and from the hand-picked weapons. Each weapon gets an
+// ammo crate on the nearest free waypoint, if one is close and on the same floor.
+inline std::vector<WeaponSpawn> ChooseWeaponSpawns(const PadsFile& pads, const std::vector<Pad>& spawns,
+                                                   const std::vector<int>& chosen = {}) {
   std::vector<WeaponSpawn> weapons;
-  for (const Pad& p : PickSpread(candidates, Pad{}, kWeaponLocations, spawns)) weapons.push_back({p, -1});
+  Pad pad;
+  for (const int num : chosen) {
+    if (weapons.size() < size_t(kWeaponLocations) && pads.Read(num, &pad)) weapons.push_back({pad, -1});
+  }
+  // Pads the automatic picks keep away from: the spawn points and the weapons so far.
+  std::vector<Pad> taken = spawns;
+  for (const WeaponSpawn& w : weapons) taken.push_back(w.pad);
+  const auto is_taken = [&](int num) {
+    return std::any_of(taken.begin(), taken.end(), [&](const Pad& p) { return p.num == num; });
+  };
+  std::vector<Pad> candidates;
+  for (const int num : pads.WaypointPads()) {
+    if (pads.Read(num, &pad) && UsableForSpawn(pad) && !is_taken(num)) candidates.push_back(pad);
+  }
+  for (const Pad& p : PickSpread(candidates, Pad{}, size_t(kWeaponLocations) - weapons.size(), taken)) {
+    weapons.push_back({p, -1});
+  }
 
   // Crates: nearest candidate not already used by a weapon or another crate.
   std::vector<int> used;
