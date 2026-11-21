@@ -698,6 +698,10 @@ REXCVAR_DEFINE_INT32(pd_mp_weapon_shuffle_seed, 0, "PerfectDark",
                      "With pd_mp_weapon_shuffle: 0 = new choices every match, any other number = "
                      "the same choices every time (for testing)");
 
+// TEMP_STAGES: for testing the setup check (CheckHostStageSetup) on matching builds.
+REXCVAR_DEFINE_BOOL(pd_solo_fake_mismatch, false, "PerfectDark",
+                    "Testing: a joined PC acts as if its solo stage setup differed from the host's");
+
 namespace {
 // A joined PC starts the stage at about the same time as the host, whose choice
 // arrives within a second (the joined PC asks twice a second).
@@ -751,6 +755,43 @@ bool HostWeaponsConfig(pd::weapons::MatchConfig* out) {
   REXLOG_INFO("[weapons] host's choice #{} after {} ms", blob.seq, waited.count());
   return true;
 }
+
+// On a joined PC that built a solo stage's setup (PdSoloStageSetup): compares it
+// with the host's, by fingerprint. A different one means the two PCs run
+// different builds, and the match would not play the same on both: it says so
+// on screen. The host sent its fingerprint as it built its setup, before the
+// weapon choice this PC has just waited for, so it is normally here already.
+void CheckHostStageSetup() {
+  namespace netplay = rex::kernel::xam::netplay;
+  namespace stages = pd::stages;
+  const int built = stages::g_built_stage;
+  stages::g_built_stage = -1;
+  if (built < 0) return;  // not a solo stage
+
+  netplay::HostBlob blob;
+  int host_stage = -1;
+  uint32_t host_fingerprint = 0;
+  const auto has_it = [&] {
+    return netplay::LatestHostBlob(stages::kBlobKey, &blob) &&
+           stages::DecodeBlob(blob.data, &host_stage, &host_fingerprint) && host_stage == built;
+  };
+  const auto start = std::chrono::steady_clock::now();
+  bool found = has_it();
+  while (!found && std::chrono::steady_clock::now() - start < kWeaponsWait) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    found = has_it();
+  }
+  if (!found) {
+    REXLOG_WARN("[stages] stage 0x{:02X}: no setup fingerprint from the host (an older build?)", built);
+    netplay::ShowNotice("The host's game may be a different build: this stage may not match theirs");
+  } else if (host_fingerprint != stages::g_built_fingerprint || REXCVAR_GET(pd_solo_fake_mismatch)) {
+    REXLOG_WARN("[stages] stage 0x{:02X}: this PC's setup (fingerprint {:08X}) differs from the host's ({:08X}): "
+                "different builds", built, stages::g_built_fingerprint, host_fingerprint);
+    netplay::ShowNotice("Your game is a different build from the host's: this stage doesn't match theirs");
+  } else {
+    REXLOG_INFO("[stages] stage 0x{:02X}: same setup as the host's (fingerprint {:08X})", built, host_fingerprint);
+  }
+}
 }  // namespace
 
 // setupCreateProps' start (sub_821FFCC8): the stage's props are about to be made.
@@ -772,6 +813,7 @@ void PdSetupCreateProps(PPCContext& ctx, uint8_t* base) {
   if (netplay::IsJoinedSession()) {
     source = "host";
     if (!HostWeaponsConfig(&weapons::g_match)) weapons::g_match = {};
+    CheckHostStageSetup();
   } else {
     weapons::g_match = OwnWeaponsConfig();
     if (netplay::IsHostingSession()) {
@@ -1059,6 +1101,7 @@ uint32_t CallGuest(Fn fn, PPCContext& ctx, uint8_t* base, uint32_t r3, uint32_t 
 // multiplayer setup and returns it instead (else the buffer it was given).
 uint32_t PdSoloStageSetup(PPCContext& ctx, uint8_t* base, uint32_t loaded) {
   namespace stages = pd::stages;
+  stages::g_built_stage = -1;  // until a solo stage's setup is built below
   if (!REXCVAR_GET(pd_solo_stages)) return loaded;
   if (stages::U32(base + stages::kMatchRunning) == 0) return loaded;  // the solo setup was loaded
   const uint32_t index = stages::U32(base + stages::kStageIndex);
@@ -1139,6 +1182,19 @@ uint32_t PdSoloStageSetup(PPCContext& ctx, uint8_t* base, uint32_t loaded) {
     return loaded;
   }
   std::memcpy(base + buffer, setup.data(), setup.size());
+
+  // For the check that every PC built the same setup (CheckHostStageSetup): the
+  // host sends its fingerprint; a joined PC compares it once the props are made.
+  stages::g_built_stage = stagenum;
+  stages::g_built_fingerprint = stages::Fingerprint(setup);
+  namespace netplay = rex::kernel::xam::netplay;
+  if (netplay::IsHostingSession()) {
+    const std::vector<uint8_t> blob = stages::EncodeBlob(stagenum, stages::g_built_fingerprint);
+    netplay::SetHostBlob(stages::kBlobKey, blob.data(), blob.size());
+  } else if (netplay::IsJoinedSession()) {
+    netplay::HostBlob unused;
+    netplay::LatestHostBlob(stages::kBlobKey, &unused);  // starts listening for the host's
+  }
 
   int kept_total = 0;
   for (const auto& [type, count] : props.kept) kept_total += count;

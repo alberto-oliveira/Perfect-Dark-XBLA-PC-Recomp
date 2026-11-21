@@ -903,4 +903,38 @@ inline std::string DescribeTypeCounts(const std::map<uint8_t, int>& counts) {
   return text;
 }
 
+// ---- Checking that every PC built the same setup ----------------------------
+// Each PC builds a solo stage's setup itself, from its own build's code and
+// layout table (pd_stage_layouts.h). A PC with an older build would build a
+// different one: weapons in other places, other spawn points. So the host sends
+// a fingerprint of the setup it built (netplay::SetHostBlob, key kBlobKey), and
+// a joined PC compares it with its own: version, stage, fingerprint (4 bytes,
+// big-endian).
+constexpr uint32_t kBlobKey = 0x53544745;  // "STGE"
+constexpr uint8_t kBlobVersion = 1;
+
+// The setup this PC built last, for the check (stage -1: none this load).
+inline int g_built_stage = -1;
+inline uint32_t g_built_fingerprint = 0;
+
+// A fingerprint of a setup's bytes (FNV-1a): two different setups get the same
+// one only by a very rare chance.
+inline uint32_t Fingerprint(const std::vector<uint8_t>& bytes) {
+  uint32_t hash = 2166136261u;
+  for (const uint8_t b : bytes) hash = (hash ^ b) * 16777619u;
+  return hash;
+}
+
+inline std::vector<uint8_t> EncodeBlob(int stagenum, uint32_t fingerprint) {
+  return {kBlobVersion, uint8_t(stagenum), uint8_t(fingerprint >> 24), uint8_t(fingerprint >> 16),
+          uint8_t(fingerprint >> 8), uint8_t(fingerprint)};
+}
+
+inline bool DecodeBlob(const std::vector<uint8_t>& blob, int* stagenum, uint32_t* fingerprint) {
+  if (blob.size() < 6 || blob[0] != kBlobVersion) return false;
+  *stagenum = blob[1];
+  *fingerprint = U32(blob.data() + 2);
+  return true;
+}
+
 }  // namespace pd::stages
