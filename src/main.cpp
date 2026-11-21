@@ -4,6 +4,8 @@
 
 #include "perfect_dark_app.h"
 #include "pd_weapons.h"  // more multiplayer weapons, shuffled weapon spawns
+#include "pd_stages.h"   // the solo mission stages as Combat Simulator arenas
+#include "pd_stage_layouts.h"  // their hand-picked spawn and weapon pads
 
 #include <rex/chrono/clock.h>
 #include <rex/diag_timing.h>
@@ -15,6 +17,7 @@
 #include <algorithm>
 #include <csignal>
 #include <filesystem>
+#include <random>
 #include <thread>
 #include <vector>
 
@@ -748,6 +751,43 @@ bool HostWeaponsConfig(pd::weapons::MatchConfig* out) {
   REXLOG_INFO("[weapons] host's choice #{} after {} ms", blob.seq, waited.count());
   return true;
 }
+
+// On a joined PC that built a solo stage's setup (PdSoloStageSetup): compares it
+// with the host's, by fingerprint. A different one means the two PCs run
+// different builds, and the match would not play the same on both: it says so
+// on screen. The host sent its fingerprint as it built its setup, before the
+// weapon choice this PC has just waited for, so it is normally here already.
+void CheckHostStageSetup() {
+  namespace netplay = rex::kernel::xam::netplay;
+  namespace stages = pd::stages;
+  const int built = stages::g_built_stage;
+  stages::g_built_stage = -1;
+  if (built < 0) return;  // not a solo stage
+
+  netplay::HostBlob blob;
+  int host_stage = -1;
+  uint32_t host_fingerprint = 0;
+  const auto has_it = [&] {
+    return netplay::LatestHostBlob(stages::kBlobKey, &blob) &&
+           stages::DecodeBlob(blob.data, &host_stage, &host_fingerprint) && host_stage == built;
+  };
+  const auto start = std::chrono::steady_clock::now();
+  bool found = has_it();
+  while (!found && std::chrono::steady_clock::now() - start < kWeaponsWait) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    found = has_it();
+  }
+  if (!found) {
+    REXLOG_WARN("[stages] stage 0x{:02X}: no setup fingerprint from the host (an older build?)", built);
+    netplay::ShowNotice("The host's game may be a different build: this stage may not match theirs");
+  } else if (host_fingerprint != stages::g_built_fingerprint) {
+    REXLOG_WARN("[stages] stage 0x{:02X}: this PC's setup (fingerprint {:08X}) differs from the host's ({:08X}): "
+                "different builds", built, stages::g_built_fingerprint, host_fingerprint);
+    netplay::ShowNotice("Your game is a different build from the host's: this stage doesn't match theirs");
+  } else {
+    REXLOG_INFO("[stages] stage 0x{:02X}: same setup as the host's (fingerprint {:08X})", built, host_fingerprint);
+  }
+}
 }  // namespace
 
 // setupCreateProps' start (sub_821FFCC8): the stage's props are about to be made.
@@ -769,6 +809,7 @@ void PdSetupCreateProps(PPCContext& ctx, uint8_t* base) {
   if (netplay::IsJoinedSession()) {
     source = "host";
     if (!HostWeaponsConfig(&weapons::g_match)) weapons::g_match = {};
+    CheckHostStageSetup();
   } else {
     weapons::g_match = OwnWeaponsConfig();
     if (netplay::IsHostingSession()) {
@@ -1031,6 +1072,181 @@ void PdWeaponsFrame() {
   if (!netplay::IsJoinedSession()) return;
   netplay::HostBlob blob;
   netplay::LatestHostBlob(pd::weapons::kBlobKey, &blob);
+}
+
+// ---- Solo stages as arenas (pd_stages.h) ---------------------------------------------
+
+REXCVAR_DEFINE_BOOL(pd_solo_stages, true, "PerfectDark",
+                    "Solo mission stages can be Combat Simulator arenas: their missing multiplayer "
+                    "setup (spawn points, ...) is built when the stage loads. Every player needs this "
+                    "build");
+namespace {
+// Calls a game function with up to two arguments; returns its r3.
+template <typename Fn>
+uint32_t CallGuest(Fn fn, PPCContext& ctx, uint8_t* base, uint32_t r3, uint32_t r4 = 0) {
+  PPCContext call = ctx;
+  call.r3.u64 = r3;
+  call.r4.u64 = r4;
+  fn(call, base);
+  return call.r3.u32;
+}
+}  // namespace
+
+// setup_load_files, right after the multiplayer setup file was loaded (r3 = the
+// buffer). For a solo stage that file is an empty stub: this builds the stage's
+// multiplayer setup and returns it instead (else the buffer it was given).
+uint32_t PdSoloStageSetup(PPCContext& ctx, uint8_t* base, uint32_t loaded) {
+  namespace stages = pd::stages;
+  stages::g_built_stage = -1;  // until a solo stage's setup is built below
+  if (!REXCVAR_GET(pd_solo_stages)) return loaded;
+  if (stages::U32(base + stages::kMatchRunning) == 0) return loaded;  // the solo setup was loaded
+  const uint32_t index = stages::U32(base + stages::kStageIndex);
+  if (index >= stages::kStageCount) return loaded;
+  const uint8_t* entry = base + stages::kStages + index * stages::kStageEntrySize;
+  const int stagenum = stages::S16(entry + stages::kStageId);
+  if (stages::SoloStageIndex(base, uint32_t(stagenum)) < 0) return loaded;  // a real arena
+
+  // A scenario that needs hills or case spots, which the solo stages lack, is
+  // played as Combat. Every PC has the host's scenario, so all of them switch.
+  // The game creates the scenario's objects later, from the setup built below.
+  const uint8_t scenario = base[stages::kMpSetupScenario];
+  if (!stages::ScenarioPlayableOnSoloStage(scenario)) {
+    base[stages::kMpSetupScenario] = stages::kScenarioCombat;
+    REXLOG_WARN("[stages] stage 0x{:02X}: scenario {} needs spots solo stages lack; playing Combat", stagenum,
+                scenario);
+  }
+
+  // Load the stage's pads file and solo setup with the game's own loader
+  // (file_load_to_new: a new buffer in the stage's memory, freed with the stage).
+  // The game loads the pads file again itself a moment later.
+  const auto load = [&](uint16_t file, stages::PadsFile* out) {
+    const uint32_t buffer = CallGuest(sub_82197200, ctx, base, file, stages::kLoadMethodDefault);
+    out->data = base + buffer;
+    out->size = stages::U32(base + stages::kFileInfo + uint32_t(file) * 8);
+  };
+  stages::PadsFile pads, solo;
+  load(stages::U16(entry + stages::kStagePadsFile), &pads);
+  load(stages::U16(entry + stages::kStageSetupFile), &solo);
+
+  const int start_pad = stages::SoloStartPad(solo.data, solo.size);
+  // Hand-picked spawn and weapon pads (pd_stage_layouts.h), if the stage has any.
+  const stages::StageLayout* layout = stages::FindStageLayout(uint32_t(stagenum));
+  const std::vector<int> no_pads;
+  const std::vector<int>& chosen_spawns = layout ? layout->spawns : no_pads;
+  const std::vector<int>& chosen_weapons = layout ? layout->weapons : no_pads;
+
+  const std::vector<stages::Pad> spawns = stages::ChooseSpawns(pads, start_pad, chosen_spawns);
+  if (spawns.empty()) {
+    REXLOG_ERROR("[stages] stage 0x{:02X}: no pad to spawn on; keeping the game's empty setup", stagenum);
+    return loaded;
+  }
+
+  // The solo setup's props, one command at a time (each command's length comes
+  // from the game's own setup_get_cmd_length, sub_821FD198).
+  std::vector<stages::SoloCommand> cmds;
+  {
+    const uint32_t solo_guest = uint32_t(solo.data - base);
+    uint32_t offset = stages::U32(solo.data + 0x10);
+    for (int n = 0; n < 10000 && offset + 4 <= solo.size; ++n) {
+      if (solo.data[offset + 3] == stages::kTypeEnd) break;
+      const uint32_t words = CallGuest(sub_821FD198, ctx, base, solo_guest + offset);
+      if (words == 0 || offset + words * 4 > solo.size) break;
+      cmds.push_back({offset, words});
+      offset += words * 4;
+    }
+  }
+  const std::vector<stages::LiftActivation> solo_lifts =
+      stages::SoloLiftActivations(solo.data, solo.size, base + stages::kAiCommandLengths);
+  const stages::CopiedProps props = stages::CopySoloProps(solo.data, solo.size, cmds, solo_lifts);
+
+  const std::vector<stages::WeaponSpawn> weapons = stages::ChooseWeaponSpawns(pads, spawns, chosen_weapons);
+
+  stages::SetupWriter writer;
+  for (const stages::Pad& pad : spawns) writer.spawn_pads.push_back(pad.num);
+  // The weapon spawns first, as in the arenas' own setups; the solo objects after
+  // them (their links are relative, so moving the block changes nothing).
+  writer.props = stages::WeaponSpawnCommands(weapons);
+  writer.props.insert(writer.props.end(), props.bytes.begin(), props.bytes.end());
+  writer.lifts = props.lifts;
+  const std::vector<uint8_t> setup = writer.Build();
+
+  // The new setup goes in the stage's memory too (the allocator file_load_to_new
+  // uses: size, pool 4 = the stage's).
+  const uint32_t buffer = CallGuest(sub_8218DB98, ctx, base, uint32_t(setup.size()), 4);
+  if (!buffer) {
+    REXLOG_ERROR("[stages] stage 0x{:02X}: no memory for the setup ({} bytes)", stagenum, setup.size());
+    return loaded;
+  }
+  std::memcpy(base + buffer, setup.data(), setup.size());
+
+  // For the check that every PC built the same setup (CheckHostStageSetup): the
+  // host sends its fingerprint; a joined PC compares it once the props are made.
+  stages::g_built_stage = stagenum;
+  stages::g_built_fingerprint = stages::Fingerprint(setup);
+  namespace netplay = rex::kernel::xam::netplay;
+  if (netplay::IsHostingSession()) {
+    const std::vector<uint8_t> blob = stages::EncodeBlob(stagenum, stages::g_built_fingerprint);
+    netplay::SetHostBlob(stages::kBlobKey, blob.data(), blob.size());
+  } else if (netplay::IsJoinedSession()) {
+    netplay::HostBlob unused;
+    netplay::LatestHostBlob(stages::kBlobKey, &unused);  // starts listening for the host's
+  }
+
+  int kept_total = 0;
+  for (const auto& [type, count] : props.kept) kept_total += count;
+  REXLOG_INFO("[stages] stage 0x{:02X}: built its multiplayer setup ({} bytes at 0x{:08X}): {} spawn points, "
+              "{} weapon spawns, {} of the solo setup's {} commands kept, {} doors unlocked, {} lifts switched on",
+              stagenum, setup.size(), buffer, spawns.size(), weapons.size(), kept_total, cmds.size(),
+              props.unlocked, props.lifts.size());
+
+  return buffer;
+}
+
+// The arena name lists (sub_8227E590, sub_82281160) read a stage's name id from a
+// 17-entry table, one entry past its end for a stage not in it (`offset` = the
+// entry * 4). For such a stage: the solo stage's own name, or "Random".
+uint32_t PdStageNameText(const uint8_t* base, uint32_t offset, uint32_t text) {
+  namespace stages = pd::stages;
+  if (offset < stages::kArenaNameCount * 4) return text;
+  const uint16_t name = stages::SoloStageName(base, base[stages::kMpSetupStage]);
+  return name ? name : stages::U32(base + stages::kArenaNameTexts + 16 * 4);
+}
+
+// The Arena row of Game Setup (its label, sub_821DA2C0) for a stage missing from
+// g_MpArenas, where the game would show an empty label: the solo stage's name, as
+// a string. 0 when the stage is not a solo stage either (the game's label stays).
+uint32_t PdArenaRowLabel(PPCContext& ctx, uint8_t* base) {
+  namespace stages = pd::stages;
+  const uint16_t name = stages::SoloStageName(base, base[stages::kMpSetupStage]);
+  return name ? CallGuest(sub_821886E8, ctx, base, name) : 0;  // text id -> string
+}
+
+// The pad marking keys, for hand-picking solo stage layouts (PerfectDarkApp::MarkPad).
+REXCVAR_DEFINE_BOOL(pd_solo_mark_keys, false, "PerfectDark",
+                    "For hand-picking solo stage layouts (pd_stage_layouts.h): in a match on a solo stage, "
+                    "Home / End mark the pad you stand on as a spawn point / weapon spawn, Delete or Page Up "
+                    "undoes, Shift+Home or Page Down logs the pads around you");
+
+REXCVAR_DEFINE_BOOL(pd_solo_in_random, true, "PerfectDark",
+                    "The Random arena can also pick the solo mission stages offered in the Arena "
+                    "menu (only the host's setting counts online)");
+
+// The Random arena's pick (sub_821D51A0, which returns a stage number): the game
+// picks one of the 16 arenas. With pd_solo_in_random the solo stages of the Arena
+// menu join the draw, all with the same chance. False: the game picks. Online only
+// the host picks; the joined PCs get its stage.
+bool PdRandomArena(uint32_t* stage) {
+  namespace stages = pd::stages;
+  if (!REXCVAR_GET(pd_solo_stages) || !REXCVAR_GET(pd_solo_in_random)) return false;
+  const uint8_t* base = rex::system::kernel_state()->memory()->virtual_membase();
+  static std::mt19937 rng(std::random_device{}());
+  const int arenas = stages::kMpArenaRandomIndex;  // the 16 real arenas, not Random itself
+  std::uniform_int_distribution<int> pick(0, arenas + stages::kSoloArenaCount - 1);
+  const int i = pick(rng);
+  *stage = i < arenas ? uint32_t(stages::S16(base + stages::kMpArenas + uint32_t(i) * stages::kMpArenaSize))
+                      : stages::kSoloArenas[i - arenas];
+  REXLOG_INFO("[stages] random arena: stage 0x{:02X}", *stage);
+  return true;
 }
 
 // Each frame on a joined PC (from PdNoteGameFrame).

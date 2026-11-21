@@ -52,6 +52,7 @@
 #include "pd_update.h"         // Check for Updates
 #include "pd_handicap.h"       // pd_handicaps: online handicaps by gamertag
 #include "pd_weapons.h"        // pd_mp_weapons: weapon slots 7-16, shuffled respawns
+#include "pd_stages.h"         // pd_solo_stages: the solo mission stages as arenas
 #include <rex/input/sdl/sdl_input_driver.h>
 #include <rex/cvar.h>
 #include <rex/diag_timing.h>
@@ -83,6 +84,8 @@ REXCVAR_DECLARE(double, pd_shine);
 REXCVAR_DECLARE(bool, pd_view_bob);
 REXCVAR_DECLARE(bool, pd_light_capture);
 REXCVAR_DECLARE(bool, pd_mp_weapon_shuffle);
+REXCVAR_DECLARE(bool, pd_solo_stages);
+REXCVAR_DECLARE(bool, pd_solo_mark_keys);
 #include <rex/logging/api.h>
 #include <rex/logging/macros.h>
 #include <rex/rex_app.h>
@@ -585,6 +588,8 @@ class PerfectDarkInputTracker : public rex::ui::ImGuiDialog {
   // sub_82343458 r3/r11 candidates (both proved byte-identical between
   // Horizontal/Vertical - watching for the actual write is the fallback).
   bool f1_was_down_ = false;
+  // The pad marking keys (pd_solo_mark_keys): Home, End, Page Up, Delete, Page Down.
+  bool mark_was_down_[5] = {};
 };
 
 class PerfectDarkApp : public rex::ReXApp {
@@ -5094,6 +5099,7 @@ class PerfectDarkApp : public rex::ReXApp {
     done = true;
     PatchPlayerSetupMenus();
     PatchWeaponsMenu();
+    PatchArenaMenu();
     PatchHandicapRow(kLobbySettingsLocalDef, kLobbySettingsLocalItems);
     PatchHandicapRow(kLobbySettingsNetDef, kLobbySettingsNetItems, BuildNetHandicapDialog());
     PatchGamerCardPrompt();
@@ -6610,6 +6616,241 @@ class PerfectDarkApp : public rex::ReXApp {
     WriteGuestU32(mem, kWeaponsDef + 8, items);
     REXLOG_INFO("[menu_patch] weapons dialog rebuilt: items 0x{:08X}, slots 7-{}", items,
                 pd::weapons::kMaxSlots);
+  }
+
+  // ---- Arena list: the solo stages (pd_stages.h) ------------------------------
+  // Game Setup > Arena gets a fourth group, "Solo Missions", after the game's
+  // Dark / Classic / Random groups. Its entries are list index 17 and up, one
+  // per pd::stages::kSoloArenas stage, named with the game's short mission names.
+  static inline uint32_t arena_group_text_ = 0;  // guest: "Solo Missions\n"
+
+  // The Arena list's handler, in place of the game's sub_821DB818. A list handler
+  // gets an operation in r3 and a data pointer in r5:
+  //   1 how many entries (to *data)       2 how many groups (to *data)
+  //   3 entry *data's name (returned)     4 group *data's name (returned)
+  //   5 group *data's first entry (to data+8)
+  //   6 the player chose entry *data      7 which entry is chosen now (to *data)
+  //   27 how many entries can be chosen (to *data; the rest are locked)
+  // Anything about the game's own 17 entries goes to the game's handler.
+  static void PdArenaListHandler(PPCContext& ctx, uint8_t* base) {
+    namespace stages = pd::stages;
+    const uint32_t op = ctx.r3.u32;
+    const uint32_t data = ctx.r5.u32;
+    if (!REXCVAR_GET(pd_solo_stages) || !data || !arena_group_text_) {
+      sub_821DB818(ctx, base);
+      return;
+    }
+    uint8_t* p = base + data;
+    const uint32_t value = stages::U32(p);
+    // For ops 3 and 6: which solo stage entry *data is (outside 0..count-1: a game entry).
+    const int solo = int(value) - stages::kMpArenaCount;
+    const bool is_solo = solo >= 0 && solo < stages::kSoloArenaCount;
+    switch (op) {
+      case 1:
+        stages::Put32(p, uint32_t(stages::kMpArenaCount + stages::kSoloArenaCount));
+        ctx.r3.u64 = 0;
+        return;
+      case 2:
+        stages::Put32(p, uint32_t(stages::kMpArenaGroups + 1));
+        ctx.r3.u64 = 0;
+        return;
+      case 3:
+        if (is_solo) {
+          const uint16_t name = stages::SoloStageName(base, stages::kSoloArenas[solo]);
+          ctx.r3.u64 = CallGame(ctx, base, sub_821886E8, name);  // text id -> string
+          return;
+        }
+        break;
+      case 4:
+        if (value == uint32_t(stages::kMpArenaGroups)) {
+          ctx.r3.u64 = arena_group_text_;
+          return;
+        }
+        break;
+      case 5:
+        if (value == uint32_t(stages::kMpArenaGroups)) {
+          stages::Put32(p + 8, uint32_t(stages::kMpArenaCount));
+          ctx.r3.u64 = 0;
+          return;
+        }
+        break;
+      case 6:
+        if (is_solo) {
+          // The game's handler does everything choosing an arena needs: it writes
+          // the stage to g_MpSetup and, when hosting online, sends it to the joined
+          // PCs. It takes the stage from g_MpArenas, so entry 0 holds the solo
+          // stage just while the game's handler chooses entry 0.
+          uint8_t* entry0 = base + stages::kMpArenas;
+          const uint16_t saved = stages::U16(entry0);
+          stages::Put16(entry0, stages::kSoloArenas[solo]);
+          stages::Put32(p, 0);
+          sub_821DB818(ctx, base);
+          stages::Put16(entry0, saved);
+          stages::Put32(p, value);
+          REXLOG_INFO("[stages] arena menu: solo stage 0x{:02X} chosen", stages::kSoloArenas[solo]);
+          return;
+        }
+        break;
+      case 7: {
+        const int chosen = stages::SoloArenaIndex(base[stages::kMpSetupStage]);
+        if (chosen >= 0) {
+          stages::Put32(p, uint32_t(stages::kMpArenaCount + chosen));
+          ctx.r3.u64 = 0;
+          return;
+        }
+        break;
+      }
+      case 27:
+        // How many entries, from the top, can be chosen (to *data): the game's
+        // handler answers 17 in the full game and 1 in the trial (Skedar only,
+        // via a license check, sub_822580B8). Entries past it are shown locked,
+        // and choosing one leaves the dialog. In the full game the solo stages
+        // can be chosen too.
+        sub_821DB818(ctx, base);
+        if (stages::U32(p) == uint32_t(stages::kMpArenaCount)) {
+          stages::Put32(p, uint32_t(stages::kMpArenaCount + stages::kSoloArenaCount));
+        }
+        return;
+      default:
+        break;
+    }
+    sub_821DB818(ctx, base);
+  }
+
+  static void PatchArenaMenu() {
+    namespace stages = pd::stages;
+    PerfectDarkApp* app = current_instance_;
+    if (!app || !app->runtime() || !app->runtime()->memory()) return;
+    auto* mem = app->runtime()->memory();
+    auto* fd = app->runtime()->function_dispatcher();
+    if (!fd) return;
+    const uint32_t item = stages::kArenaDialogItems;
+    // Only patch the list if it still looks like the one this was written for.
+    if (ReadGuestU32(mem, item + stages::kMenuItemHandler) != stages::kArenaListHandler ||
+        ReadGuestU32(mem, item + stages::kMenuItemWidth) != stages::kArenaListWidth) {
+      REXLOG_INFO("[menu_patch] arena list is not as expected (width {:08X}, handler {:08X}); left alone",
+                  ReadGuestU32(mem, item + stages::kMenuItemWidth),
+                  ReadGuestU32(mem, item + stages::kMenuItemHandler));
+      return;
+    }
+    arena_group_text_ = mem->SystemHeapAlloc(32);
+    const uint32_t handler = fd->AllocateThunk(&PdArenaListHandler, 0);
+    if (!arena_group_text_ || !handler) {
+      arena_group_text_ = 0;
+      REXLOG_INFO("[menu_patch] arena list: out of guest memory or thunks; left alone");
+      return;
+    }
+    WriteGuestBytes(mem, arena_group_text_, "Solo Missions\n", 15);
+    WriteGuestU32(mem, item + stages::kMenuItemHandler, handler);
+    // Wider, for the solo stages' longer names.
+    WriteGuestU32(mem, item + stages::kMenuItemWidth, stages::kArenaListWidthSolo);
+    REXLOG_INFO("[menu_patch] arena list: {} solo stages added", stages::kSoloArenaCount);
+  }
+
+  // ---- Pad marking keys (pd_solo_mark_keys) -----------------------------------
+  // For hand-picking a solo stage's layout (pd_stage_layouts.h). In a match on a
+  // solo stage, as player 1 (local or online host: g_Vars.players[0]):
+  //   Home                     the pad nearest to you becomes a spawn point
+  //   End                      the pad nearest to you becomes a weapon spawn (in order: slot 1, 2...)
+  //   Page Up or Delete        undoes the last mark
+  //   Page Down or Shift+Home  logs where you are and the pads around you
+  // After each mark the log has the stage's marks so far as a table line. Marks
+  // are only kept until the game closes, and only change the stage once the line
+  // is in pd_stage_layouts.h (a new build).
+  enum class MarkKey { Spawn, Weapon, Undo, Where };
+  struct StageMarks {
+    std::vector<int> spawns, weapons;
+    std::vector<bool> last_was_weapon;  // for undo
+  };
+  static inline std::map<uint32_t, StageMarks> stage_marks_;  // by stage number
+
+  static void MarkPad(MarkKey key) {
+    namespace stages = pd::stages;
+    PerfectDarkApp* app = current_instance_;
+    if (!app || !app->runtime() || !app->runtime()->memory()) return;
+    const uint8_t* base = app->runtime()->memory()->virtual_membase();
+
+    // The stage being played, if it is a solo stage in a match.
+    const uint32_t index = stages::U32(base + stages::kStageIndex);
+    if (stages::U32(base + stages::kMatchRunning) == 0 || index >= stages::kStageCount) {
+      REXLOG_INFO("[stages] mark: not in a match");
+      return;
+    }
+    const uint8_t* entry = base + stages::kStages + index * stages::kStageEntrySize;
+    const uint32_t stagenum = uint32_t(stages::S16(entry + stages::kStageId));
+    if (stages::SoloStageIndex(base, stagenum) < 0) {
+      REXLOG_INFO("[stages] mark: stage 0x{:02X} is not a solo stage", stagenum);
+      return;
+    }
+
+    // Player 0's position: g_Vars.players[0] (+100) -> its prop (+188) -> pos (+8).
+    const uint32_t player = stages::U32(base + stages::kGVars + 100);
+    const uint32_t prop = player ? stages::U32(base + player + 188) : 0;
+    // The stage's pads file, as the game loaded it, and its size.
+    const uint32_t pads_at = stages::U32(base + stages::kStageSetupPadsFile);
+    if (!prop || !pads_at) {
+      REXLOG_INFO("[stages] mark: no player or no pads file yet");
+      return;
+    }
+    stages::Pad me;
+    me.x = stages::F32(base + prop + 8);
+    me.y = stages::F32(base + prop + 12);
+    me.z = stages::F32(base + prop + 16);
+    stages::PadsFile pads;
+    pads.data = base + pads_at;
+    pads.size = stages::U32(base + stages::kFileInfo + uint32_t(stages::U16(entry + stages::kStagePadsFile)) * 8);
+
+    StageMarks& marks = stage_marks_[stagenum];
+    switch (key) {
+      case MarkKey::Spawn:
+      case MarkKey::Weapon: {
+        const std::vector<stages::Pad> nearest = stages::NearestPads(pads, me, 1, true);
+        if (nearest.empty()) {
+          REXLOG_INFO("[stages] mark: no pad near ({:.0f}, {:.0f}, {:.0f})", me.x, me.y, me.z);
+          return;
+        }
+        const stages::Pad& pad = nearest.front();
+        const bool weapon = key == MarkKey::Weapon;
+        std::vector<int>& list = weapon ? marks.weapons : marks.spawns;
+        list.push_back(pad.num);
+        marks.last_was_weapon.push_back(weapon);
+        REXLOG_INFO("[stages] mark: {} {} = pad {} ({:.0f}, {:.0f}, {:.0f}), {:.0f} units from you",
+                    weapon ? "weapon" : "spawn", list.size(), pad.num, pad.x, pad.y, pad.z,
+                    std::sqrt(stages::Distance2(pad, me)));
+        MessageBeep(MB_OK);
+        break;
+      }
+      case MarkKey::Undo: {
+        if (marks.last_was_weapon.empty()) {
+          REXLOG_INFO("[stages] mark: nothing to undo");
+          return;
+        }
+        std::vector<int>& list = marks.last_was_weapon.back() ? marks.weapons : marks.spawns;
+        REXLOG_INFO("[stages] mark: undid {} {} (pad {})", marks.last_was_weapon.back() ? "weapon" : "spawn",
+                    list.size(), list.back());
+        list.pop_back();
+        marks.last_was_weapon.pop_back();
+        MessageBeep(MB_ICONHAND);  // a different sound from a mark
+        break;
+      }
+      case MarkKey::Where: {
+        REXLOG_INFO("[stages] mark: you are at ({:.0f}, {:.0f}, {:.0f}) on stage 0x{:02X}", me.x, me.y, me.z,
+                    stagenum);
+        for (const stages::Pad& pad : stages::NearestPads(pads, me, 5, false)) {
+          REXLOG_INFO("[stages] mark:   pad {} ({:.0f}, {:.0f}, {:.0f}) {:.0f} away, flags 0x{:05X}, lift {}{}",
+                      pad.num, pad.x, pad.y, pad.z, std::sqrt(stages::Distance2(pad, me)), pad.flags, pad.lift,
+                      stages::UsableForSpawn(pad) ? "" : " (not usable)");
+        }
+        return;  // nothing changed: no table line
+      }
+    }
+    const auto join = [](const std::vector<int>& v) {
+      std::string s;
+      for (size_t i = 0; i < v.size(); ++i) s += (i ? ", " : "") + std::to_string(v[i]);
+      return s;
+    };
+    REXLOG_INFO("[stages] mark: table line: {{0x{:02X}, {{{}}}, {{{}}}}},", stagenum, join(marks.spawns),
+                join(marks.weapons));
   }
 
   // ---- Online Handicaps dialog (handicap mod part 3) ---------------------------
@@ -9206,6 +9447,25 @@ inline void PerfectDarkInputTracker::OnDraw(ImGuiIO& /*io*/) {
       MessageBeep(MB_OK);  // heard: the capture was taken
     }
     capture_was_down_ = capture_down;
+
+    // The pad marking keys, for hand-picked solo stage layouts.
+    if (REXCVAR_GET(pd_solo_mark_keys)) {
+      // Undo and Where have two keys each, in case a keyboard lacks one of them.
+      // Home does Where while Shift is held, and Spawn otherwise.
+      using Mark = PerfectDarkApp::MarkKey;
+      const bool shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+      static constexpr struct { int vk; Mark action; } kMarkKeys[5] = {
+          {VK_HOME, Mark::Spawn}, {VK_END, Mark::Weapon}, {VK_PRIOR, Mark::Undo},
+          {VK_DELETE, Mark::Undo}, {VK_NEXT, Mark::Where}};
+      for (int i = 0; i < 5; ++i) {
+        const bool down = (GetAsyncKeyState(kMarkKeys[i].vk) & 0x8000) != 0;
+        if (down && !mark_was_down_[i] && app_ && app_->HasWindowFocus()) {
+          const Mark action = (kMarkKeys[i].vk == VK_HOME && shift) ? Mark::Where : kMarkKeys[i].action;
+          PerfectDarkApp::MarkPad(action);
+        }
+        mark_was_down_[i] = down;
+      }
+    }
 
     // Everything below is a developer diagnostic (see pd_dev_hotkeys).
     if (!REXCVAR_GET(pd_dev_hotkeys)) return;

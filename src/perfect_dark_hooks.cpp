@@ -47,7 +47,10 @@ void PdSetupCreateProps(PPCContext& ctx, uint8_t* base);
 bool PdWeaponByLocation(const uint8_t* base, int32_t location, uint32_t* entry);
 void PdPropEnable(PPCContext& ctx, uint8_t* base, uint32_t prop);
 bool PdMakeCrateWithoutAmmo(uint8_t* base, uint32_t crate_obj);
-
+uint32_t PdSoloStageSetup(PPCContext& ctx, uint8_t* base, uint32_t loaded);
+uint32_t PdStageNameText(const uint8_t* base, uint32_t offset, uint32_t text);
+uint32_t PdArenaRowLabel(PPCContext& ctx, uint8_t* base);
+bool PdRandomArena(uint32_t* stage);
 namespace {
 // The calling guest thread's full context and guest memory, for a hook that needs
 // more than its registers.
@@ -295,6 +298,42 @@ void PdHookPropEnable(PPCRegister& r3) {
 // it (r10 is reloaded right after, so nothing else sees the change).
 void PdHookCrateWithoutAmmo(PPCRegister& r10, PPCRegister& r31) {
   if (r10.s32 <= 0 && PdMakeCrateWithoutAmmo(HookBase(), r31.u32)) r10.u64 = 1;
+}
+
+// ---- Solo stages as arenas (pd_stages.h) ------------------------------------------
+
+// setup_load_files, after `bl file_load_to_new` loaded the stage's setup file (r3 =
+// the buffer, about to be kept as the stage's setup). A solo stage's multiplayer
+// setup is an empty stub: r3 becomes the setup the mod builds for it.
+void PdHookSoloStageSetup(PPCRegister& r3) {
+  r3.u64 = PdSoloStageSetup(HookContext(), HookBase(), r3.u32);
+}
+
+// The arena name lists, before `bl 0x8226c9f0` (text lookup, r4 = text id) with the
+// entry's offset in r10 / r8: a stage not in the arena table gets a real name.
+void PdHookStageNameTextR10(PPCRegister& r4, PPCRegister& r10) {
+  r4.u64 = PdStageNameText(HookBase(), r10.u32, r4.u32);
+}
+void PdHookStageNameTextR8(PPCRegister& r4, PPCRegister& r8) {
+  r4.u64 = PdStageNameText(HookBase(), r8.u32, r4.u32);
+}
+
+// The Arena row label (sub_821DA2C0) where it found no g_MpArenas entry for the
+// stage (it would return an empty string): a solo stage's name instead.
+bool PdHookArenaRowLabel(PPCRegister& r3) {
+  const uint32_t label = PdArenaRowLabel(HookContext(), HookBase());
+  if (!label) return false;
+  r3.u64 = label;
+  return true;
+}
+
+// The Random arena's pick (sub_821D51A0), at its start: with pd_solo_in_random
+// the mod picks, solo stages included, and returns the stage in r3.
+bool PdHookRandomArena(PPCRegister& r3) {
+  uint32_t stage = 0;
+  if (!PdRandomArena(&stage)) return false;
+  r3.u64 = stage;
+  return true;
 }
 
 // Before `bl 0x821d0b28` (set handicap: slot r3, value r4) in the join path, which
