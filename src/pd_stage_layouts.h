@@ -29,6 +29,11 @@ inline const StageLayout* FindStageLayout(uint32_t stagenum) {
   static const std::vector<StageLayout> layouts = {
       // {stage, {spawn pads}, {weapon pads}}, e.g.
       // {0x30, {}, {101, 245, 17}},  // Defection: 3 weapons by hand, 13 automatic
+
+      // Defection: 15 spawn points, 7 weapons by hand (9 automatic).
+      {0x30,
+       {484, 477, 486, 491, 499, 500, 527, 599, 478, 473, 468, 423, 251, 225, 414},
+       {484, 493, 499, 223, 431, 308, 276}},
   };
   for (const StageLayout& layout : layouts) {
     if (layout.stagenum == stagenum) return &layout;
