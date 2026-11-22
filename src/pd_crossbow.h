@@ -185,5 +185,9 @@ inline std::string DescribeParent(const uint8_t* base, uint32_t prop) {
 // mod keeps its own list, tried again at each tick until each one explodes.
 // Emptied at each stage start.
 inline std::map<uint32_t, uint32_t> g_pending;
+// How many ticks each pending bolt has waited for an explosion slot, and the
+// most it may wait (10 s at 60 ticks a second) before it is removed instead.
+inline std::map<uint32_t, int> g_pending_tries;
+constexpr int kMaxPendingTries = 600;
 
 }  // namespace pd::crossbow

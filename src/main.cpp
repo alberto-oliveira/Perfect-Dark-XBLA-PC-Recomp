@@ -7,6 +7,7 @@
 #include "pd_stages.h"   // the solo mission stages as Combat Simulator arenas
 #include "pd_stage_layouts.h"  // their hand-picked spawn and weapon pads
 #include "pd_crossbow.h"  // the detonator crossbow
+#include "pd_custom_weapons.h"  // new weapons under borrowed weapon numbers
 
 #include <rex/chrono/clock.h>
 #include <rex/diag_timing.h>
@@ -797,14 +798,20 @@ void CheckHostStageSetup() {
 // Decides this stage's weapon slots and shuffle (the host also sends them; a
 // joined PC waits for them), then notes the stage's weapon pickups and the
 // weapons they start with.
+void PdCustomInstall(uint8_t* base);  // custom weapons (further down)
+void PdCustomStageStart();            // TEMP_CUSTOM
+
 void PdSetupCreateProps(PPCContext& ctx, uint8_t* base) {
   namespace netplay = rex::kernel::xam::netplay;
   namespace weapons = pd::weapons;
+  PdCustomInstall(base);  // before the slots are read: they may name a custom weapon's index
+  PdCustomStageStart();   // TEMP_CUSTOM
   weapons::g_match = {};
   weapons::g_pickups.clear();
   weapons::g_selection.clear();
   weapons::g_crates.clear();
   pd::crossbow::g_pending.clear();  // the detonator crossbow's pending explosions
+  pd::crossbow::g_pending_tries.clear();
   if (weapons::LoadU32(base, weapons::kMatchRunning) == 0 && weapons::LoadU32(base, weapons::kMatchRunning2) == 0) {
     return;  // not a multiplayer match: the stage has no weapon spawn locations
   }
@@ -908,7 +915,7 @@ bool FloorLift(PPCContext& ctx, uint8_t* base, uint32_t model, const float rot_y
 // pickup the stage left out (player count or difficulty) was never loaded.
 bool SetPickupWeapon(PPCContext& ctx, uint8_t* base, uint32_t prop, uint32_t obj, uint8_t index) {
   namespace weapons = pd::weapons;
-  const uint32_t entry = weapons::kWeaponTable + index * weapons::kWeaponEntrySize;
+  const uint32_t entry = weapons::EntryAddress(index);
   const uint8_t weapon_num = base[entry];
   const uint16_t model_num = weapons::LoadU16(base, entry + 6);
   const uint32_t state = weapons::kModelStates + uint32_t(model_num) * 8;
@@ -1065,7 +1072,7 @@ bool PdWeaponByLocation(const uint8_t* base, int32_t location, uint32_t* entry) 
   namespace weapons = pd::weapons;
   if (weapons::g_match.extra.empty()) return false;
   const uint8_t index = weapons::IndexForLocation(base, location, weapons::AllSlots(base, weapons::g_match));
-  *entry = weapons::kWeaponTable + index * weapons::kWeaponEntrySize;
+  *entry = weapons::EntryAddress(index);
   return true;
 }
 
@@ -1297,6 +1304,7 @@ void PdXbowExplodeLog(uint8_t* base, uint32_t prop, uint32_t type) {
   namespace xbow = pd::crossbow;
   const uint32_t obj = xbow::LoadU32(base, prop + xbow::kPropObj);
   const bool weapon = base[prop + xbow::kPropType] == xbow::kPropTypeWeapon;
+  if (xbow::g_pending.count(prop)) return;  // a bolt's retry: logged once already
   REXLOG_INFO("[xbow] frame {}: prop_explode type {} prop 0x{:08X} (prop type {}, weapon {}) owner {} sync id {} in {}",
               xbow::LoadU32(base, xbow::kLevelFrames), type, prop, base[prop + xbow::kPropType],
               weapon ? int(base[obj + xbow::kObjWeaponNum]) : -1, xbow::OwnerPlayer(base, obj),
@@ -1521,6 +1529,23 @@ bool PdXbowBoltTick(PPCContext& ctx, uint8_t* base, uint32_t prop, uint32_t obj)
     return true;
   }
 
+  // A bolt outside every room (it flew out of the level) can never explode: the
+  // game makes no explosion without a room. Test 2.1 found such bolts retried
+  // every frame for minutes; they are removed instead, as is any bolt still
+  // without an explosion slot after 10 seconds.
+  int& tries = xbow::g_pending_tries[prop];
+  if (!was_pending) tries = 0;
+  // (Only a free bolt: one stuck in a player explodes where the player is.)
+  const bool outside = !xbow::LoadU32(base, prop + xbow::kPropParent) && xbow::LoadS16(base, prop + xbow::kPropRooms) < 0;
+  if (outside || ++tries > xbow::kMaxPendingTries) {
+    REXLOG_INFO("[xbow] bolt prop 0x{:08X}: cannot explode ({}), removed", prop,  // TEMP_XBOW
+                outside ? "outside every room" : "no explosion slot for 10 s");
+    if (was_pending) xbow::g_pending.erase(pending);
+    xbow::g_pending_tries.erase(prop);
+    XbowDeleteBolt(base, obj);
+    return true;
+  }
+
   if (!was_pending) XbowAlignScorch(ctx, base, prop, obj);
   PPCContext call = ctx;
   call.r3.u64 = prop;
@@ -1534,6 +1559,7 @@ bool PdXbowBoltTick(PPCContext& ctx, uint8_t* base, uint32_t prop, uint32_t obj)
     return false;
   }
   if (was_pending) xbow::g_pending.erase(pending);
+  xbow::g_pending_tries.erase(prop);
   XbowDeleteBolt(base, obj);
   return true;
 }
@@ -1574,7 +1600,45 @@ void PdMpMusicFrame(uint8_t* base) {
 // twice or more is a double step: the game jumps ahead on screen, which is what
 // the 4aj clock fault looked like. Every 10 s one line also gives game time
 // against real time (100% = the game runs at its own speed).
+// ---- Custom weapons (pd_custom_weapons.h) ----------------------------------------
+
+// Makes the custom weapons once, the first time the game thread gets here.
+void PdCustomInstall(uint8_t* base) {
+  if (pd::custom::g_installed) return;
+  auto* memory = rex::system::kernel_state()->memory();
+  pd::custom::Install(base, [memory](uint32_t size) { return memory->SystemHeapAlloc(size); });
+}
+
+// ---- TEMP_CUSTOM: where the game meets a custom weapon number -------------------
+// The custom weapon hooks (perfect_dark_hooks.cpp) log what they did: a few lines
+// per kind per stage, so the log stays readable.
+namespace {
+std::map<std::string, int> custom_site_logs;  // lines logged per kind this stage
+}
+
+void PdCustomSiteLog(uint8_t* base, const char* what, uint32_t value) {
+  int& logged = custom_site_logs[what];
+  if (logged >= 3) return;
+  ++logged;
+  REXLOG_INFO("[custom] frame {}: weapon 0x{:02X} at {}{}", pd::weapons::LoadU32(base, pd::weapons::kLevelFrames),
+              value, what, logged == 3 ? " (no more lines of this kind this stage)" : "");
+}
+
+// The replay of a remote player's shot (sub_82171430, at its crossbow check):
+// the weapon number its message carried, once per number per stage.
+void PdCustomReplayLog(uint8_t* base, uint32_t weapon) {
+  const std::string key = "replay " + std::to_string(weapon);
+  if (custom_site_logs[key]++) return;
+  REXLOG_INFO("[custom] frame {}: a remote player's shot was replayed with weapon {} (0x{:02X}){}",
+              pd::weapons::LoadU32(base, pd::weapons::kLevelFrames), weapon, weapon,
+              pd::custom::IsCustom(weapon) ? ", a custom weapon" : "");
+}
+
+void PdCustomStageStart() { custom_site_logs.clear(); }
+// ---- end TEMP_CUSTOM -----------------------------------------------------------------
+
 void PdNoteGameFrame(uint8_t* base) {
+  PdCustomInstall(base);
   PdMpMusicFrame(base);
   PdWeaponsFrame();
   PdXbowApplyFunctions(base);

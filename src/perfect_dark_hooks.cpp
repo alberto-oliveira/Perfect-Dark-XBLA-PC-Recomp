@@ -14,6 +14,8 @@
 #include <rex/system/kernel_state.h>
 #include <rex/system/thread_state.h>
 
+#include "pd_custom_weapons.h"
+
 // main.cpp
 bool PdSkipArcadeLogo();
 bool PdN64Poison(const uint8_t* base);
@@ -56,6 +58,8 @@ void PdXbowDetonateLog(uint8_t* base, uint32_t player);              // TEMP_XBO
 void PdXbowExplodeLog(uint8_t* base, uint32_t prop, uint32_t type);  // TEMP_XBOW
 void PdXbowBoltCreatedLog(uint8_t* base, uint32_t obj, const char* path);  // TEMP_XBOW
 bool PdXbowBoltTick(PPCContext& ctx, uint8_t* base, uint32_t prop, uint32_t obj);
+void PdCustomSiteLog(uint8_t* base, const char* what, uint32_t value);   // TEMP_CUSTOM
+void PdCustomReplayLog(uint8_t* base, uint32_t weapon);                 // TEMP_CUSTOM
 
 namespace {
 // The calling guest thread's full context and guest memory, for a hook that needs
@@ -426,4 +430,49 @@ void PdHookXbowBoltReplayLog(PPCRegister& r3) {
 bool PdHookXbowBoltTick(PPCRegister& r11, PPCRegister& r27, PPCRegister& r31) {
   if (r11.u32 != 86) return false;
   return PdXbowBoltTick(HookContext(), HookBase(), r27.u32, r31.u32);
+}
+
+// ---- Custom weapons (pd_custom_weapons.h) ------------------------------------------
+// A few generic hooks, each placed at several addresses (perfect_dark_config.toml,
+// "Custom weapons"). Each passes one register: the weapon number being checked.
+
+// A check that rejects weapon numbers above 0x2C (or 0x41, or 35), where passing
+// means jumping to the code that follows for an accepted weapon: true for a
+// custom weapon (jump_address_on_true = that code). No register is changed.
+bool PdHookCustomPass(PPCRegister& weapon) {
+  if (!pd::custom::IsCustom(weapon.u32)) return false;
+  PdCustomSiteLog(HookBase(), "a gun-line check (passed)", weapon.u32);  // TEMP_CUSTOM
+  return true;
+}
+
+// A check that asks "which weapon is this?" (is it a gun, the crossbow...), where
+// the register is not used afterwards for anything else: a custom weapon's number
+// becomes its base weapon's.
+void PdHookCustomAsBase(PPCRegister& weapon) {
+  if (!pd::custom::IsCustom(weapon.u32)) return;
+  PdCustomSiteLog(HookBase(), "a weapon-number check (seen as the base weapon)", weapon.u32);  // TEMP_CUSTOM
+  weapon.u64 = pd::custom::AsBase(weapon.u32);
+}
+
+// The primary/secondary bit of the current weapon, at `srawi rD,rS,3` where rS =
+// weapon number - 1 (the bit's position in the player config's gunfuncs): a
+// custom weapon gets the position of its spare bit.
+void PdHookCustomFuncBit(PPCRegister& weapon_minus_1) {
+  const int i = pd::custom::IndexOf(weapon_minus_1.u32 + 1);
+  if (i < 0) return;
+  PdCustomSiteLog(HookBase(), "a function bit (spare bit used)", weapon_minus_1.u32 + 1);  // TEMP_CUSTOM
+  weapon_minus_1.u64 = uint32_t(pd::custom::FuncBitWeapon(i) - 1);
+}
+
+// weapon_get_pickup_text (sub_8220CD78) right after it loads the pickup-name table
+// into r8: the copy with the custom weapons' rows.
+void PdHookCustomPickupNames(PPCRegister& r8) {
+  if (pd::custom::g_pickup_names) r8.u64 = pd::custom::g_pickup_names;
+}
+
+// The remote shot replay's crossbow check (sub_82171430 at 0x821715E0, r11 = the
+// shot's weapon number): logged (TEMP_CUSTOM), then as PdHookCustomAsBase.
+void PdHookCustomFireReplay(PPCRegister& r11) {
+  PdCustomReplayLog(HookBase(), r11.u32);  // TEMP_CUSTOM
+  PdHookCustomAsBase(r11);
 }

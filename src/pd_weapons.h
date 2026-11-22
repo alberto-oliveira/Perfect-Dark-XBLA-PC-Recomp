@@ -128,10 +128,28 @@ inline uint32_t LoadU32(const uint8_t* base, uint32_t address) {
          (uint32_t(base[address + 2]) << 8) | uint32_t(base[address + 3]);
 }
 
+// ---- Table entries past the game's 47 (custom weapons, pd_custom_weapons.h) -----
+//
+// Index 47 and up are "virtual": entries in guest heap memory that
+// pd::custom::Install fills, one per custom weapon, in the game's 10-byte
+// format. Everything that reads a table entry goes through EntryAddress.
+inline uint32_t g_extra_entries = 0;  // guest address of the virtual entries
+inline int g_extra_count = 0;         // how many
+
+// How many table indices exist: the game's 47 plus the virtual ones.
+inline int IndexCount() { return kWeaponTableCount + g_extra_count; }
+
+// The guest address of table entry `index` (Disabled's for an unknown index).
+inline uint32_t EntryAddress(uint8_t index) {
+  if (index < kWeaponTableCount) return kWeaponTable + uint32_t(index) * kWeaponEntrySize;
+  if (index < IndexCount()) return g_extra_entries + uint32_t(index - kWeaponTableCount) * kWeaponEntrySize;
+  return kWeaponTable + uint32_t(kIndexDisabled) * kWeaponEntrySize;
+}
+
 // The weapon number of table entry `index`.
 inline uint8_t WeaponNumber(const uint8_t* base, uint8_t index) {
-  if (index >= kWeaponTableCount) return kWeaponDisabled;
-  return base[kWeaponTable + index * kWeaponEntrySize];
+  if (index >= IndexCount()) return kWeaponDisabled;
+  return base[EntryAddress(index)];
 }
 
 // All slots in play: the game's 6, then this mod's extra ones.
@@ -174,8 +192,8 @@ inline std::vector<uint8_t> ParseExtraSlots(const std::string& list, bool warn =
     if (entry.empty()) continue;
     const bool digits = std::all_of(entry.begin(), entry.end(), [](char c) { return std::isdigit(uint8_t(c)); });
     const int index = digits ? std::atoi(entry.c_str()) : -1;
-    if (index < 0 || index >= kWeaponTableCount) {
-      if (warn) REXLOG_WARN("[weapons] pd_mp_weapons: '{}' is not a weapon index (0-46), ignored", entry);
+    if (index < 0 || index >= IndexCount()) {
+      if (warn) REXLOG_WARN("[weapons] pd_mp_weapons: '{}' is not a weapon index (0-{}), ignored", entry, IndexCount() - 1);
       continue;
     }
     if (out.size() == size_t(kExtraSlotCount)) {
@@ -325,7 +343,7 @@ inline std::vector<uint32_t> FindPickups(const uint8_t* base, ObjectWords object
 // no crate at all for a weapon without ammo (first quantity 0: Combat Boost,
 // Cloaking Device...); the crate already exists here, so it is emptied instead.
 inline void SetCrateAmmo(uint8_t* base, const Crate& crate, uint8_t index) {
-  const uint32_t entry = kWeaponTable + index * kWeaponEntrySize;
+  const uint32_t entry = EntryAddress(index);
   const bool has_ammo = base[entry + 2] != 0;
   for (int s = 0; s < kCrateSlotCount; ++s) {
     StoreU16(base, crate.obj + kCrateSlots + uint32_t(s) * 4 + 2, has_ammo ? crate.stage_quantities[s] : 0);
@@ -359,7 +377,7 @@ inline std::vector<uint8_t> g_selection;
 // pickup at all), not the Shield (a different kind of object), not Disabled.
 inline bool CanRespawnAs(uint8_t index) {
   return index != kIndexNothing && index != kIndexShield && index != kIndexDisabled &&
-         index < kWeaponTableCount;
+         index < IndexCount();
 }
 
 // The weapon pickup number `pickup` comes back as on respawn number `respawn`:
