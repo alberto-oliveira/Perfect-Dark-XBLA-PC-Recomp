@@ -35,6 +35,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <set>
 #include <string>
 
 namespace pd::crossbow {
@@ -53,11 +54,9 @@ constexpr uint32_t kLevelFrames = kGVars + 0x0C;    // g_Vars lvframenum
 constexpr uint8_t kWeaponCrossbow = 27;  // 0x1B
 constexpr uint8_t kWeaponBolt = 86;      // 0x56, the object a fired crossbow bolt is
 
-// Weapon definitions (g_Weapons entries). +0x14 functions[0], +0x18 functions[1].
-constexpr uint32_t kCrossbowDef = 0x825D1660;
-constexpr uint32_t kSecondaryFunction = 0x18;
-constexpr uint32_t kCrossbowLethal = 0x825D1568;   // the crossbow's own secondary: the 100-damage bolt
-constexpr uint32_t kMineDetonate = 0x825D0F60;     // the remote mine's Detonate function
+// The Detonator Crossbow: a custom weapon (pd_custom_weapons.h) made from the
+// crossbow, whose secondary function is the remote mine's Detonate.
+constexpr uint8_t kWeaponDetonator = 0x51;
 
 // Explosion types (rows of the table at 0x825CBC70; blast radius / damage radius / damage).
 constexpr uint32_t kExplosionSmall = 22;   // the Phoenix's secondary: 100 / 200 / 0.25
@@ -189,5 +188,12 @@ inline std::map<uint32_t, uint32_t> g_pending;
 // most it may wait (10 s at 60 ticks a second) before it is removed instead.
 inline std::map<uint32_t, int> g_pending_tries;
 constexpr int kMaxPendingTries = 600;
+
+// The Detonator Crossbow's bolts, by object: only these explode on Detonate. A
+// fire path tells which weapon fired (g_firing_weapon, set at its crossbow check
+// just before it makes the bolt); each new bolt is then added or, for another
+// crossbow's bolt made at a reused address, removed. Emptied at each stage start.
+inline std::set<uint32_t> g_detonator_bolts;
+inline uint32_t g_firing_weapon = 0;
 
 }  // namespace pd::crossbow

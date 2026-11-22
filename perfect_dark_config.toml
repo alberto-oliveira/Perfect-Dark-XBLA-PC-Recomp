@@ -384,22 +384,23 @@ address = 0x82205A18
 name = "PdHookXbowExplodeLog"
 registers = ["r3", "r4"]
 
-# TEMP_XBOW: `mr r31,r3` right after the crossbow's weapon_create_projectile_from_weapon_num
+# `mr r31,r3` right after the crossbow's weapon_create_projectile_from_weapon_num
 # (sub_8221EC10, weapon number 86 = bolt) in the local fire path (sub_8217F5A0) and in
-# the path that replays a remote player's shot (sub_82171430). r3 = the new bolt.
+# the path that replays a remote player's shot (sub_82171430). r3 = the new bolt,
+# tagged a Detonator bolt when the Detonator Crossbow fired it.
 [[midasm_hook]]
 address = 0x8217F9D4
-name = "PdHookXbowBoltLocalLog"
+name = "PdHookXbowBoltMadeLocal"
 registers = ["r3"]
 
 [[midasm_hook]]
 address = 0x821715F4
-name = "PdHookXbowBoltReplayLog"
+name = "PdHookXbowBoltMadeReplay"
 registers = ["r3"]
 
 # weapon_tick (sub_82214A40) at the bolt branch's `cmplwi cr6,r11,86` (loc_82215080;
-# r11 = weapon number, r27 = prop, r31 = object). With pd_xbow_detonator a bolt whose
-# owner pressed Detonate explodes; true jumps to the end of the weapon branches, as
+# r11 = weapon number, r27 = prop, r31 = object). A Detonator bolt whose owner
+# pressed Detonate explodes; true jumps to the end of the weapon branches, as
 # the remote-mine branch does after its explosion.
 [[midasm_hook]]
 address = 0x82215080
@@ -706,7 +707,7 @@ registers = ["r3"]
 
 [[midasm_hook]]
 address = 0x8217F9B8
-name = "PdHookCustomAsBase"
+name = "PdHookCustomFireLocal"
 registers = ["r11"]
 
 [[midasm_hook]]

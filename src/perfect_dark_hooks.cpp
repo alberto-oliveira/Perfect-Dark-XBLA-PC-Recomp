@@ -14,6 +14,7 @@
 #include <rex/system/kernel_state.h>
 #include <rex/system/thread_state.h>
 
+#include "pd_crossbow.h"        // the Detonator Crossbow
 #include "pd_custom_weapons.h"
 
 // main.cpp
@@ -56,7 +57,7 @@ bool PdRandomArena(uint32_t* stage);
 
 void PdXbowDetonateLog(uint8_t* base, uint32_t player);              // TEMP_XBOW
 void PdXbowExplodeLog(uint8_t* base, uint32_t prop, uint32_t type);  // TEMP_XBOW
-void PdXbowBoltCreatedLog(uint8_t* base, uint32_t obj, const char* path);  // TEMP_XBOW
+void PdXbowBoltCreated(uint8_t* base, uint32_t obj, const char* path);
 bool PdXbowBoltTick(PPCContext& ctx, uint8_t* base, uint32_t prop, uint32_t obj);
 void PdCustomSiteLog(uint8_t* base, const char* what, uint32_t value);   // TEMP_CUSTOM
 void PdCustomReplayLog(uint8_t* base, uint32_t weapon);                 // TEMP_CUSTOM
@@ -413,14 +414,11 @@ void PdHookXbowExplodeLog(PPCRegister& r3, PPCRegister& r4) {
   PdXbowExplodeLog(HookBase(), r3.u32, r4.u32);
 }
 
-// TEMP_XBOW: right after each fire path's weapon_create_projectile_from_weapon_num
-// call for a crossbow (r3 = the new bolt, 0 if none could be made).
-void PdHookXbowBoltLocalLog(PPCRegister& r3) {
-  if (r3.u32) PdXbowBoltCreatedLog(HookBase(), r3.u32, "local");
-}
-void PdHookXbowBoltReplayLog(PPCRegister& r3) {
-  if (r3.u32) PdXbowBoltCreatedLog(HookBase(), r3.u32, "replay");
-}
+// Right after each fire path's weapon_create_projectile_from_weapon_num call for
+// a crossbow (r3 = the new bolt, 0 if none could be made): the bolt is tagged a
+// Detonator bolt when the Detonator Crossbow fired it.
+void PdHookXbowBoltMadeLocal(PPCRegister& r3) { PdXbowBoltCreated(HookBase(), r3.u32, "local"); }
+void PdHookXbowBoltMadeReplay(PPCRegister& r3) { PdXbowBoltCreated(HookBase(), r3.u32, "replay"); }
 
 // weapon_tick at the bolt branch's `cmplwi cr6,r11,86` (r11 = the weapon number,
 // r27 = the prop, r31 = the object). Every weapon not handled by an earlier branch
@@ -474,5 +472,14 @@ void PdHookCustomPickupNames(PPCRegister& r8) {
 // shot's weapon number): logged (TEMP_CUSTOM), then as PdHookCustomAsBase.
 void PdHookCustomFireReplay(PPCRegister& r11) {
   PdCustomReplayLog(HookBase(), r11.u32);  // TEMP_CUSTOM
+  pd::crossbow::g_firing_weapon = r11.u32;  // the bolt made next is this weapon's
+  PdHookCustomAsBase(r11);
+}
+
+// The local fire path's crossbow check (sub_8217F5A0 at 0x8217F9B8, r11 = the
+// firing weapon's number): remembered for the bolt made next, then as
+// PdHookCustomAsBase.
+void PdHookCustomFireLocal(PPCRegister& r11) {
+  pd::crossbow::g_firing_weapon = r11.u32;
   PdHookCustomAsBase(r11);
 }

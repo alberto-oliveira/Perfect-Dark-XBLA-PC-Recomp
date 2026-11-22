@@ -42,6 +42,10 @@ constexpr int kWeaponsCount = 0x5E;           // its entries (0x00-0x5D)
 constexpr uint32_t kWeaponDefCopySize = 0x70; // struct weapondef is 0x50 bytes; a little more in case XBLA added fields
 constexpr uint32_t kWeaponDefShortName = 0x44;  // u16 text ids
 constexpr uint32_t kWeaponDefName = 0x46;
+constexpr uint32_t kWeaponDefSecondary = 0x18;  // functions[1]: the secondary function's definition
+
+// Function definitions a custom weapon can take as its secondary.
+constexpr uint32_t kFuncMineDetonate = 0x825D0F60;  // the remote mine's Detonate
 
 // The pickup-message names (weapon_get_pickup_text sub_8220CD78 passes this
 // table to its lookup sub_8220C0F0): rows of 16 bytes {u32 weapon number,
@@ -60,13 +64,16 @@ struct Weapon {
   uint8_t base;      // the weapon it is made from
   uint16_t text_id;  // the borrowed text id for its name (a solo-only item's)
   const char* name;  // its name (menus, HUD, pickup message)
+  uint32_t secondary;  // its secondary function's definition, 0 = the base weapon's
 };
 
 // The custom weapons. The order gives their virtual table indices (the first is
 // 47) and their spare function bits (the first uses weapon 36's).
 inline constexpr Weapon kList[] = {
-    // base: the crossbow; name: the Necklace's text (0x4CE6, solo-only)
-    {0x51, 27, 0x4CE6, "Detonator Crossbow"},
+    // base: the crossbow, whose primary (the 1-damage dizzy bolt) it keeps;
+    // secondary: Detonate, which explodes this player's Detonator bolts
+    // (pd_crossbow.h); name: the Necklace's text (0x4CE6, solo-only)
+    {0x51, 27, 0x4CE6, "Detonator Crossbow", kFuncMineDetonate},
 };
 constexpr int kCount = int(sizeof(kList) / sizeof(kList[0]));
 static_assert(kFirstSpareFuncBitWeapon + kCount - 1 <= kLastSpareFuncBitWeapon, "no spare function bits left");
@@ -161,6 +168,7 @@ inline void Install(uint8_t* base, Alloc alloc) {
       std::memcpy(base + def, base + base_def, kWeaponDefCopySize);
       pd::weapons::StoreU16(base, def + kWeaponDefShortName, w.text_id);
       pd::weapons::StoreU16(base, def + kWeaponDefName, w.text_id);
+      if (w.secondary) StoreU32(base, def + kWeaponDefSecondary, w.secondary);
       StoreU32(base, kWeapons + uint32_t(w.number) * 4, def);
     }
     const int base_index = TableIndexOf(base, w.base);

@@ -812,6 +812,8 @@ void PdSetupCreateProps(PPCContext& ctx, uint8_t* base) {
   weapons::g_crates.clear();
   pd::crossbow::g_pending.clear();  // the detonator crossbow's pending explosions
   pd::crossbow::g_pending_tries.clear();
+  pd::crossbow::g_detonator_bolts.clear();
+  pd::crossbow::g_firing_weapon = 0;
   if (weapons::LoadU32(base, weapons::kMatchRunning) == 0 && weapons::LoadU32(base, weapons::kMatchRunning2) == 0) {
     return;  // not a multiplayer match: the stage has no weapon spawn locations
   }
@@ -1321,11 +1323,6 @@ void PdXbowExplodeLog(uint8_t* base, uint32_t prop, uint32_t type) {
 }
 
 // TEMP_XBOW: a fire path just made a bolt (r3 = its object). `path` = which one.
-void PdXbowBoltCreatedLog(uint8_t* base, uint32_t obj, const char* path) {
-  namespace xbow = pd::crossbow;
-  REXLOG_INFO("[xbow] frame {}: bolt obj 0x{:08X} made by the {} fire path (current player {})",
-              xbow::LoadU32(base, xbow::kLevelFrames), obj, path, xbow::LoadU32(base, xbow::kGVars + 1196));
-}
 
 // TEMP_XBOW: the weapon tick's bolt branch (r27 = prop, r31 = obj). Logs a bolt
 // the first time it is seen and each time it lands or changes what it is in.
@@ -1371,26 +1368,28 @@ void PdXbowFrame(uint8_t* base) {
 }
 // ---- end TEMP_XBOW ---------------------------------------------------------------
 
-// ---- The detonator crossbow (pd_crossbow.h) --------------------------------------
-REXCVAR_DEFINE_BOOL(pd_xbow_detonator, false, "PerfectDark",
-                    "The crossbow's secondary function detonates every bolt you have fired. Every "
-                    "player in a match needs the same setting");
+// ---- The Detonator Crossbow (pd_crossbow.h) --------------------------------------
+// A custom weapon (pd_custom_weapons.h): the crossbow with Detonate as its
+// secondary function, which explodes every Detonator bolt its player fired.
 REXCVAR_DEFINE_STRING(pd_xbow_explosion, "medium", "PerfectDark",
-                      "With pd_xbow_detonator, each bolt's explosion: small (the Phoenix's), medium "
-                      "(a SuperDragon grenade's), large (a rocket's), or an explosion type 1-25");
+                      "The Detonator Crossbow's bolt explosions: small (the Phoenix's), medium (a "
+                      "SuperDragon grenade's), large (a rocket's), or an explosion type 1-25");
 
-// Each frame (game thread): gives the crossbow its secondary function, the remote
-// mine's Detonate while pd_xbow_detonator is on, its own lethal bolt otherwise.
-// The crossbow's definition is shared by every player, so this is the same for
-// everyone on this PC; the primary (the 1-damage bolt that makes the target dizzy)
-// never changes.
-void PdXbowApplyFunctions(uint8_t* base) {
+// A fire path just made a bolt (`obj`, 0 if it could not): it is a Detonator bolt
+// when the Detonator Crossbow fired it (its crossbow check saw that weapon).
+void PdXbowBoltCreated(uint8_t* base, uint32_t obj, const char* path) {
   namespace xbow = pd::crossbow;
-  const uint32_t wanted = REXCVAR_GET(pd_xbow_detonator) ? xbow::kMineDetonate : xbow::kCrossbowLethal;
-  const uint32_t slot = xbow::kCrossbowDef + xbow::kSecondaryFunction;
-  if (xbow::LoadU32(base, slot) == wanted) return;
-  StoreU32(base, slot, wanted);
-  REXLOG_INFO("[xbow] crossbow secondary function: {}", wanted == xbow::kMineDetonate ? "Detonate" : "the game's");
+  const bool detonator = xbow::g_firing_weapon == xbow::kWeaponDetonator;
+  xbow::g_firing_weapon = 0;
+  if (!obj) return;
+  if (detonator) {
+    xbow::g_detonator_bolts.insert(obj);
+  } else {
+    xbow::g_detonator_bolts.erase(obj);  // a vanilla bolt at an address a Detonator bolt had
+  }
+  REXLOG_INFO("[xbow] frame {}: {} bolt obj 0x{:08X} made by the {} fire path (current player {})",  // TEMP_XBOW
+              xbow::LoadU32(base, xbow::kLevelFrames), detonator ? "Detonator" : "vanilla", obj, path,
+              xbow::LoadU32(base, xbow::kGVars + 1196));
 }
 
 namespace {
@@ -1515,7 +1514,7 @@ void XbowAlignScorch(PPCContext& ctx, uint8_t* base, uint32_t prop, uint32_t obj
 bool PdXbowBoltTick(PPCContext& ctx, uint8_t* base, uint32_t prop, uint32_t obj) {
   namespace xbow = pd::crossbow;
   PdXbowBoltTickLog(base, prop, obj);  // TEMP_XBOW
-  if (!REXCVAR_GET(pd_xbow_detonator)) return false;
+  if (!xbow::g_detonator_bolts.count(obj)) return false;  // only the Detonator Crossbow's bolts
 
   const int owner = xbow::OwnerPlayer(base, obj);
   const bool detonating = (xbow::LoadU32(base, xbow::kDetonatingMines) >> owner) & 1;
@@ -1525,6 +1524,7 @@ bool PdXbowBoltTick(PPCContext& ctx, uint8_t* base, uint32_t prop, uint32_t obj)
 
   if (!xbow::IsLocalPlayer(base, owner)) {
     XbowDeleteBolt(base, obj);
+    xbow::g_detonator_bolts.erase(obj);
     REXLOG_INFO("[xbow] bolt prop 0x{:08X}: remote owner {} detonated, copy deleted", prop, owner);  // TEMP_XBOW
     return true;
   }
@@ -1543,6 +1543,7 @@ bool PdXbowBoltTick(PPCContext& ctx, uint8_t* base, uint32_t prop, uint32_t obj)
     if (was_pending) xbow::g_pending.erase(pending);
     xbow::g_pending_tries.erase(prop);
     XbowDeleteBolt(base, obj);
+    xbow::g_detonator_bolts.erase(obj);
     return true;
   }
 
@@ -1561,6 +1562,7 @@ bool PdXbowBoltTick(PPCContext& ctx, uint8_t* base, uint32_t prop, uint32_t obj)
   if (was_pending) xbow::g_pending.erase(pending);
   xbow::g_pending_tries.erase(prop);
   XbowDeleteBolt(base, obj);
+  xbow::g_detonator_bolts.erase(obj);
   return true;
 }
 
@@ -1641,7 +1643,6 @@ void PdNoteGameFrame(uint8_t* base) {
   PdCustomInstall(base);
   PdMpMusicFrame(base);
   PdWeaponsFrame();
-  PdXbowApplyFunctions(base);
   PdXbowFrame(base);  // TEMP_XBOW
   PerfectDarkApp::NoteGameStage(
       _byteswap_ulong(*reinterpret_cast<const uint32_t*>(base + 0x826492E0)),   // stage
