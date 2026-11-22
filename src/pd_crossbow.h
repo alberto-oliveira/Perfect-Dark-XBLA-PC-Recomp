@@ -90,7 +90,10 @@ constexpr uint32_t kPropPos = 8;     // f32 x, y, z
 constexpr uint32_t kPropRooms = 58;  // s16 rooms[], ending in -1
 
 // Collision (the N64's lib/collision.c), for the scorch mark below.
-constexpr uint32_t kCdTypeBg = 0x20;  // test against the stage's walls and floors only
+// What the scorch ray can hit: the stage's walls and floors (CDTYPE_BG 0x20), doors
+// (CDTYPE_DOORS 0x02) and glass/scenery (CDTYPE_PATHBLOCKER 0x10). Not CDTYPE_OBJS:
+// the ray starts behind the bolt, so it would hit the bolt itself.
+constexpr uint32_t kCdTypeSurfaces = 0x20 | 0x02 | 0x10;
 constexpr uint32_t kPlayerProp = 188;  // a player's prop
 
 // Prop types (N64 PROPTYPE_*).

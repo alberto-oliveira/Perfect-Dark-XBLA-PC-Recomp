@@ -1301,6 +1301,15 @@ void PdXbowExplodeLog(uint8_t* base, uint32_t prop, uint32_t type) {
               xbow::LoadU32(base, xbow::kLevelFrames), type, prop, base[prop + xbow::kPropType],
               weapon ? int(base[obj + xbow::kObjWeaponNum]) : -1, xbow::OwnerPlayer(base, obj),
               int32_t(xbow::LoadU32(base, prop + xbow::kPropSyncId)), xbow::DescribeParent(base, prop));
+  // Test 1.3 found remote mines (weapon 34) whose explosion kept failing: likely
+  // mine pickups lying in the level (owner bits 0 = this PC's own player). This
+  // shows their state: hidden flags without the owner, timer240, first room
+  // (-1 = not in any room, which makes explosion_create refuse).
+  if (weapon && base[obj + xbow::kObjWeaponNum] == 34) {
+    REXLOG_INFO("[xbow]   remote mine 0x{:08X}: hidden 0x{:07X} timer240 {} room {}", prop,
+                xbow::LoadU32(base, obj + xbow::kObjHidden) & 0x0FFFFFFF,
+                xbow::LoadS16(base, obj + xbow::kObjTimer240), xbow::LoadS16(base, prop + xbow::kPropRooms));
+  }
 }
 
 // TEMP_XBOW: a fire path just made a bolt (r3 = its object). `path` = which one.
@@ -1416,7 +1425,7 @@ void XbowAlignScorch(PPCContext& ctx, uint8_t* base, uint32_t prop, uint32_t obj
     pos[i] = LoadF32(base, prop + xbow::kPropPos + uint32_t(i) * 4);
     forward[i] = LoadF32(base, obj + xbow::kObjRealRot + uint32_t(6 + i) * 4);  // row 2, times the scale
   }
-  // The ray: from the bolt's tail (its tip mirrored) to 3 bolt lengths ahead.
+  // The ray: from 2 bolt lengths behind the bolt's position to 6 lengths ahead.
   // Points in guest memory, because the game's collision test reads them there:
   // the stack below the game's own stack pointer is free scratch space.
   const uint32_t from = ctx.r1.u32 - 0x400;
@@ -1424,18 +1433,32 @@ void XbowAlignScorch(PPCContext& ctx, uint8_t* base, uint32_t prop, uint32_t obj
   const uint32_t hit = from + 32;
   const uint32_t normal = from + 48;
   for (int i = 0; i < 3; ++i) {
-    StoreF32(base, from + uint32_t(i) * 4, pos[i] - forward[i] * zmax);
-    StoreF32(base, to + uint32_t(i) * 4, pos[i] + forward[i] * zmax * 3.0f);
+    StoreF32(base, from + uint32_t(i) * 4, pos[i] - forward[i] * zmax * 2.0f);
+    StoreF32(base, to + uint32_t(i) * 4, pos[i] + forward[i] * zmax * 6.0f);
   }
   call = ctx;
   call.r1.u64 = from - 0x200;  // the game's functions get stack below the scratch points
   call.r3.u64 = from;
   call.r4.u64 = prop + xbow::kPropRooms;
   call.r5.u64 = to;
-  call.r6.u64 = xbow::kCdTypeBg;
+  call.r6.u64 = xbow::kCdTypeSurfaces;
   sub_820E4E88(call, base);  // cd_test_los_oobok_findclosest_autoflags: 0 = it hit something
   if (call.r3.s32 != 0) {
-    REXLOG_INFO("[xbow] bolt prop 0x{:08X}: no surface along its line, scorch left as is", prop);  // TEMP_XBOW
+    // No surface found. The bolt points into whatever it is stuck in, so the
+    // reverse of its flight line is a fair guess at that surface's normal: exact
+    // for a straight-on shot, tilted for a slanted one, but never standing out
+    // of the wall as the scorch did with the bolt's own up axis.
+    const float length = std::sqrt(forward[0] * forward[0] + forward[1] * forward[1] + forward[2] * forward[2]);
+    if (length < 0.001f) return;
+    for (int i = 0; i < 3; ++i) {
+      const float n = -forward[i] / length;
+      StoreF32(base, obj + xbow::kObjRealRot + uint32_t(3 + i) * 4, n);
+      StoreF32(base, prop + xbow::kPropPos + uint32_t(i) * 4, pos[i] - n * ymin);
+    }
+    REXLOG_INFO("[xbow] bolt prop 0x{:08X}: no surface along its line (at {:.0f} {:.0f} {:.0f}, line {:.2f} {:.2f} {:.2f}, "  // TEMP_XBOW
+                "length {:.1f}, room {}), scorch faces back along the line",
+                prop, pos[0], pos[1], pos[2], forward[0] / length, forward[1] / length, forward[2] / length,
+                zmax * length, xbow::LoadS16(base, prop + xbow::kPropRooms));
     return;
   }
   call.r3.u64 = hit;
