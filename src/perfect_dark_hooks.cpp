@@ -8,6 +8,7 @@
 
 #include "generated/default/perfect_dark_init.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 
@@ -58,6 +59,8 @@ bool PdRandomArena(uint32_t* stage);
 void PdXbowDetonateLog(uint8_t* base, uint32_t player);              // TEMP_XBOW
 void PdXbowExplodeLog(uint8_t* base, uint32_t prop, uint32_t type);  // TEMP_XBOW
 void PdXbowBoltCreated(uint8_t* base, uint32_t obj, const char* path);
+void PdRecolourGunLoaded(uint8_t* base, uint32_t result, uint32_t buffer, uint32_t player);  // TEMP_RECOLOUR
+void PdRecolourModelLoaded(uint8_t* base, uint32_t model, uint32_t model_x8);              // TEMP_RECOLOUR
 bool PdXbowBoltTick(PPCContext& ctx, uint8_t* base, uint32_t prop, uint32_t obj);
 void PdCustomSiteLog(uint8_t* base, const char* what, uint32_t value);   // TEMP_CUSTOM
 void PdCustomReplayLog(uint8_t* base, uint32_t weapon);                 // TEMP_CUSTOM
@@ -428,6 +431,89 @@ void PdHookXbowBoltMadeReplay(PPCRegister& r3) { PdXbowBoltCreated(HookBase(), r
 bool PdHookXbowBoltTick(PPCRegister& r11, PPCRegister& r27, PPCRegister& r31) {
   if (r11.u32 != 86) return false;
   return PdXbowBoltTick(HookContext(), HookBase(), r27.u32, r31.u32);
+}
+
+// ---- Custom weapon tints (pd_custom_weapons.h, stage 3) ----------------------------
+
+// The first-person gun renderer (sub_821761F8) at 0x821767D8, where every path has
+// stored the gun's render colour at 148(r1) (the room's light on the gun,
+// gunshadecol at player+5692, blended towards red for a charging Mauler); r29 =
+// the hand (its weapon number in its first byte). For a custom weapon the colour
+// is blended towards its tint, as the Mauler's charge does. r28 keeps the colour
+// from before the Mauler's blend: the game draws the hands (arms) with it, so it
+// is left alone (test 3.2b: tinting it tinted the arms too).
+void PdHookCustomGunColour(PPCRegister& r1, PPCRegister& r29) {
+  uint8_t* base = HookBase();
+  const uint32_t weapon = base[r29.u32];
+  const uint32_t tint = pd::custom::TintOf(weapon);
+  if (tint == pd::custom::kNoTint) return;
+  PdCustomSiteLog(base, "the first-person gun colour (tinted)", weapon);  // TEMP_RECOLOUR
+  const uint32_t at = r1.u32 + 148;
+  pd::custom::StoreU32(base, at, pd::custom::TintRgba(pd::custom::LoadU32(base, at), tint));
+}
+
+// A gun in a player's hand is not drawn by obj_render: chr_render_attached_object
+// (sub_8210A070; r31 = the attached prop) draws it with the player's render data
+// (model_render sub_82194778 at 0x8210A0AC; r3 = the render data, whose colour is
+// fogcolour at +0x38). For a custom weapon that colour is tinted just for this
+// model_render call and put back right after it (0x8210A0B0, r30 = the render
+// data), so the player's body keeps its own colour.
+namespace {
+uint32_t held_colour_saved = 0;
+bool held_colour_changed = false;
+}
+void PdHookCustomHeldGunBefore(PPCRegister& r3, PPCRegister& r31) {
+  uint8_t* base = HookBase();
+  const uint32_t prop = r31.u32;
+  if (!prop || base[prop] != 4) return;  // prop type 4 = a weapon
+  const uint32_t obj = pd::custom::LoadU32(base, prop + 4);
+  if (!obj) return;
+  const uint32_t weapon = base[obj + 92];
+  const uint32_t tint = pd::custom::TintOf(weapon);
+  if (tint == pd::custom::kNoTint) return;
+  PdCustomSiteLog(base, "a held gun colour (tinted)", weapon);  // TEMP_RECOLOUR
+  const uint32_t at = r3.u32 + 0x38;
+  held_colour_saved = pd::custom::LoadU32(base, at);
+  held_colour_changed = true;
+  pd::custom::StoreU32(base, at, pd::custom::TintRgba(held_colour_saved, tint));
+}
+void PdHookCustomHeldGunAfter(PPCRegister& r30) {
+  if (!held_colour_changed) return;
+  held_colour_changed = false;
+  pd::custom::StoreU32(HookBase(), r30.u32 + 0x38, held_colour_saved);
+}
+
+// scenario_highlight_prop (sub_821E1900; r3 = the prop, r4 = its colour, s32[4] RGBA),
+// which obj_render calls in multiplayer before drawing an object: a weapon object
+// (a pickup, or a gun in a player's hand) of a custom weapon gets its colour
+// blended towards its tint, before the scenario may highlight it.
+void PdHookCustomObjectColour(PPCRegister& r3, PPCRegister& r4) {
+  uint8_t* base = HookBase();
+  const uint32_t prop = r3.u32;
+  if (!prop || base[prop] != 4) return;  // prop type 4 = a weapon
+  const uint32_t obj = pd::custom::LoadU32(base, prop + 4);
+  if (!obj) return;
+  const uint32_t weapon = base[obj + 92];
+  const uint32_t tint = pd::custom::TintOf(weapon);
+  if (tint == pd::custom::kNoTint) return;
+  PdCustomSiteLog(base, "an object colour (tinted)", weapon);  // TEMP_RECOLOUR
+  // The colour is four s32 channels, 0-255 each (RGBA): blended as one RGBA word.
+  uint32_t rgba = 0;
+  for (uint32_t i = 0; i < 4; ++i) {
+    const int32_t value = int32_t(pd::custom::LoadU32(base, r4.u32 + i * 4));
+    rgba |= uint32_t(std::clamp(value, 0, 255)) << (24 - i * 8);
+  }
+  rgba = pd::custom::TintRgba(rgba, tint);
+  for (uint32_t i = 0; i < 4; ++i) pd::custom::StoreU32(base, r4.u32 + i * 4, (rgba >> (24 - i * 8)) & 0xFF);
+}
+
+// TEMP_RECOLOUR (step 3.1): right after the gun loader loads a gun file, and right
+// after setupLoadModeldef loads a model's file. Log and dump only.
+void PdHookRecolourGunLoaded(PPCRegister& r3, PPCRegister& r30, PPCRegister& r31) {
+  PdRecolourGunLoaded(HookBase(), r3.u32, r30.u32, r31.u32);
+}
+void PdHookRecolourModelLoaded(PPCRegister& r3, PPCRegister& r30) {
+  PdRecolourModelLoaded(HookBase(), r3.u32, r30.u32);
 }
 
 // ---- Custom weapons (pd_custom_weapons.h) ------------------------------------------

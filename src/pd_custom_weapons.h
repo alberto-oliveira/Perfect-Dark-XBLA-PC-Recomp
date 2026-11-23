@@ -31,7 +31,9 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <string>
 
 #include "pd_weapons.h"
 
@@ -99,6 +101,83 @@ inline int FuncBitWeapon(int custom_index) { return kFirstSpareFuncBitWeapon + c
 
 // The multiplayer table index of the custom weapon at `custom_index` (47, 48...).
 inline uint8_t TableIndex(int custom_index) { return uint8_t(pd::weapons::kWeaponTableCount + custom_index); }
+
+// ---- Tint (stage 3) ---------------------------------------------------------------
+//
+// A custom weapon can be drawn in a colour of its own. The game already gives a
+// whole model one colour at render time: the first-person gun gets the room's
+// light (gunshadecol), objects their shade colour. That colour is not a
+// multiplier: its RGB is a colour laid over the model and its alpha how much of
+// it shows (test 3.2: multiplying the RGB changed nothing). The game's own uses
+// show it: a charging Mauler blends its gun colour towards 0xFF00007F (red at
+// alpha 0x7F), and Hold the Briefcase highlights the case with green at alpha
+// 0x40. A custom weapon's tint is added as such an overlay, at most kTintAlpha,
+// scaled by the tint strength (TintRgba), only for that weapon (hooks in
+// perfect_dark_hooks.cpp); no model or texture data changes.
+constexpr uint32_t kNoTint = 0xFFFFFF;  // RGB; white multiplies by 1
+
+// Each custom weapon's tint (0xRRGGBB), set from its setting every frame.
+inline uint32_t g_tint[kCount] = {};
+
+// A tint setting: a colour name, "#RRGGBB", or "off"/"white"/"" for none.
+inline uint32_t ParseTint(const std::string& text) {
+  static const struct { const char* name; uint32_t rgb; } kNames[] = {
+      {"red", 0xFF3030},  {"orange", 0xFF9020}, {"yellow", 0xFFE030}, {"green", 0x40FF40},
+      {"cyan", 0x40FFFF}, {"blue", 0x5080FF},   {"purple", 0xB050FF}, {"pink", 0xFF70C0},
+      {"white", kNoTint}, {"off", kNoTint},     {"", kNoTint},
+  };
+  for (const auto& n : kNames) {
+    if (text == n.name) return n.rgb;
+  }
+  if (text.size() == 7 && text[0] == '#') {
+    char* end = nullptr;
+    const unsigned long rgb = std::strtoul(text.c_str() + 1, &end, 16);
+    if (end && *end == '\0') return uint32_t(rgb);
+  }
+  return kNoTint;
+}
+
+// The tint of weapon `number`, kNoTint if it is not a custom weapon.
+inline uint32_t TintOf(uint32_t number) {
+  const int i = IndexOf(number);
+  return i >= 0 ? g_tint[i] : kNoTint;
+}
+
+// How much of the tint colour shows at full strength (the Mauler's glow uses 0x7F).
+constexpr uint32_t kTintAlpha = 0x7F;
+// How strongly the custom weapons' colours move towards their tint: 0-255,
+// set from pd_custom_tint_strength every frame.
+inline uint32_t g_tint_strength = 153;  // 60%
+
+// A render colour with the tint added (`tint` = 0xRRGGBB).
+//
+// The renderer lays the colour's RGB over the model with its alpha as the amount:
+// shown = model * (1 - A) + RGB * A. The game's own colour is the room's darkness
+// (dark RGB, more alpha in darker rooms). Blending it straight towards the tint
+// (test 3.2c) replaced that darkness with tint, so the tint grew brighter in dark
+// rooms. Instead this works out the one overlay (X, A1) that shows the same as
+// the room's darkness first and the tint on top of it:
+//   after the room:  m * (1 - A0) + D * A0
+//   then the tint:   that * (1 - s) + T' * s
+// so A1 = A0 + s - A0 * s and X = (D * A0 * (1 - s) + T' * s) / A1, where s is the
+// tint's amount (strength times kTintAlpha) and T' the tint as lit by the room
+// (the tint times what the darkness leaves of white: 1 - A0 + A0 * D).
+inline uint32_t TintRgba(uint32_t rgba, uint32_t tint) {
+  const float a0 = float(rgba & 0xFF) / 255.0f;
+  const float s = float(g_tint_strength) / 255.0f * float(kTintAlpha) / 255.0f;
+  const float a1 = a0 + s - a0 * s;
+  if (a1 <= 0.0f) return rgba;
+  uint32_t out = uint32_t(a1 * 255.0f + 0.5f) & 0xFF;
+  for (int c = 0; c < 3; ++c) {
+    const float d = float((rgba >> (24 - c * 8)) & 0xFF) / 255.0f;  // the room's darkness colour
+    const float t = float((tint >> (16 - c * 8)) & 0xFF) / 255.0f;  // the tint
+    const float lit = t * (1.0f - a0 + a0 * d);
+    float x = (d * a0 * (1.0f - s) + lit * s) / a1;
+    x = x < 0.0f ? 0.0f : (x > 1.0f ? 1.0f : x);
+    out |= uint32_t(x * 255.0f + 0.5f) << (24 - c * 8);
+  }
+  return out;
+}
 
 // Set by Install.
 inline uint32_t g_entries = 0;       // kCount multiplayer table entries of 10 bytes

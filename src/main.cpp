@@ -22,6 +22,7 @@
 #include <map>
 #include <filesystem>
 #include <random>
+#include <set>
 #include <thread>
 #include <vector>
 
@@ -1371,6 +1372,11 @@ void PdXbowFrame(uint8_t* base) {
 // ---- The Detonator Crossbow (pd_crossbow.h) --------------------------------------
 // A custom weapon (pd_custom_weapons.h): the crossbow with Detonate as its
 // secondary function, which explodes every Detonator bolt its player fired.
+REXCVAR_DEFINE_INT32(pd_custom_tint_strength, 60, "PerfectDark",
+                     "How strongly custom weapons (the Detonator Crossbow) show their colour: 0-100");
+REXCVAR_DEFINE_STRING(pd_xbow_tint, "orange", "PerfectDark",
+                      "The Detonator Crossbow's colour: red, orange, yellow, green, cyan, blue, purple, "
+                      "pink, #RRGGBB, or off");
 REXCVAR_DEFINE_STRING(pd_xbow_explosion, "medium", "PerfectDark",
                       "The Detonator Crossbow's bolt explosions: small (the Phoenix's), medium (a "
                       "SuperDragon grenade's), large (a rocket's), or an explosion type 1-25");
@@ -1388,6 +1394,10 @@ int xbow_poll_frames = 0;
 void PdXbowNetFrame() {
   namespace netplay = rex::kernel::xam::netplay;
   namespace xbow = pd::crossbow;
+  // The Detonator Crossbow's tint (cosmetic: each PC uses its own setting).
+  pd::custom::g_tint[pd::custom::IndexOf(xbow::kWeaponDetonator)] =
+      pd::custom::ParseTint(REXCVAR_GET(pd_xbow_tint));
+  pd::custom::g_tint_strength = uint32_t(std::clamp(REXCVAR_GET(pd_custom_tint_strength), 0, 100)) * 255 / 100;
   const uint32_t own = xbow::ParseExplosion(REXCVAR_GET(pd_xbow_explosion));
   if (netplay::IsHostingSession()) {
     if (!xbow_hosting || own != xbow_sent) {
@@ -1679,6 +1689,58 @@ void PdCustomReplayLog(uint8_t* base, uint32_t weapon) {
 
 void PdCustomStageStart() { custom_site_logs.clear(); }
 // ---- end TEMP_CUSTOM -----------------------------------------------------------------
+
+// ---- TEMP_RECOLOUR: step 3.1, the crossbow's model files ------------------------------
+// Logging and file dumps only, to learn how the crossbow's models are made before
+// tinting the Detonator Crossbow's. Each file is dumped once per session to
+// <exe folder>\dumps\file_XXXX.bin (XXXX = file id), as it is right after loading.
+namespace {
+constexpr uint32_t kFileInfo = 0x826302F0;  // g_FileInfo: per file id {u32 loaded size, u32 allocated size}
+std::set<uint32_t> recolour_dumped;          // file ids dumped this session
+
+void RecolourDump(const uint8_t* base, uint32_t file_id, uint32_t address) {
+  if (!recolour_dumped.insert(file_id).second) return;
+  uint32_t size = pd::weapons::LoadU32(base, kFileInfo + file_id * 8);
+  if (size == 0) size = pd::weapons::LoadU32(base, kFileInfo + file_id * 8 + 4);
+  if (size == 0 || size > 4 * 1024 * 1024) {
+    REXLOG_INFO("[recolour] file 0x{:04X}: no usable size ({}), not dumped", file_id, size);
+    return;
+  }
+  wchar_t exe[MAX_PATH];
+  const DWORD n = GetModuleFileNameW(nullptr, exe, MAX_PATH);
+  const std::filesystem::path folder = std::filesystem::path(std::wstring(exe, n)).parent_path() / L"dumps";
+  std::error_code ec;
+  std::filesystem::create_directories(folder, ec);
+  const std::filesystem::path path = folder / fmt::format("file_{:04X}.bin", file_id);
+  FILE* f = _wfopen(path.c_str(), L"wb");
+  if (!f) return;
+  std::fwrite(base + address, 1, size, f);
+  std::fclose(f);
+  REXLOG_INFO("[recolour] file 0x{:04X}: {} bytes from 0x{:08X} dumped to {}", file_id, size, address, path.string());
+}
+}  // namespace
+
+// The gun loader (sub_82170488) right after file_load_to_addr loaded a gun file
+// (0x82170524; r3 = what it returned, r30 = the buffer, r31 = the player).
+void PdRecolourGunLoaded(uint8_t* base, uint32_t result, uint32_t buffer, uint32_t player) {
+  const uint32_t file_id = pd::weapons::LoadU16(base, player + 5594);
+  std::string fields;  // the player's gun fields around the load, to find the weapon being loaded
+  for (uint32_t o = 5536; o < 5612; ++o) fields += fmt::format("{:02X}{}", base[player + o], (o % 4 == 3) ? " " : "");
+  REXLOG_INFO("[recolour] gun file 0x{:04X} loaded to 0x{:08X} (returned 0x{:08X}); weapon byte +5544 = {}; "
+              "player+5536..5611: {}",
+              file_id, buffer, result, int(int8_t(base[player + 5544])), fields);
+  RecolourDump(base, file_id, buffer);
+}
+
+// setupLoadModeldef (sub_821FD640) right after it loaded a model's file
+// (0x821FD678; r3 = the loaded model, r30 = model number * 8).
+void PdRecolourModelLoaded(uint8_t* base, uint32_t model, uint32_t model_x8) {
+  const uint32_t number = model_x8 / 8;
+  const uint32_t file_id = pd::weapons::LoadU16(base, pd::weapons::kModelStates + model_x8 + 4);
+  REXLOG_INFO("[recolour] model 0x{:03X} (file 0x{:04X}) loaded to 0x{:08X}", number, file_id, model);
+  if (number == 0x10D || number == 0x198) RecolourDump(base, file_id, model);  // the crossbow's, the Hammer's
+}
+// ---- end TEMP_RECOLOUR -----------------------------------------------------------------
 
 void PdNoteGameFrame(uint8_t* base) {
   PdCustomInstall(base);

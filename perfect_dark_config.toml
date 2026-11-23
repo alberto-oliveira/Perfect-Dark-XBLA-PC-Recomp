@@ -722,3 +722,48 @@ registers = ["r11"]
 address = 0x8220CE34
 name = "PdHookCustomPickupNames"
 registers = ["r8"]
+
+# ---- Custom weapon tints (stage 3) ------------------------------------------------------
+# The first-person gun renderer sub_821761F8 at loc_821767D8, after every path stored
+# the gun's render colour at 148(r1) (r29 = the hand; r28, the hands' colour, is left
+# alone), and
+# scenario_highlight_prop sub_821E1900 (r3 = prop, r4 = its s32[4] colour), which
+# obj_render calls in multiplayer. A custom weapon's colour is blended towards its tint.
+[[midasm_hook]]
+address = 0x821767D8
+name = "PdHookCustomGunColour"
+registers = ["r1", "r29"]
+
+[[midasm_hook]]
+address = 0x821E1900
+name = "PdHookCustomObjectColour"
+registers = ["r3", "r4"]
+
+# A gun in a player's hand: chr_render_attached_object sub_8210A070 around its
+# model_render call (`bl 0x82194778` at 0x8210A0AC; r3 = render data, r31 = the
+# attached prop; after it, r30 = render data): the colour (render data +0x38) is
+# tinted for a custom weapon, then put back.
+[[midasm_hook]]
+address = 0x8210A0AC
+name = "PdHookCustomHeldGunBefore"
+registers = ["r3", "r31"]
+
+[[midasm_hook]]
+address = 0x8210A0B0
+name = "PdHookCustomHeldGunAfter"
+registers = ["r30"]
+
+# ---- TEMP_RECOLOUR (step 3.1): the crossbow's model files ------------------------------
+# The gun loader sub_82170488 right after `bl file_load_to_addr` (0x82170520; r3 = its
+# result, r30 = the buffer, r31 = the player, file id at player+5594), and
+# setupLoadModeldef sub_821FD640 at `stwx r3,r30,r31` (r3 = the loaded model, r30 =
+# model number * 8). Log and dump the files.
+[[midasm_hook]]
+address = 0x82170524
+name = "PdHookRecolourGunLoaded"
+registers = ["r3", "r30", "r31"]
+
+[[midasm_hook]]
+address = 0x821FD678
+name = "PdHookRecolourModelLoaded"
+registers = ["r3", "r30"]
