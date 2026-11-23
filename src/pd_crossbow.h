@@ -37,6 +37,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <vector>
 
 namespace pd::crossbow {
 
@@ -75,6 +76,29 @@ inline uint32_t ParseExplosion(const std::string& text) {
   if (end && *end == '\0' && row >= 1 && row < long(kExplosionTypeCount)) return uint32_t(row);
   return kExplosionMedium;
 }
+
+// ---- The host's explosion size ---------------------------------------------------
+//
+// Each bolt explodes on its owner's PC, so without this every player's bolts
+// would use that player's own pd_xbow_explosion. Online, the host's counts: it
+// sends it as a host blob (netplay::SetHostBlob, the channel the weapons mod's
+// slots use) under its own key, and each joined PC uses what it last heard.
+// Blob: [version][explosion type].
+constexpr uint32_t kBlobKey = 0x58424F57;  // "XBOW"
+constexpr uint8_t kBlobVersion = 1;
+
+inline std::vector<uint8_t> EncodeBlob(uint32_t explosion) { return {kBlobVersion, uint8_t(explosion)}; }
+
+inline bool DecodeBlob(const std::vector<uint8_t>& blob, uint32_t* explosion) {
+  if (blob.size() < 2 || blob[0] != kBlobVersion) return false;
+  if (blob[1] < 1 || blob[1] >= kExplosionTypeCount) return false;
+  *explosion = blob[1];
+  return true;
+}
+
+// The explosion type this PC's Detonator bolts use: its own setting, or online
+// on a joined PC the host's (medium until the host's is heard). Set each frame.
+inline uint32_t g_explosion = kExplosionMedium;
 
 // A prop: +0 u8 type, +4 its object (or chr), +24 its parent prop (what it is
 // stuck in), +44 the sync id XBLA added (the same for a prop's copies on every

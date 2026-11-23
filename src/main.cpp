@@ -1375,6 +1375,47 @@ REXCVAR_DEFINE_STRING(pd_xbow_explosion, "medium", "PerfectDark",
                       "The Detonator Crossbow's bolt explosions: small (the Phoenix's), medium (a "
                       "SuperDragon grenade's), large (a rocket's), or an explosion type 1-25");
 
+// Each frame (game thread): which explosion this PC's Detonator bolts use. The
+// host sends its own whenever it starts hosting or the setting changes; a joined
+// PC asks twice a second for the host's latest (medium until it has one); with
+// no session, its own setting.
+namespace {
+bool xbow_hosting = false;               // the host blob went out for this hosting session
+uint32_t xbow_sent = 0;                  // the explosion type last sent
+int xbow_poll_frames = 0;
+}
+
+void PdXbowNetFrame() {
+  namespace netplay = rex::kernel::xam::netplay;
+  namespace xbow = pd::crossbow;
+  const uint32_t own = xbow::ParseExplosion(REXCVAR_GET(pd_xbow_explosion));
+  if (netplay::IsHostingSession()) {
+    if (!xbow_hosting || own != xbow_sent) {
+      const std::vector<uint8_t> blob = xbow::EncodeBlob(own);
+      netplay::SetHostBlob(xbow::kBlobKey, blob.data(), blob.size());
+      REXLOG_INFO("[xbow] hosting: Detonator explosion type {} sent to the joined PCs", own);
+      xbow_hosting = true;
+      xbow_sent = own;
+    }
+    xbow::g_explosion = own;
+    return;
+  }
+  xbow_hosting = false;
+  if (!netplay::IsJoinedSession()) {
+    xbow::g_explosion = own;
+    return;
+  }
+  if (++xbow_poll_frames % 30 != 0) return;
+  netplay::HostBlob blob;
+  uint32_t host = 0;
+  if (!netplay::LatestHostBlob(xbow::kBlobKey, &blob) || !xbow::DecodeBlob(blob.data, &host)) host = xbow::kExplosionMedium;
+  if (host != xbow::g_explosion) {
+    REXLOG_INFO("[xbow] joined: Detonator explosion type {} ({})", host,
+                blob.valid ? "the host's" : "medium, nothing heard from the host yet");
+  }
+  xbow::g_explosion = host;
+}
+
 // A fire path just made a bolt (`obj`, 0 if it could not): it is a Detonator bolt
 // when the Detonator Crossbow fired it (its crossbow check saw that weapon).
 void PdXbowBoltCreated(uint8_t* base, uint32_t obj, const char* path) {
@@ -1550,7 +1591,7 @@ bool PdXbowBoltTick(PPCContext& ctx, uint8_t* base, uint32_t prop, uint32_t obj)
   if (!was_pending) XbowAlignScorch(ctx, base, prop, obj);
   PPCContext call = ctx;
   call.r3.u64 = prop;
-  call.r4.u64 = xbow::ParseExplosion(REXCVAR_GET(pd_xbow_explosion));
+  call.r4.u64 = xbow::g_explosion;  // this PC's, or the host's online (PdXbowNetFrame)
   sub_82205A18(call, base);  // prop_explode: false if no explosion slot is free
   if (!call.r3.u32) {
     if (!was_pending) {
@@ -1641,6 +1682,7 @@ void PdCustomStageStart() { custom_site_logs.clear(); }
 
 void PdNoteGameFrame(uint8_t* base) {
   PdCustomInstall(base);
+  PdXbowNetFrame();
   PdMpMusicFrame(base);
   PdWeaponsFrame();
   PdXbowFrame(base);  // TEMP_XBOW
