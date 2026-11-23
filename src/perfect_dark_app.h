@@ -5891,9 +5891,12 @@ class PerfectDarkApp : public rex::ReXApp {
   // opens - so the label stayed up over the Institute (user, 2026-10-27). The
   // film is therefore the stage entered straight from the title stage, and
   // only that stage shows the label.
-  // Native renderer research only (branch native-renderer, never shipped): a
-  // test pipe. With pd_test_pipe = true, commands are read from test_cmd.txt
-  // beside the exe (one per line, the file is deleted once read) and run in
+  // The test pipe: scripted tests (tools\test-scripts, started by
+  // tools\Run-TestCopies.ps1). First written for the native renderer research;
+  // the menu trace and the menu/network commands were added for netplay tests.
+  // With pd_test_pipe = true, commands are read from test_cmd.txt
+  // beside the exe (one per line, the file is deleted once read; blank lines
+  // and lines starting with # are skipped) and run in
   // order inside the game: buttons and sticks go through the input driver's own
   // injection (pd_test_input.h: a driver of its own, which works without
   // window focus), so nothing is sent to the desktop.
@@ -5920,6 +5923,46 @@ class PerfectDarkApp : public rex::ReXApp {
   inline static std::chrono::steady_clock::time_point test_next_{};
   inline static std::chrono::steady_clock::time_point test_checked_{};
 
+  // Menu trace (test pipe on): logs each change of stage, of the menu on top
+  // and of its highlighted row. Going through the menus by hand once with
+  // the pipe on records the path a test script has to follow:
+  //   [test] stage 5
+  //   [test] menu def 0x825FAF74 title 5011 "Game Setup" (dialog 0x...)
+  //   [test]   focus item 0x825FAE84 #1 [selectable, handler 0x...] "Options" (...)
+  // The row last highlighted before a menu change is the one that was pressed.
+  // "#n" is the item's index in the menu's list (hidden rows included).
+  // Reads only: it runs on the UI thread, like the menu mouse.
+  static void TraceMenu(rex::memory::Memory* mem) {
+    static uint32_t last_stage = 0xFFFFFFFF, last_def = 0xFFFFFFFF, last_focus = 0xFFFFFFFF;
+    const uint32_t stage = ReadGuestU32(mem, kStageNum);
+    if (stage != last_stage) {
+      last_stage = stage;
+      REXLOG_INFO("[test] stage {}", stage);
+    }
+    const uint32_t dialog = MenuFindDialog(mem);  // 0 = no menu on screen
+    const uint32_t def = dialog ? ReadGuestU32(mem, dialog) : 0;
+    if (def != last_def) {
+      last_def = def;
+      last_focus = 0xFFFFFFFF;  // log the new menu's first highlight too
+      if (!def) {
+        REXLOG_INFO("[test] menu none");
+      } else {
+        // The title (def +4) is a text id, or a function that makes it.
+        const uint32_t title = ReadGuestU32(mem, def + 4);
+        const std::string text = title < 0x10000 ? GuestText(mem, title) : std::string("(from a function)");
+        REXLOG_INFO("[test] menu def 0x{:08X} title {:04X} \"{}\" (dialog 0x{:08X})", def, title, text, dialog);
+      }
+    }
+    if (!dialog) return;
+    const uint32_t focus = ReadGuestU32(mem, dialog + 0x08);
+    if (focus != last_focus) {
+      last_focus = focus;
+      const uint32_t items = ReadGuestU32(mem, def + 8);  // 20 bytes per item
+      const int index = focus >= items ? int((focus - items) / 20) : -1;
+      REXLOG_INFO("[test]   focus item 0x{:08X} #{}{}", focus, index, focus ? DescribeMenuItem(mem, focus) : "");
+    }
+  }
+
   static void TickTestPipe() {
     static const bool on = rex::cvar::GetFlagByName("pd_test_pipe") == "true";
     if (!on) return;
@@ -5927,6 +5970,7 @@ class PerfectDarkApp : public rex::ReXApp {
     if (!app || !app->runtime() || !app->runtime()->memory()) return;
     auto* mem = app->runtime()->memory();
     pd::TestInputDriver::Install(app->runtime()->input_system());
+    TraceMenu(mem);
     const auto now = std::chrono::steady_clock::now();
     if (now - test_checked_ > std::chrono::milliseconds(200)) {
       test_checked_ = now;
@@ -5940,7 +5984,8 @@ class PerfectDarkApp : public rex::ReXApp {
         while (std::getline(in, line)) {
           std::istringstream words(line);
           TestCmd cmd;
-          if (!(words >> cmd.verb)) continue;
+          if (!(words >> cmd.verb)) continue;  // a blank line
+          if (cmd.verb[0] == '#') continue;    // a comment line
           std::string w;
           while (words >> w) cmd.args.push_back(w);
           test_queue_.push_back(std::move(cmd));

@@ -26,6 +26,11 @@
   freely in and out of their windows; the mouse does not aim in them. The host
   keeps mouse aiming.
 
+.PARAMETER TestPipe
+  Start every copy with the test pipe on (pd_test_pipe): each reads commands
+  from test_cmd.txt beside its exe, and logs every stage, menu and highlighted
+  row ([test] lines), which is how a menu path is recorded for a test script.
+
 .EXAMPLE
   .\tools\Run-TestCopies.ps1                       # host + client, both on the default monitor
 .EXAMPLE
@@ -39,6 +44,7 @@ param(
     [switch]$Mute,
     [switch]$MuteAll,
     [switch]$FreeMouse,
+    [switch]$TestPipe,
     [string[]]$Folders = @(),
     [int]$DelaySeconds = 2
 )
@@ -67,6 +73,7 @@ for ($i = 0; $i -lt $Copies; $i++) {
     $isClient = $i -gt 0   # copy 0 is the host
     if ($MuteAll -or ($isClient -and $Mute)) { $gameArgs += '--audio_mute' }
     if ($isClient -and $FreeMouse) { $gameArgs += '--no-mnk_mouse' }
+    if ($TestPipe) { $gameArgs += '--pd_test_pipe' }
 
     Write-Host "Starting $exe $($gameArgs -join ' ')"
     if ($gameArgs.Count -gt 0) {
