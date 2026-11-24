@@ -1,0 +1,9 @@
+# Scenario "basic": the clients press Ready and wait for the host to start.
+# Runs after lobby-client.txt.
+
+pick 825FA2F8                # Ready (lobby row 10)
+signal ready-{copy}
+waitmenu none 120            # the match has started
+wait 3000
+shot basic-client{copy}
+log basic: in the match
