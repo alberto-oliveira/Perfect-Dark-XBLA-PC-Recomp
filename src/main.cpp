@@ -1386,6 +1386,11 @@ REXCVAR_DEFINE_INT32(pd_custom_tint_strength, 60, "PerfectDark",
 REXCVAR_DEFINE_STRING(pd_xbow_tint, "orange", "PerfectDark",
                       "The Detonator Crossbow's colour: red, orange, yellow, green, cyan, blue, purple, "
                       "pink, #RRGGBB, or off");
+REXCVAR_DEFINE_STRING(pd_xbow_bolt_tint, "red", "PerfectDark",
+                      "The Detonator Crossbow's bolts' colour: red, orange, yellow, green, cyan, blue, "
+                      "purple, pink, #RRGGBB, or off (like the crossbow's bolts)");
+REXCVAR_DEFINE_BOOL(pd_xbow_bolt_blink, true, "PerfectDark",
+                    "The Detonator Crossbow's bolts blink (true) or keep their colour steady (false)");
 REXCVAR_DEFINE_STRING(pd_xbow_explosion, "medium", "PerfectDark",
                       "The Detonator Crossbow's bolt explosions: small (the Phoenix's), medium (a "
                       "SuperDragon grenade's), large (a rocket's), or an explosion type 1-25");
@@ -1407,6 +1412,8 @@ void PdXbowNetFrame() {
   pd::custom::g_tint[pd::custom::IndexOf(xbow::kWeaponDetonator)] =
       pd::custom::ParseTint(REXCVAR_GET(pd_xbow_tint));
   pd::custom::g_tint_strength = uint32_t(std::clamp(REXCVAR_GET(pd_custom_tint_strength), 0, 100)) * 255 / 100;
+  xbow::g_bolt_tint = pd::custom::ParseTint(REXCVAR_GET(pd_xbow_bolt_tint));
+  xbow::g_bolt_blink = REXCVAR_GET(pd_xbow_bolt_blink);
   const uint32_t own = xbow::ParseExplosion(REXCVAR_GET(pd_xbow_explosion));
   if (netplay::IsHostingSession()) {
     if (!xbow_hosting || own != xbow_sent) {

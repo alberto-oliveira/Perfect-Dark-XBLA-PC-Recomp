@@ -31,6 +31,7 @@
 // Header-only, C++17. The game glue (settings, hooks) is in main.cpp.
 #pragma once
 
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -219,5 +220,22 @@ constexpr int kMaxPendingTries = 600;
 // crossbow's bolt made at a reused address, removed. Emptied at each stage start.
 inline std::set<uint32_t> g_detonator_bolts;
 inline uint32_t g_firing_weapon = 0;
+
+// The Detonator bolts' colour (stage 5): laid over each tagged bolt when it is
+// drawn (the tint's overlay, pd_custom_weapons.h TintRgba), pulsing when g_bolt_blink
+// so the bolts blink. 0xRRGGBB, or 0xFFFFFF = none. Set every frame from
+// pd_xbow_bolt_tint / pd_xbow_bolt_blink (main.cpp).
+inline uint32_t g_bolt_tint = 0xFF3030;
+inline bool g_bolt_blink = true;
+constexpr uint32_t kBoltBlinkFrames = 40;  // one pulse per 40 frames: 1.5 a second at 60
+
+// The overlay's strength (0-255) at level frame `frame`: a smooth pulse between
+// faint and full when blinking, else steady.
+inline uint32_t BoltTintStrength(uint32_t frame) {
+  if (!g_bolt_blink) return 200;
+  const float phase = float(frame % kBoltBlinkFrames) / float(kBoltBlinkFrames);  // 0..1
+  const float wave = 0.5f - 0.5f * std::cos(phase * 6.2831853f);                  // 0..1..0
+  return uint32_t(30.0f + wave * 225.0f);
+}
 
 }  // namespace pd::crossbow

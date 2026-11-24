@@ -210,9 +210,10 @@ inline uint32_t g_tint_strength = 153;  // 60%
 // so A1 = A0 + s - A0 * s and X = (D * A0 * (1 - s) + T' * s) / A1, where s is the
 // tint's amount (strength times kTintAlpha) and T' the tint as lit by the room
 // (the tint times what the darkness leaves of white: 1 - A0 + A0 * D).
-inline uint32_t TintRgba(uint32_t rgba, uint32_t tint) {
+// `strength` (0-255) scales the tint; the custom weapons' own tint uses g_tint_strength.
+inline uint32_t TintRgba(uint32_t rgba, uint32_t tint, uint32_t strength = g_tint_strength) {
   const float a0 = float(rgba & 0xFF) / 255.0f;
-  const float s = float(g_tint_strength) / 255.0f * float(kTintAlpha) / 255.0f;
+  const float s = float(strength) / 255.0f * float(kTintAlpha) / 255.0f;
   const float a1 = a0 + s - a0 * s;
   if (a1 <= 0.0f) return rgba;
   uint32_t out = uint32_t(a1 * 255.0f + 0.5f) & 0xFF;

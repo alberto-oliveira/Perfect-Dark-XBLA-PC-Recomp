@@ -537,6 +537,17 @@ void PdHookCustomAsLeftWeapon(PPCRegister& weapon) {
   if (w && w->left_weapon) weapon.u64 = w->left_weapon;
 }
 
+// The remote mine's detonate shortcut (stage 5): the input function sub_820F2988
+// detonates when Use and Reload are held together (N64 A+B, recomp E+R), only if
+// the current weapon is the remote mine (`cmpwi r10,34` at 0x820F3DE8, r10 = the
+// weapon). If so it cancels the right hand's pending reload and calls the
+// detonator. A custom weapon whose secondary function is the mine's Detonate reads
+// as 34 there, so the Detonator Crossbow detonates with E+R, in either function.
+void PdHookCustomDetonateShortcut(PPCRegister& r10) {
+  const pd::custom::Weapon* w = pd::custom::Find(uint8_t(r10.u32));
+  if (w && w->secondary == pd::custom::kFuncMineDetonate) r10.u64 = 34;
+}
+
 // bgun_tick_hand (sub_82174EC8; r14 = the hand number) right after it read the
 // player's gun model for this hand (`lwz r22,5560(r25)` at 0x821753E4; r25 = the
 // player): the left hand of a custom weapon with a left-hand model uses that
@@ -604,6 +615,27 @@ void PdHookCustomGunColour(PPCRegister& r1, PPCRegister& r29) {
 namespace {
 uint32_t held_colour_saved = 0;
 bool held_colour_changed = false;
+
+// The overlay for weapon object `obj` (a pickup, a gun in a hand, or a projectile
+// such as a bolt), shared by the two object hooks below. A custom weapon gets its
+// tint; a Detonator bolt (weapon 86, tagged when fired: pd_crossbow.h) gets the
+// bolt colour, pulsing with the level frame counter. Returns false for anything else.
+bool ObjectOverlay(uint8_t* base, uint32_t obj, uint32_t& tint, uint32_t& strength) {
+  const uint32_t weapon = base[obj + 92];
+  tint = pd::custom::TintOf(weapon);
+  if (tint != pd::custom::kNoTint) {
+    strength = pd::custom::g_tint_strength;
+    return true;
+  }
+  if (weapon == 86 && pd::crossbow::g_bolt_tint != pd::custom::kNoTint &&
+      pd::crossbow::g_detonator_bolts.count(obj)) {
+    tint = pd::crossbow::g_bolt_tint;
+    strength = pd::crossbow::BoltTintStrength(pd::custom::LoadU32(base, pd::crossbow::kLevelFrames));
+    PdCustomSiteLog(base, "a Detonator bolt colour", strength);  // TEMP_RECOLOUR (value = strength)
+    return true;
+  }
+  return false;
+}
 }
 void PdHookCustomHeldGunBefore(PPCRegister& r3, PPCRegister& r31) {
   uint8_t* base = HookBase();
@@ -611,14 +643,13 @@ void PdHookCustomHeldGunBefore(PPCRegister& r3, PPCRegister& r31) {
   if (!prop || base[prop] != 4) return;  // prop type 4 = a weapon
   const uint32_t obj = pd::custom::LoadU32(base, prop + 4);
   if (!obj) return;
-  const uint32_t weapon = base[obj + 92];
-  const uint32_t tint = pd::custom::TintOf(weapon);
-  if (tint == pd::custom::kNoTint) return;
-  PdCustomSiteLog(base, "a held gun colour (tinted)", weapon);  // TEMP_RECOLOUR
+  uint32_t tint, strength;
+  if (!ObjectOverlay(base, obj, tint, strength)) return;
+  PdCustomSiteLog(base, "a held gun colour (tinted)", base[obj + 92]);  // TEMP_RECOLOUR
   const uint32_t at = r3.u32 + 0x38;
   held_colour_saved = pd::custom::LoadU32(base, at);
   held_colour_changed = true;
-  pd::custom::StoreU32(base, at, pd::custom::TintRgba(held_colour_saved, tint));
+  pd::custom::StoreU32(base, at, pd::custom::TintRgba(held_colour_saved, tint, strength));
 }
 void PdHookCustomHeldGunAfter(PPCRegister& r30) {
   if (!held_colour_changed) return;
@@ -629,24 +660,24 @@ void PdHookCustomHeldGunAfter(PPCRegister& r30) {
 // scenario_highlight_prop (sub_821E1900; r3 = the prop, r4 = its colour, s32[4] RGBA),
 // which obj_render calls in multiplayer before drawing an object: a weapon object
 // (a pickup, or a gun in a player's hand) of a custom weapon gets its colour
-// blended towards its tint, before the scenario may highlight it.
+// blended towards its tint, before the scenario may highlight it. Projectiles are
+// weapon objects too: a Detonator bolt, flying or lodged, gets the bolt colour.
 void PdHookCustomObjectColour(PPCRegister& r3, PPCRegister& r4) {
   uint8_t* base = HookBase();
   const uint32_t prop = r3.u32;
   if (!prop || base[prop] != 4) return;  // prop type 4 = a weapon
   const uint32_t obj = pd::custom::LoadU32(base, prop + 4);
   if (!obj) return;
-  const uint32_t weapon = base[obj + 92];
-  const uint32_t tint = pd::custom::TintOf(weapon);
-  if (tint == pd::custom::kNoTint) return;
-  PdCustomSiteLog(base, "an object colour (tinted)", weapon);  // TEMP_RECOLOUR
+  uint32_t tint, strength;
+  if (!ObjectOverlay(base, obj, tint, strength)) return;
+  PdCustomSiteLog(base, "an object colour (tinted)", base[obj + 92]);  // TEMP_RECOLOUR
   // The colour is four s32 channels, 0-255 each (RGBA): blended as one RGBA word.
   uint32_t rgba = 0;
   for (uint32_t i = 0; i < 4; ++i) {
     const int32_t value = int32_t(pd::custom::LoadU32(base, r4.u32 + i * 4));
     rgba |= uint32_t(std::clamp(value, 0, 255)) << (24 - i * 8);
   }
-  rgba = pd::custom::TintRgba(rgba, tint);
+  rgba = pd::custom::TintRgba(rgba, tint, strength);
   for (uint32_t i = 0; i < 4; ++i) pd::custom::StoreU32(base, r4.u32 + i * 4, (rgba >> (24 - i * 8)) & 0xFF);
 }
 

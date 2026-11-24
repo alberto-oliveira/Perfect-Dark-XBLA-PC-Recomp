@@ -1,7 +1,9 @@
-# Scenario "detonator": the Detonator Crossbow mod (stage 4a, the left-hand detonator).
+# Scenario "detonator": the Detonator Crossbow mod (stages 4a-5: the left-hand
+# detonator, the blinking bolts).
 # Runs after lobby-host.txt. TEMP_DET: pd_det_give gives the host the vanilla
 # crossbow, the Detonator and full ammo. The host equips the Detonator, fires two
-# bolts, detonates them, reloads, with screenshots; then the copies are left in the
+# bolts at the floor, steps aside and takes four screenshots 0.2 s apart (the blink),
+# detonates them, reloads, with screenshots; then the copies are left in the
 # match to play by hand. Buttons: b = previous weapon (the first press after the give
 # is ignored; from unarmed it wraps to the Detonator), y = next, rb = primary /
 # secondary, x = reload, right trigger = fire.
@@ -19,11 +21,21 @@ wait 5000
 btn b                        # the Detonator
 wait 6000
 shot det-1-idle
+rstick 0 -24000 350          # look down at the floor, so the bolts land close
+wait 500
 trig 0 255 150
 wait 800
 trig 0 255 150
-wait 2500
-shot det-2-fired
+wait 1000
+stick -32000 0 500            # step left, to see the bolts from the side
+wait 1000
+shot det-2-fired-a
+wait 200
+shot det-2-fired-b
+wait 200
+shot det-2-fired-c
+wait 200
+shot det-2-fired-d
 btn rb                       # Detonate
 wait 1500
 trig 0 255 150

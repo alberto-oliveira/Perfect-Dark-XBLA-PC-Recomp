@@ -855,6 +855,14 @@ address = 0x82180D58
 name = "PdHookCustomAsLeftWeapon"
 registers = ["r11"]
 
+# The remote mine's E+R detonate shortcut in sub_820F2988 (`cmpwi r10,34` at
+# 0x820F3DE8, r10 = the current weapon): a custom weapon with the mine's Detonate
+# as its secondary reads as the mine there.
+[[midasm_hook]]
+address = 0x820F3DE8
+name = "PdHookCustomDetonateShortcut"
+registers = ["r10"]
+
 # ---- TEMP_RECOLOUR (step 3.1): the crossbow's model files ------------------------------
 # The gun loader sub_82170488 right after `bl file_load_to_addr` (0x82170520; r3 = its
 # result, r30 = the buffer, r31 = the player, file id at player+5594), and
