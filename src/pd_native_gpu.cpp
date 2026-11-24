@@ -84,8 +84,11 @@ REXCVAR_DEFINE_STRING(gpu_native_api, "auto", "GPU",
                       "Plume renderer API: auto (Direct3D 12), d3d12 or vulkan. Read once at start");
 REXCVAR_DECLARE(bool, gpu_native_translate);  // pd_native_shaders.cpp
 REXCVAR_DEFINE_BOOL(pd_test_pipe, false, "PerfectDark",
-                    "Native renderer research: run test commands from test_cmd.txt beside the exe "
+                    "Testing: run test commands from test_cmd.txt beside the exe and log the menu path "
                     "(perfect_dark_app.h TickTestPipe; injected input only)");
+REXCVAR_DEFINE_STRING(pd_test_sync_dir, "", "PerfectDark",
+                      "Testing: folder shared by the game copies of one test run, for the test pipe's "
+                      "signal / waitsignal commands (empty = off; tools\\Run-TestCopies.ps1 sets it)");
 REXCVAR_DEFINE_INT32(pd_test_rng_seed, 0, "PerfectDark",
                      "Native renderer research: every seed the game sets (boot, match start) becomes this "
                      "value, so a scenario picks the same spawns on both renderers (0 = off)");
