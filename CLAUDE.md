@@ -18,6 +18,14 @@ This file describes the workflow for perfect dark modding using Claude Code. Som
     - If the test requires more than 1 player, and how many it does require
     - Instructions of how to carry out the test
     - A summary of what has been done so far: modified files, why they have been modified, and what has been modified
+
+## Test pipeline (2026-11-23)
+
+- Test rounds use `tools\Build and Test.bat` (configure/codegen only when needed, build, copy, start) and, where possible, a scripted scenario from `tools\test-scripts\` (see its README), so the copies reach the match by themselves.
+- Run commands put the host on monitor 2 and the clients on monitor 3: `-Monitors 2,3,3` (2 copies: `2,3`). Copies sharing a monitor are placed side by side.
+- A test request names the command with its scenario, e.g. `"tools\Build and Test.bat" -Copies 3 -Monitors 2,3,3 -Mute -Scenario basic`. A mod that needs its own setup or in-match actions gets its own scenario in `tools\test-scripts\<name>\`.
+- Claude may run a scenario itself when the result can be read from logs and screenshots, but asks me each time before starting or closing the copies. Copies are closed with exactly `Stop-Process -Name perfect_dark -Force` (allowed in my local settings). Anything that needs eyes or feel is still tested by me.
+- New menu paths are recorded by starting the copies with `-TestPipe` and going through the menus by hand (the `[test]` lines in each log).
 - Anything unclear from memory or from instructions, clarify and update this file and the memory file
 
 ## Clarifications (2026-11-12)

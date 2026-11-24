@@ -47,7 +47,8 @@
 #undef XINPUT_DEVTYPE_GAMEPAD
 #undef XINPUT_DEVTYPE_KEYBOARD
 #include <rex/input/mnk/mnk_input_driver.h>
-#include "pd_test_input.h"  // native-renderer branch: test pipe input
+#include "pd_test_input.h"  // test pipe input (works without window focus)
+#include "pd_test_script.h"  // test pipe: signals between copies, wait timeouts
 #include "pd_native_vk_out.h"  // Graphics API: pd::native_vk::VulkanUsable
 #include "pd_update.h"         // Check for Updates
 #include "pd_handicap.h"       // pd_handicaps: online handicaps by gamertag
@@ -5891,9 +5892,12 @@ class PerfectDarkApp : public rex::ReXApp {
   // opens - so the label stayed up over the Institute (user, 2026-10-27). The
   // film is therefore the stage entered straight from the title stage, and
   // only that stage shows the label.
-  // Native renderer research only (branch native-renderer, never shipped): a
-  // test pipe. With pd_test_pipe = true, commands are read from test_cmd.txt
-  // beside the exe (one per line, the file is deleted once read) and run in
+  // The test pipe: scripted tests (tools\test-scripts, started by
+  // tools\Run-TestCopies.ps1). First written for the native renderer research;
+  // the menu trace and the menu/network commands were added for netplay tests.
+  // With pd_test_pipe = true, commands are read from test_cmd.txt
+  // beside the exe (one per line, the file is deleted once read; blank lines
+  // are skipped, and # starts a comment, on its own line or after a command) and run in
   // order inside the game: buttons and sticks go through the input driver's own
   // injection (pd_test_input.h: a driver of its own, which works without
   // window focus), so nothing is sent to the desktop.
@@ -5903,7 +5907,19 @@ class PerfectDarkApp : public rex::ReXApp {
   //   wait <ms>
   //   log <text>                a [test] line in the log (with the stage)
   //   cvar <name> <value>
-  //   waitstage <n>             hold the queue until the stage number is n
+  //   waitstage <n> [sec]       hold the queue until the stage number is n
+  // Menus and the network (TestStepFront). <key> is a menu item's address, or
+  // a text id (below 0x10000) - the [test] menu trace prints both. Each waits
+  // up to [sec] seconds (default 60), then logs "[test] FAILED" and drops the
+  // rest of the script, so a copy that got stuck says where.
+  //   waitmenu <def|title id|none> [sec]  until that menu is on top (none = no menu)
+  //   pick <key> [sec]          highlight that row of the top menu, then press A
+  //   pickrow <n> [sec]         the same for the n-th row the highlight can sit on (0 = first)
+  //   choose <key> <index> [sec]  open that dropdown, take option <index> (as shown, 0 = top), A
+  //   waitnet <hosting|joined> [sec]  until this copy hosts / has joined a match
+  //   waitplayers <n> [sec]     host: until the lobby has n players (the host counts)
+  //   signal <name>             create the file <name> in pd_test_sync_dir
+  //   waitsignal <name> [count] [sec]  until count files (default 1) there start with <name>
   //   shot <name>               the game's frame (as F12) to screenshots\<name>.png
   //   wshot <name>              the window as painted (upscaling, aspect bars) to screenshots\w-<name>.png
   //   poke <addr> <value>       write a guest u32 (hex)
@@ -5920,6 +5936,163 @@ class PerfectDarkApp : public rex::ReXApp {
   inline static std::chrono::steady_clock::time_point test_next_{};
   inline static std::chrono::steady_clock::time_point test_checked_{};
 
+  // ---- Test pipe: menu and network commands ----------------------------------
+  // These stay at the front of the queue until they are done: a wait until its
+  // condition holds, a menu command through its phases (test_phase_). The
+  // clock (test_wait_) starts when a command first reaches the front.
+  enum class TestStep { kNotMine, kHold, kDone, kFailed };
+  inline static pd::testscript::WaitClock test_wait_;
+  inline static int test_phase_ = 0;
+
+  // A press of A on pad 0, the way "btn a" does it, and the gap after it.
+  static void TestPressA(std::chrono::steady_clock::time_point now) {
+    pd::TestInputDriver::Buttons(0x1000, 120);
+    pd::TestInputDriver::Keystroke(0x5800);  // VK_PAD_A
+    test_next_ = now + std::chrono::milliseconds(120 + 350);
+  }
+
+  // The row of the top menu a script names, or -1 while it isn't shown: by the
+  // item's address (the game's own menus), or by its text id, which also finds
+  // rows a mod copied to the heap (Game Setup's, see PatchHandicapRow).
+  static int TestFindRow(rex::memory::Memory* mem, const MenuLayout& layout, uint32_t key) {
+    for (size_t i = 0; i < layout.rows.size(); ++i) {
+      const MenuRow& row = layout.rows[i];
+      if (!row.focusable || row.blocked) continue;
+      if (row.item == key || (key < 0x10000 && ReadGuestU32(mem, row.item + 8) == key)) return int(i);
+    }
+    return -1;
+  }
+  // The n-th row the highlight can sit on, or -1.
+  static int TestNthRow(const MenuLayout& layout, int n) {
+    for (size_t i = 0; i < layout.rows.size(); ++i) {
+      if (!layout.rows[i].focusable || layout.rows[i].blocked) continue;
+      if (n-- == 0) return int(i);
+    }
+    return -1;
+  }
+
+  // Runs the command at the front of the queue if it is one of these.
+  static TestStep TestStepFront(rex::memory::Memory* mem, std::chrono::steady_clock::time_point now) {
+    namespace ts = pd::testscript;
+    namespace netplay = rex::kernel::xam::netplay;
+    const TestCmd& c = test_queue_.front();
+    auto arg = [&](size_t i) { return i < c.args.size() ? c.args[i] : std::string(); };
+    // Not there yet: keep waiting, unless the time is up.
+    auto hold = [&](size_t timeout_arg) {
+      return test_wait_.Expired(now, ts::TimeoutSeconds(arg(timeout_arg))) ? TestStep::kFailed
+                                                                            : TestStep::kHold;
+    };
+    MenuLayout layout = {0, 0.0f, 0.0f, 0.0f, 0.0f, false, false, {}};
+    const bool menu = MenuMouseLayout(mem, &layout);  // false: no menu on screen
+
+    if (c.verb == "signal") {
+      if (!ts::Signal(arg(0))) REXLOG_WARN("[test] signal {}: no pd_test_sync_dir, or it can't be written", arg(0));
+      return TestStep::kDone;
+    }
+    if (c.verb == "waitsignal") {
+      const int count = arg(1).empty() ? 1 : std::atoi(arg(1).c_str());
+      return ts::CountSignals(arg(0)) >= count ? TestStep::kDone : hold(2);
+    }
+    if (c.verb == "waitstage") {
+      return ReadGuestU32(mem, kStageNum) == uint32_t(std::atoi(arg(0).c_str())) ? TestStep::kDone : hold(1);
+    }
+    if (c.verb == "waitnet") {
+      const bool there = arg(0) == "hosting" ? netplay::IsHostingSession() : netplay::IsJoinedSession();
+      return there ? TestStep::kDone : hold(1);
+    }
+    if (c.verb == "waitplayers") {
+      const size_t want = size_t(std::max(1, std::atoi(arg(0).c_str())));
+      return pd::handicap::LobbyPlayers(mem->virtual_membase()).size() >= want ? TestStep::kDone : hold(1);
+    }
+    if (c.verb == "waitmenu") {
+      if (arg(0) == "none") return menu ? hold(1) : TestStep::kDone;
+      if (!menu) return hold(1);
+      const uint32_t key = ts::ParseHex(arg(0));
+      const uint32_t def = ReadGuestU32(mem, layout.dialog);
+      const bool there = def == key || (key < 0x10000 && ReadGuestU32(mem, def + 4) == key);
+      return there ? TestStep::kDone : hold(1);
+    }
+    if (c.verb == "pick" || c.verb == "pickrow" || c.verb == "choose") {
+      const bool by_index = c.verb == "pickrow";
+      const size_t timeout_arg = c.verb == "choose" ? 2 : 1;
+      const int r = !menu ? -1
+                    : by_index ? TestNthRow(layout, std::atoi(arg(0).c_str()))
+                               : TestFindRow(mem, layout, ts::ParseHex(arg(0)));
+      if (r < 0) return hold(timeout_arg);
+      const MenuRow& row = layout.rows[size_t(r)];
+      switch (test_phase_) {
+        case 0:  // move the highlight there, and give the game a few frames to see it
+          WriteGuestU32(mem, layout.dialog + 0x08, row.item);
+          test_next_ = now + std::chrono::milliseconds(150);
+          test_phase_ = 1;
+          return TestStep::kHold;
+        case 1:  // press A: a row acts, a dropdown opens
+          if (ReadGuestU32(mem, layout.dialog + 0x08) != row.item) {  // the game moved it away
+            test_phase_ = 0;
+            return hold(timeout_arg);
+          }
+          TestPressA(now);
+          if (c.verb != "choose") return TestStep::kDone;
+          test_phase_ = 2;
+          return TestStep::kHold;
+        case 2: {  // choose: once the dropdown is open, put its selection on the option
+          MenuListState list;
+          if (!layout.dimmed || !MenuReadList(mem, row, &list)) return hold(timeout_arg);
+          // As the menu mouse does: the dropdown's own tick keeps the index in
+          // range, and A confirms it.
+          WriteGuestS16(mem, list.at + 2, int16_t(std::atoi(arg(1).c_str())));
+          test_next_ = now + std::chrono::milliseconds(200);
+          test_phase_ = 3;
+          return TestStep::kHold;
+        }
+        default:  // choose: A takes the option
+          TestPressA(now);
+          return TestStep::kDone;
+      }
+    }
+    return TestStep::kNotMine;
+  }
+
+  // Menu trace (test pipe on): logs each change of stage, of the menu on top
+  // and of its highlighted row. Going through the menus by hand once with
+  // the pipe on records the path a test script has to follow:
+  //   [test] stage 5
+  //   [test] menu def 0x825FAF74 title 5011 "Game Setup" (dialog 0x...)
+  //   [test]   focus item 0x825FAE84 #1 [selectable, handler 0x...] "Options" (...)
+  // The row last highlighted before a menu change is the one that was pressed.
+  // "#n" is the item's index in the menu's list (hidden rows included).
+  // Reads only: it runs on the UI thread, like the menu mouse.
+  static void TraceMenu(rex::memory::Memory* mem) {
+    static uint32_t last_stage = 0xFFFFFFFF, last_def = 0xFFFFFFFF, last_focus = 0xFFFFFFFF;
+    const uint32_t stage = ReadGuestU32(mem, kStageNum);
+    if (stage != last_stage) {
+      last_stage = stage;
+      REXLOG_INFO("[test] stage {}", stage);
+    }
+    const uint32_t dialog = MenuFindDialog(mem);  // 0 = no menu on screen
+    const uint32_t def = dialog ? ReadGuestU32(mem, dialog) : 0;
+    if (def != last_def) {
+      last_def = def;
+      last_focus = 0xFFFFFFFF;  // log the new menu's first highlight too
+      if (!def) {
+        REXLOG_INFO("[test] menu none");
+      } else {
+        // The title (def +4) is a text id, or a function that makes it.
+        const uint32_t title = ReadGuestU32(mem, def + 4);
+        const std::string text = title < 0x10000 ? GuestText(mem, title) : std::string("(from a function)");
+        REXLOG_INFO("[test] menu def 0x{:08X} title {:04X} \"{}\" (dialog 0x{:08X})", def, title, text, dialog);
+      }
+    }
+    if (!dialog) return;
+    const uint32_t focus = ReadGuestU32(mem, dialog + 0x08);
+    if (focus != last_focus) {
+      last_focus = focus;
+      const uint32_t items = ReadGuestU32(mem, def + 8);  // 20 bytes per item
+      const int index = focus >= items ? int((focus - items) / 20) : -1;
+      REXLOG_INFO("[test]   focus item 0x{:08X} #{}{}", focus, index, focus ? DescribeMenuItem(mem, focus) : "");
+    }
+  }
+
   static void TickTestPipe() {
     static const bool on = rex::cvar::GetFlagByName("pd_test_pipe") == "true";
     if (!on) return;
@@ -5927,6 +6100,7 @@ class PerfectDarkApp : public rex::ReXApp {
     if (!app || !app->runtime() || !app->runtime()->memory()) return;
     auto* mem = app->runtime()->memory();
     pd::TestInputDriver::Install(app->runtime()->input_system());
+    TraceMenu(mem);
     const auto now = std::chrono::steady_clock::now();
     if (now - test_checked_ > std::chrono::milliseconds(200)) {
       test_checked_ = now;
@@ -5940,9 +6114,13 @@ class PerfectDarkApp : public rex::ReXApp {
         while (std::getline(in, line)) {
           std::istringstream words(line);
           TestCmd cmd;
-          if (!(words >> cmd.verb)) continue;
+          if (!(words >> cmd.verb)) continue;  // a blank line
+          if (cmd.verb[0] == '#') continue;    // a comment line
           std::string w;
-          while (words >> w) cmd.args.push_back(w);
+          while (words >> w) {
+            if (w[0] == '#') break;  // a comment at the end of the line
+            cmd.args.push_back(w);
+          }
           test_queue_.push_back(std::move(cmd));
         }
         in.close();
@@ -5950,9 +6128,26 @@ class PerfectDarkApp : public rex::ReXApp {
       }
     }
     while (!test_queue_.empty() && now >= test_next_) {
-      if (test_queue_.front().verb == "waitstage" && !test_queue_.front().args.empty() &&
-          ReadGuestU32(mem, kStageNum) != uint32_t(atoi(test_queue_.front().args[0].c_str())))
-        break;
+      // The menu, network and waiting commands (TestStepFront).
+      const TestStep step = TestStepFront(mem, now);
+      if (step != TestStep::kNotMine) {
+        const TestCmd& front = test_queue_.front();
+        std::string line = front.verb;
+        for (const std::string& a : front.args) line += " " + a;
+        if (step == TestStep::kHold) break;
+        test_wait_.Reset();
+        test_phase_ = 0;
+        if (step == TestStep::kFailed) {
+          const uint32_t dialog = MenuFindDialog(mem);
+          REXLOG_WARN("[test] FAILED {} (stage {}, menu def 0x{:08X}); the rest of the script is dropped",
+                      line, ReadGuestU32(mem, kStageNum), dialog ? ReadGuestU32(mem, dialog) : 0);
+          test_queue_.clear();
+          break;
+        }
+        REXLOG_INFO("[test] done: {}", line);
+        test_queue_.pop_front();
+        continue;
+      }
       const TestCmd c = std::move(test_queue_.front());
       test_queue_.pop_front();
       auto arg = [&](size_t i) { return i < c.args.size() ? c.args[i] : std::string(); };

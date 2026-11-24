@@ -1,0 +1,26 @@
+# Scenario "host-settings": the host's handicaps (pd_handicaps) and weapon slots
+# (pd_mp_weapons) reach every copy. The logs show it on each copy:
+#   [handicap] host's list / cfg N 'name': old -> new
+#   [weapons] stage N (...): slots ..., seed ...   (the same on every copy)
+# and the peeks below show the handicap bytes themselves.
+# Runs after lobby-host.txt.
+
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start (lobby row 10)
+waitmenu none 60
+wait 3000
+
+# Player configs: 216 bytes each from 0x82641950; the handicap is the byte at
+# +0xCD, the second byte of the word at +0xCC (128 = 100%).
+peek 82641A1C 4 handicap-cfg0
+peek 82641AF4 4 handicap-cfg1
+peek 82641BCC 4 handicap-cfg2
+shot settings-host-start
+
+# The pipe plays too: walk forward for 2 seconds.
+stick 0 32000 2000
+wait 500
+shot settings-host-walked
+log host-settings: done

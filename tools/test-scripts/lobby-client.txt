@@ -1,0 +1,29 @@
+# A client: from the boot screens to the host's lobby.
+# Menu addresses and text ids recorded with the menu trace (test T2, 2026-11-23).
+# {players} {clients} {copy} are filled in by Run-TestCopies.ps1.
+
+# The boot logos are stage 90, then the attract film is stage 48: START on the film.
+waitstage 48 90
+wait 1500
+btn start
+
+waitmenu 825F8F7C        # main menu
+pick 8C13                # Play Game
+waitmenu 5674            # Perfect Menu (title text 5674)
+pick 825FBA08            # Combat Simulator (row 3; its text comes from a function)
+waitmenu 825FA134        # the Combat Simulator lobby
+
+# Only search once the host's match exists.
+waitsignal hosting 1 120
+
+# Match Type, options as shown top to bottom: 0 Join Match, 1 Host Match,
+# 2 Local Multiplayer (the port shows the game's own order reversed; see
+# PdMatchTypeHandler). Join Match opens the Multiplayer screen.
+choose 825FA244 0
+waitmenu 8CD1            # Multiplayer (title text 8CD1): LAN, Direct Connect
+pickrow 0                # LAN
+waitmenu 8CC0            # Join Match: the matches found
+wait 2000                # time for the search to hear the host
+pickrow 0                # the first match: the host's
+waitnet joined 60
+waitmenu 825FA134        # the host's lobby

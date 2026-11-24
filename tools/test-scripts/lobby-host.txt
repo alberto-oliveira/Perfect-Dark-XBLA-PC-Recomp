@@ -1,0 +1,21 @@
+# The host: from the boot screens to hosting a match in the Combat Simulator lobby.
+# Menu addresses and text ids recorded with the menu trace (test T2, 2026-11-23).
+# {players} {clients} {copy} are filled in by Run-TestCopies.ps1.
+
+# The boot logos are stage 90, then the attract film is stage 48: START on the film.
+waitstage 48 90
+wait 1500
+btn start
+
+waitmenu 825F8F7C        # main menu
+pick 8C13                # Play Game
+waitmenu 5674            # Perfect Menu (title text 5674)
+pick 825FBA08            # Combat Simulator (row 3; its text comes from a function)
+waitmenu 825FA134        # the Combat Simulator lobby
+
+# Match Type, options as shown top to bottom: 0 Join Match, 1 Host Match,
+# 2 Local Multiplayer (the port shows the game's own order reversed; see
+# PdMatchTypeHandler). Hosting starts at once, in the same lobby screen.
+choose 825FA244 1
+waitnet hosting 30
+signal hosting
