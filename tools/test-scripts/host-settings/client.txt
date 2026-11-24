@@ -1,0 +1,13 @@
+# Scenario "host-settings": see host.txt. Runs after lobby-client.txt.
+
+pick 825FA2F8                # Ready (lobby row 10)
+signal ready-{copy}
+waitmenu none 120
+wait 3000
+
+# The handicap bytes as this copy has them (each copy is player 0 for itself).
+peek 82641A1C 4 handicap-cfg0
+peek 82641AF4 4 handicap-cfg1
+peek 82641BCC 4 handicap-cfg2
+shot settings-client{copy}
+log host-settings: done

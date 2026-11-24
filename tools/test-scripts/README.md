@@ -89,3 +89,6 @@ current menu, and the selected option of an open dropdown.
 ## Scenarios
 
 - `basic`: start a match with the host's saved Game Setup, and take a screenshot on each copy.
+- `host-settings`: as `basic`, then log every copy's handicap bytes (with the
+  `[handicap]` and `[weapons]` lines, they show the host's settings reached
+  everyone), and the host walks forward for 2 seconds.
