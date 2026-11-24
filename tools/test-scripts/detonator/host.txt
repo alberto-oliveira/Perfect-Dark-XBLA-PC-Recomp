@@ -1,0 +1,40 @@
+# Scenario "detonator": the Detonator Crossbow mod (stage 4a, the left-hand detonator).
+# Runs after lobby-host.txt. TEMP_DET: pd_det_give gives the host the vanilla
+# crossbow, the Detonator and full ammo. The host equips the Detonator, fires two
+# bolts, detonates them, reloads, with screenshots; then the copies are left in the
+# match to play by hand. Buttons: b = previous weapon (the first press after the give
+# is ignored; from unarmed it wraps to the Detonator), y = next, rb = primary /
+# secondary, x = reload, right trigger = fire.
+
+cvar pd_det_give true
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start
+waitmenu none 60
+wait 7000
+log detonator: in the match
+btn b                        # (ignored)
+wait 5000
+btn b                        # the Detonator
+wait 6000
+shot det-1-idle
+trig 0 255 150
+wait 800
+trig 0 255 150
+wait 2500
+shot det-2-fired
+btn rb                       # Detonate
+wait 1500
+trig 0 255 150
+wait 300
+shot det-3-detonating
+wait 2500
+btn rb                       # back to the bolt
+wait 1500
+btn x                        # reload
+wait 400
+shot det-4-reloading
+wait 4000
+shot det-5-after
+log detonator: done (the copies stay in the match)

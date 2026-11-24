@@ -67,6 +67,11 @@ struct Weapon {
   uint16_t text_id;  // the borrowed text id for its name (a solo-only item's)
   const char* name;  // its name (menus, HUD, pickup message)
   uint32_t secondary;  // its secondary function's definition, 0 = the base weapon's
+  // Something held in the left hand at the same time (stage 4a), the way the
+  // remote mine's left hand holds its detonator: the weapon the left hand gets
+  // (0 = none) and the first-person model file it is drawn with.
+  uint8_t left_weapon;
+  uint16_t left_model_file;
 };
 
 // The custom weapons. The order gives their virtual table indices (the first is
@@ -75,7 +80,9 @@ inline constexpr Weapon kList[] = {
     // base: the crossbow, whose primary (the 1-damage dizzy bolt) it keeps;
     // secondary: Detonate, which explodes this player's Detonator bolts
     // (pd_crossbow.h); name: the Necklace's text (0x4CE6, solo-only)
-    {0x51, 27, 0x4CE6, "Detonator Crossbow", kFuncMineDetonate},
+    // left hand: the remote mine's detonator (weapon 34, which the game turns
+    // into the detonator in a left hand) from the mine's model file 0x393
+    {0x51, 27, 0x4CE6, "Detonator Crossbow", kFuncMineDetonate, 34, 0x393},
 };
 constexpr int kCount = int(sizeof(kList) / sizeof(kList[0]));
 static_assert(kFirstSpareFuncBitWeapon + kCount - 1 <= kLastSpareFuncBitWeapon, "no spare function bits left");
@@ -95,6 +102,47 @@ inline uint32_t AsBase(uint32_t number) {
   const int i = IndexOf(number);
   return i >= 0 ? kList[i].base : number;
 }
+
+// The custom weapon with weapon number `number`, or nullptr.
+inline const Weapon* Find(uint32_t number) {
+  const int i = IndexOf(number);
+  return i >= 0 ? &kList[i] : nullptr;
+}
+
+// ---- The left hand (stage 4a) -----------------------------------------------------
+//
+// The game gives each player one first-person gun model, used by both hands. The
+// remote mine is "dual-wielded": both hands hold weapon 34, and every check for
+// "the left hand holds weapon 34" makes that hand its detonator (its position, no
+// firing, the press animation on Detonate). A custom weapon with a left_weapon
+// gets the same: on equip the left hand is put in use holding left_weapon, and is
+// given its own model, loaded from left_model_file into memory of our own with
+// the game's gun loader steps (main.cpp, PdCustomLoadGunModel). Hooks: the weapon
+// switch, the gun loader's per-hand model setup and the per-hand tick
+// (perfect_dark_hooks.cpp, "left hand").
+
+// Player and hand fields (XBLA; the gun control is the N64 gunctrl moved 0x28 bytes).
+constexpr uint32_t kPlayerWeapon = 5544;        // s8 gunctrl.weaponnum: the weapon held
+constexpr uint32_t kPlayerDualWield = 5547;     // u8: bit 0x80 = gunctrl.dualwielding
+constexpr uint32_t kPlayerGunMemNew = 5548;     // s32 gunctrl.gunmemnew: the weapon being loaded
+constexpr uint32_t kPlayerHands = 1632;         // hands[2], kHandSize each (right, left)
+constexpr uint32_t kHandSize = 1956;
+constexpr uint32_t kHandWeapon = 0;             // s8 gset.weaponnum
+constexpr uint32_t kHandVisible = 7;            // s8 visible (drawn this frame)
+constexpr uint32_t kHandInUse = 8;              // u8 inuse
+constexpr uint32_t kHandGunModel = 900;         // struct model gunmodel (definition at +8)
+constexpr uint32_t kHandGunModelSave = 1076;    // the gun model's saved data (model_init's 3rd argument)
+constexpr uint32_t kHandGunModelCmds = 1940;    // compiledgunmodelcmds
+constexpr uint32_t kHandState = 1540;           // s32 state (N64 HANDSTATE_*)
+constexpr int32_t kHandStateReload = 1;
+constexpr uint32_t kModelDefinition = 8;        // struct model: its modeldef
+constexpr uint32_t kHandLeft = kPlayerHands + kHandSize;
+
+// Each custom weapon's left-hand model (0 = none or not loaded yet), loaded at
+// each stage start, and the memory its command lists are built in.
+inline uint32_t g_left_model[kCount] = {};
+inline uint32_t g_left_cmds[kCount] = {};
+constexpr uint32_t kLeftCmdsSize = 0x10000;
 
 // The weapon number whose primary/secondary bit a custom weapon uses (a spare one).
 inline int FuncBitWeapon(int custom_index) { return kFirstSpareFuncBitWeapon + custom_index; }

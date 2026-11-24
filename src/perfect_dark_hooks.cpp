@@ -64,6 +64,9 @@ void PdRecolourModelLoaded(uint8_t* base, uint32_t model, uint32_t model_x8);   
 bool PdXbowBoltTick(PPCContext& ctx, uint8_t* base, uint32_t prop, uint32_t obj);
 void PdCustomSiteLog(uint8_t* base, const char* what, uint32_t value);   // TEMP_CUSTOM
 void PdCustomReplayLog(uint8_t* base, uint32_t weapon);                 // TEMP_CUSTOM
+void PdCustomLeftHandLog(uint8_t* base, uint32_t weapon, uint32_t modeldef, uint32_t cmds_size);  // TEMP_DET
+bool PdDetSiteOff(int site);                         // TEMP_DET
+void PdDetGiveTick(PPCContext& ctx, uint8_t* base);  // TEMP_DET
 
 namespace {
 // The calling guest thread's full context and guest memory, for a hook that needs
@@ -431,6 +434,146 @@ void PdHookXbowBoltMadeReplay(PPCRegister& r3) { PdXbowBoltCreated(HookBase(), r
 bool PdHookXbowBoltTick(PPCRegister& r11, PPCRegister& r27, PPCRegister& r31) {
   if (r11.u32 != 86) return false;
   return PdXbowBoltTick(HookContext(), HookBase(), r27.u32, r31.u32);
+}
+
+// ---- Custom weapons: the left hand (pd_custom_weapons.h, stage 4a) ------------------
+
+// The weapon switch (sub_8217C4A8) right after it set both hands' weapon to the new
+// one (0x8217C7FC, before inv_calculate_current_index; r26 = the player). For a
+// custom weapon with a left-hand item: dual-wielding on, the left hand in use,
+// holding that item (the remote mine for the Detonator, whose left hand the game
+// then treats as its detonator).
+void PdHookCustomLeftHandEquip(PPCRegister& r26) {
+  namespace custom = pd::custom;
+  uint8_t* base = HookBase();
+  const uint32_t player = r26.u32;
+  const custom::Weapon* w = custom::Find(uint8_t(base[player + custom::kPlayerWeapon]));
+  if (!w || !w->left_weapon) return;
+  if (PdDetSiteOff(11)) return;  // TEMP_DET
+  base[player + custom::kPlayerDualWield] |= 0x80;
+  base[player + custom::kHandLeft + custom::kHandInUse] = 1;
+  base[player + custom::kHandLeft + custom::kHandWeapon] = w->left_weapon;
+  PdCustomSiteLog(base, "the weapon switch (left hand set up)", w->number);  // TEMP_DET
+}
+
+// The gun loader (sub_8217B268) right after it made both hands' model instances
+// from the player's gun model (0x8217B6D0; r31 = the player). For a custom weapon
+// with a left-hand model, the left hand's instance and command list are made
+// again from that model (model_init sub_82195A70, bgun_create_model_cmd_list
+// sub_82172D58), the list in memory of our own.
+void PdHookCustomLeftHandModels(PPCRegister& r31) {
+  namespace custom = pd::custom;
+  uint8_t* base = HookBase();
+  const uint32_t player = r31.u32;
+  const int i = custom::IndexOf(custom::LoadU32(base, player + custom::kPlayerGunMemNew));
+  if (i < 0 || !custom::g_left_model[i] || !custom::g_left_cmds[i]) return;
+  if (PdDetSiteOff(12)) return;  // TEMP_DET
+  const uint32_t hand = player + custom::kHandLeft;
+  const uint32_t model = hand + custom::kHandGunModel;
+  PPCContext call = HookContext();
+  call.r3.u64 = model;
+  call.r4.u64 = custom::g_left_model[i];
+  call.r5.u64 = hand + custom::kHandGunModelSave;
+  call.r6.u64 = 0;
+  sub_82195A70(call, base);  // model_init
+  call = HookContext();
+  call.r3.u64 = model;
+  call.r4.u64 = custom::LoadU32(base, custom::g_left_model[i]);  // the model's root node
+  call.r5.u64 = custom::g_left_cmds[i];
+  sub_82172D58(call, base);  // bgun_create_model_cmd_list: returns its size
+  const uint32_t size = call.r3.u32;
+  custom::StoreU32(base, hand + custom::kHandGunModelCmds, custom::g_left_cmds[i]);
+  PdCustomLeftHandLog(base, custom::kList[i].number, custom::g_left_model[i], size);  // TEMP_DET
+}
+
+// bgun_get_weapon_num (sub_821722D0; r3 = the hand number) right after it read the
+// player's weapon (0x821722FC, r11): the game asks it, not the hand's own weapon,
+// for almost everything a hand does (its weapon info and definition, animations,
+// functions, part visibility, the detonator test). For the left hand of a custom
+// weapon with a left-hand item the answer is that item, so the left hand behaves
+// as the remote mine's detonator hand (test 4a.3: without this it played the
+// crossbow's animations on the mine model and fired).
+// The compiler also INLINED this function in about a dozen places (test 4a.3b: the
+// hand tick's copy left the detonator frozen in the middle of the screen); each
+// copy gets the same hook at its `extsb`, passing whatever register still tells
+// the hand: its number (left = 1) or its offset from the player (left = 1956).
+namespace {
+void LeftHandItem(PPCRegister& weapon) {
+  const pd::custom::Weapon* w = pd::custom::Find(uint8_t(weapon.u32));
+  if (w && w->left_weapon) weapon.u64 = w->left_weapon;
+}
+}  // namespace
+void PdHookCustomLeftHandWeapon(PPCRegister& hand, PPCRegister& weapon) {
+  if (hand.u32 == 1 || hand.u32 == pd::custom::kHandSize) LeftHandItem(weapon);
+}
+// The same, where the hand is only known by its address next to the player's.
+void PdHookCustomLeftHandWeaponAddr(PPCRegister& hand_address, PPCRegister& player, PPCRegister& weapon) {
+  if (hand_address.u32 - player.u32 == pd::custom::kHandSize) LeftHandItem(weapon);
+}
+
+// TEMP_DET: one wrapper per site (its number = the bit in pd_det_off), so single
+// sites can be turned off live to find which one moves the right hand's crossbow
+// (test 4a.3c: it points backwards). The cleanup puts the shared names back.
+#define PD_DET_SITE2(n)   void PdHookDetSite##n(PPCRegister& hand, PPCRegister& weapon) {     if (!PdDetSiteOff(n)) PdHookCustomLeftHandWeapon(hand, weapon);   }
+#define PD_DET_SITE3(n)   void PdHookDetSite##n(PPCRegister& hand_address, PPCRegister& player, PPCRegister& weapon) {     if (!PdDetSiteOff(n)) PdHookCustomLeftHandWeaponAddr(hand_address, player, weapon);   }
+PD_DET_SITE2(0)
+PD_DET_SITE2(1)
+PD_DET_SITE3(2)
+PD_DET_SITE2(3)
+PD_DET_SITE2(4)
+PD_DET_SITE2(5)
+PD_DET_SITE2(6)
+PD_DET_SITE3(7)
+PD_DET_SITE2(8)
+PD_DET_SITE2(9)
+PD_DET_SITE2(10)
+
+// bgun_tick_gameplay (sub_821807A0) where it decides which hands fire: "both hands
+// take turns unless the weapon is the remote mine" (0x82180C68, r10) and "the
+// remote mine fires only the right hand" (0x82180D58, r11), each comparing the
+// player's weapon with 34. A custom weapon with a left-hand item reads as that item.
+void PdHookCustomAsLeftWeapon(PPCRegister& weapon) {
+  const pd::custom::Weapon* w = pd::custom::Find(uint8_t(weapon.u32));
+  if (w && w->left_weapon) weapon.u64 = w->left_weapon;
+}
+
+// bgun_tick_hand (sub_82174EC8; r14 = the hand number) right after it read the
+// player's gun model for this hand (`lwz r22,5560(r25)` at 0x821753E4; r25 = the
+// player): the left hand of a custom weapon with a left-hand model uses that
+// model, when its instance is made from it.
+void PdHookCustomLeftHandTick(PPCRegister& r14, PPCRegister& r22, PPCRegister& r25) {
+  namespace custom = pd::custom;
+  uint8_t* base = HookBase();
+  PdDetGiveTick(HookContext(), base);  // TEMP_DET
+  if (r14.u32 != 1) return;  // the left hand
+  const uint32_t player = r25.u32;
+  const int i = custom::IndexOf(uint8_t(base[player + custom::kPlayerWeapon]));
+  if (i < 0 || !custom::g_left_model[i]) return;
+  const uint32_t model = player + custom::kHandLeft + custom::kHandGunModel;
+  if (custom::LoadU32(base, model + custom::kModelDefinition) != custom::g_left_model[i]) return;
+  if (!PdDetSiteOff(13)) r22.u64 = custom::g_left_model[i];  // TEMP_DET bit 13
+  // While the right hand reloads, the left-hand item is hidden: the crossbow's
+  // reload animation brings in a left arm of its own (test 4a.3e: two left hands).
+  // The hand stays ticked, only not drawn this frame.
+  const uint32_t right = player + custom::kPlayerHands;
+  if (!PdDetSiteOff(14) && int32_t(custom::LoadU32(base, right + custom::kHandState)) == custom::kHandStateReload) {
+    base[player + custom::kHandLeft + custom::kHandVisible] = 0;
+  }
+}
+
+// bgun_tick_hand (sub_82174EC8) at 0x821759E8, where a gun that is not animating
+// (r30 = N64's a0) has its joints worked out ONCE into a cache, the right hand's
+// matrix block (hands[RIGHT].unk0dd8, flag unk0dd4 at player+3580), which BOTH
+// hands then reuse. Fine when both hands hold the same model; with a left-hand
+// model of our own it mixed the two (test 4a.3h: the idle crossbow drawn with the
+// mine model's joints, its body turned). The left hand of a custom weapon with a
+// left-hand model skips the cache: true jumps to the per-frame path (0x82175AB0).
+bool PdHookCustomLeftHandNoCache(PPCRegister& r14, PPCRegister& r25) {
+  namespace custom = pd::custom;
+  if (r14.u32 != 1) return false;  // the left hand
+  uint8_t* base = HookBase();
+  const int i = custom::IndexOf(uint8_t(base[r25.u32 + custom::kPlayerWeapon]));
+  return i >= 0 && custom::g_left_model[i] && !PdDetSiteOff(15);  // TEMP_DET bit 15
 }
 
 // ---- Custom weapon tints (pd_custom_weapons.h, stage 3) ----------------------------
