@@ -15,6 +15,11 @@
   perfect_dark.toml line for the same setting wins over its flag, so leave
   monitor, audio_mute and mnk_mouse out of the configs.
 
+  The game centres its window on its monitor, so copies sharing a monitor would
+  open on top of each other. Those are placed side by side once their windows
+  appear, each taking an equal share of the monitor's width at 16:9 (the game
+  follows a resize as it does when the Resolution menu changes the size).
+
 .PARAMETER Mute
   Start the client copies with the sound off (audio_mute). The host keeps sound.
 
@@ -102,6 +107,7 @@ function Get-CopyScript([int]$i) {
     return $text.Replace('{players}', "$Copies").Replace('{clients}', "$($Copies - 1)").Replace('{copy}', "$i")
 }
 
+$started = @()   # the copies started: process and monitor
 for ($i = 0; $i -lt $Copies; $i++) {
     $folder = $Folders[$i]
     $exe = Join-Path $folder 'perfect_dark.exe'
@@ -123,10 +129,53 @@ for ($i = 0; $i -lt $Copies; $i++) {
 
     Write-Host "Starting $exe $($gameArgs -join ' ')"
     if ($gameArgs.Count -gt 0) {
-        Start-Process -FilePath $exe -WorkingDirectory $folder -ArgumentList $gameArgs
+        $process = Start-Process -FilePath $exe -WorkingDirectory $folder -ArgumentList $gameArgs -PassThru
     } else {
-        Start-Process -FilePath $exe -WorkingDirectory $folder
+        $process = Start-Process -FilePath $exe -WorkingDirectory $folder -PassThru
     }
+    $started += [pscustomobject]@{ Process = $process; Monitor = $monitor }
     # A short gap so the copies don't all load the game data at the same moment.
     if ($i -lt $Copies - 1) { Start-Sleep -Seconds $DelaySeconds }
+}
+
+# ---- Side by side: copies that share a monitor --------------------------------
+$shared = @($started | Where-Object { $_.Monitor -gt 0 } | Group-Object Monitor | Where-Object { $_.Count -gt 1 })
+if ($shared.Count -eq 0) { return }
+
+# MoveWindow and SetProcessDPIAware from the Windows API. DPI-aware, so the
+# monitor's size and the window's position are both in real pixels.
+Add-Type -Namespace PdTest -Name Win32 -MemberDefinition @'
+[DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr hWnd, int x, int y, int w, int h, bool repaint);
+[DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+'@
+Add-Type -AssemblyName System.Windows.Forms
+[void][PdTest.Win32]::SetProcessDPIAware()
+
+# The window of a started copy, once it is shown (0 if it never appears).
+function Wait-Window($process) {
+    for ($t = 0; $t -lt 60; $t++) {   # up to 30 seconds
+        $process.Refresh()
+        if ($process.HasExited) { return [IntPtr]::Zero }
+        if ($process.MainWindowHandle -ne [IntPtr]::Zero) { return $process.MainWindowHandle }
+        Start-Sleep -Milliseconds 500
+    }
+    return [IntPtr]::Zero
+}
+
+foreach ($group in $shared) {
+    $members = @($group.Group)
+    $windows = @($members | ForEach-Object { Wait-Window $_.Process })
+    if ($windows -contains [IntPtr]::Zero) { Write-Warning "Monitor $($group.Name): a window didn't appear; not arranging"; continue }
+    # The game fits its window to its saved size just after showing it: wait
+    # for that, so it doesn't undo the move.
+    Start-Sleep -Seconds 1
+    # The monitor the game centred them on, minus the taskbar.
+    $area = [System.Windows.Forms.Screen]::FromHandle($windows[0]).WorkingArea
+    $width = [int][math]::Floor($area.Width / $members.Count)
+    $height = [math]::Min($area.Height, [int]($width * 9 / 16) + 40)   # + about a title bar
+    $top = $area.Top + [int](($area.Height - $height) / 2)
+    for ($k = 0; $k -lt $members.Count; $k++) {
+        [void][PdTest.Win32]::MoveWindow($windows[$k], $area.Left + $k * $width, $top, $width, $height, $true)
+    }
+    Write-Host "Monitor $($group.Name): $($members.Count) windows side by side, $width x $height each"
 }
