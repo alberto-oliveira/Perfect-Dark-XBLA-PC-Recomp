@@ -1,0 +1,24 @@
+# Scenario "research-turret", client 1 (Zqclient): stands in front of the host.
+
+cvar pd_probe_hits true
+cvar pd_probe_turret true
+cvar pd_probe_ricochet true
+cvar pd_probe_laser_tint 3211056           # 0x30FF30 green Laser beams and bounce tracers
+cvar pd_probe_ricochet_tracer_speed 1000
+pick 825FA2F8                # Ready
+signal ready-{copy}
+waitmenu none 120
+wait 3000
+waitsignal host-armed 1 60
+tp near Zqhost 280
+face Zqhost
+signal victim-placed
+waitsignal fired 1 60
+wait 60
+shot t4-victim-bounce-60ms
+waitsignal sentry-out 1 60
+wait 1500
+shot t4-victim-sentry
+waitsignal host-done 1 120
+pos end
+log research-turret: client done

@@ -1,0 +1,14 @@
+# Scenario "research-hits", client 2: watches. Runs after lobby-client.txt.
+
+cvar pd_probe_hits true
+pick 825FA2F8                # Ready
+signal ready-{copy}
+waitmenu none 120
+wait 3000
+pos start
+waitsignal host-done 1 150
+pos after-host
+waitsignal victim-boosting 1 60
+wait 1000
+pos remote-boost
+log research-hits: client done

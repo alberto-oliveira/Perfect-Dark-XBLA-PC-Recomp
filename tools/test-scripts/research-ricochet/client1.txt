@@ -1,0 +1,47 @@
+# Scenario "research-ricochet", client 1: the victim. Runs after lobby-client.txt.
+
+cvar pd_probe_hits true
+pick 825FA2F8                # Ready
+signal ready-{copy}
+waitmenu none 120
+wait 3000
+pos start
+give 2                       # Falcon 2, to be disarmed
+equip 2
+waitsignal host-armed 1 60
+tp near 1 280
+track 10
+signal victim-placed
+waitsignal host-punch-done 1 90
+pos after-punch              # does this PC still hold the Falcon?
+shot t2-victim-after-punch
+track off
+
+log T2: walk at the normal speed
+track 3
+stick 0 32000 1000
+wait 1500
+peek 8264196C 4 speed-before
+poke 8264196C 00000000       # hidden walk speed 0 = 25 %
+log T2: walk at speed 0
+stick 0 32000 1000
+wait 1500
+poke 8264196C 004B0200       # back as it was (75, placement 2)
+track off
+
+log T2: combat boost
+give 35
+equip 35
+wait 2000
+trig 0 255 150
+wait 1500
+pos boost
+
+tp near 1 280                # back in front of the host for the ricochet
+track 10
+signal victim-ready-ricochet
+waitsignal host-done 1 120
+track off
+pos end
+shot t2-victim-end
+log research-ricochet: client done

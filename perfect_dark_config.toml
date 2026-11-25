@@ -882,3 +882,75 @@ registers = ["r3", "r4", "r7", "r8"]
 address = 0x82182148
 name = "PdHookProbeBeam"
 registers = ["r3", "r4", "r5", "r6"]
+
+# The player-hit function sub_821274A0 after `stwu r1,-288(r1)`.
+[[midasm_hook]]
+address = 0x821274B8
+name = "PdHookProbePlayerHit"
+registers = ["r1", "r3", "r4", "f1", "f2", "r7", "r8", "r9", "r10"]
+
+# bgun_add_boost sub_82178668 after `stwu r1,-112(r1)` (r3 = ticks).
+[[midasm_hook]]
+address = 0x8217867C
+name = "PdHookProbeAddBoost"
+registers = ["r3"]
+
+# bgun_disarm sub_8217FED0 after `stwu r1,-176(r1)` (r3 = attacker prop).
+[[midasm_hook]]
+address = 0x8217FEDC
+name = "PdHookProbeDisarm"
+registers = ["r3"]
+
+# shot_create sub_821FC8C0 right after `bl shot_calculate_hits` (pd_probe_ricochet).
+[[midasm_hook]]
+address = 0x821FC9B8
+name = "PdHookProbeRicochet"
+
+# beam_render sub_82182A30 where its colour branches join: r25 = RGBA, r29 = beam.
+[[midasm_hook]]
+address = 0x82182C90
+name = "PdHookProbeBeamColour"
+registers = ["r25", "r29"]
+
+# boltbeams_render sub_821844F0's call to beam_render_generic: r7 / r10 = colours.
+[[midasm_hook]]
+address = 0x82184554
+name = "PdHookProbeBoltBeamColour"
+registers = ["r7", "r10"]
+
+# laptop_deploy sub_8221E5C8's success path, `mr r3,r31` (r31 = the new sentry).
+[[midasm_hook]]
+address = 0x8221E934
+name = "PdHookProbeSentryMade"
+registers = ["r31"]
+
+
+# The player-hit function sub_821274A0: `fmadds f11,f13,f0,f12` (f0 = 0.75 knockback).
+[[midasm_hook]]
+address = 0x821277D4
+name = "PdHookProbePushScale"
+registers = ["f0"]
+
+# bmove_dampen_shotspeed sub_820F2098 after `lfs f12,6188(r10)` (the 1.5 cap).
+[[midasm_hook]]
+address = 0x820F20CC
+name = "PdHookProbePushCap"
+registers = ["f12"]
+
+# The player move tick sub_820F4D40, `bl` to the input step (after the boost doubling).
+[[midasm_hook]]
+address = 0x820F4DB0
+name = "PdHookProbeSlowClock"
+
+# autogun_tick sub_82206E58 at loc_822078E8 (before apply_rotation): goal angles at
+# 84/88(r1), r31 = obj, r18 != 0 = a copy that received the owner's aim.
+[[midasm_hook]]
+address = 0x822078E8
+name = "PdHookProbeAutogunGoals"
+registers = ["r1", "r31", "r18"]
+
+# autogun_tick at loc_82207B08 (before the owner sends its aim and firing flag).
+[[midasm_hook]]
+address = 0x82207B08
+name = "PdHookProbeAutogunFiring"
+registers = ["r31", "r18"]

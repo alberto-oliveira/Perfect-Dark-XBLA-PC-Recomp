@@ -1,0 +1,67 @@
+# Scenario "research-turret" (custom weapons research, T4): 3 copies. Runs after
+# lobby-host.txt. 1) A Laser floor bounce at Zqclient, screenshots from both ends.
+# 2) The host throws a Laptop sentry towards Zqclient; every PC logs the sentry.
+# 3) The host flies a Slayer rocket; every PC logs the rocket's path.
+
+cvar pd_probe_hits true
+cvar pd_probe_turret true
+cvar pd_probe_ricochet true
+cvar pd_probe_laser_tint 3211056           # 0x30FF30 green Laser beams and bounce tracers
+cvar pd_probe_ricochet_tracer_speed 1000
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start
+waitmenu none 60
+wait 5000
+give 29                      # Laser
+give 14                      # Laptop Gun
+give 25                      # Slayer
+equip 29
+wait 2500
+signal host-armed
+waitsignal victim-placed 1 60
+wait 500
+
+log T4: ricochet visual
+face Zqclient -45
+wait 300
+trig 0 255 150
+signal fired
+wait 60
+shot t4-host-bounce-60ms
+wait 140
+shot t4-host-bounce-200ms
+wait 2000
+
+log T4: Laptop sentry
+equip 14
+wait 2500
+btn rb                       # secondary function: deploy
+wait 800
+face Zqclient -20
+trig 0 255 150
+wait 2000
+shot t4-host-sentry
+signal sentry-out
+wait 8000
+pos after-sentry
+
+log T4: Slayer fly-by-wire
+equip 25
+wait 2500
+btn rb                       # secondary function: fly-by-wire
+wait 800
+face Zqclient 0
+trig 0 255 150
+wait 700
+shot t4-host-rocket-view
+rstick 16000 0 700           # steer right
+wait 900
+rstick -16000 6000 500       # steer left and up
+wait 800
+trig 0 255 150               # detonate
+wait 2500
+pos after-rocket
+signal host-done
+log research-turret: host done

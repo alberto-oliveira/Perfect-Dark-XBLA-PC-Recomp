@@ -1,0 +1,36 @@
+# Scenario "research-sentry" (custom weapons research, T6): 2 copies. Runs after
+# lobby-host.txt. The host's Laptop sentry is steered by the probe
+# (pd_probe_turret_steer, autogun_tick sub_82206E58) to fixed angles while it
+# fires; the client logs its own copy of the sentry.
+
+cvar pd_probe_hits true
+cvar pd_probe_turret true
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start
+waitmenu none 60
+wait 5000
+give 14                      # Laptop Gun
+equip 14
+wait 2500
+btn rb                       # deploy
+wait 800
+signal host-armed
+waitsignal placed 1 60
+wait 500
+face Zqclient -20
+trig 0 255 150
+wait 3000
+log T6: sentry steered to yrot 1.0
+cvar pd_probe_turret_yrot 1.0
+cvar pd_probe_turret_steer true
+wait 3000
+log T6: sentry steered to yrot 4.0
+cvar pd_probe_turret_yrot 4.0
+wait 3000
+log T6: sentry back to its own aim
+cvar pd_probe_turret_steer false
+wait 3000
+signal host-done
+log research-sentry: host done

@@ -1,0 +1,23 @@
+# Scenario "research-handson" (custom weapons research): 2 copies left in the
+# match for checking by eye what screenshots can't show: the green Laser beam,
+# the bounce tracer (seen from both PCs), and a steered Laptop sentry.
+# Runs after lobby-host.txt. The host gets the Laser and the Laptop Gun.
+#   - Laser: shoot a wall or the floor at an angle; the bounce draws a tracer.
+#   - Laptop Gun secondary (deploy): throw it; then type in the test pipe
+#     or set pd_probe_turret_steer / pd_probe_turret_yrot to steer it.
+
+cvar pd_probe_hits true
+cvar pd_probe_ricochet true                # every Laser shot bounces once (all PCs draw it)
+cvar pd_probe_laser_tint 3211056           # 0x30FF30: Laser beams and bounce tracers green
+cvar pd_probe_ricochet_tracer_speed 1500
+cvar pd_probe_turret true
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start
+waitmenu none 60
+wait 5000
+give 29                      # Laser
+give 14                      # Laptop Gun
+equip 29
+log research-handson: host ready, play by hand
