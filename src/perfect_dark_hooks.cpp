@@ -59,6 +59,8 @@ bool PdRandomArena(uint32_t* stage);
 void PdXbowBoltCreated(uint8_t* base, uint32_t obj);
 bool PdXbowBoltTick(PPCContext& ctx, uint8_t* base, uint32_t prop, uint32_t obj);
 
+void PdTestPlayerTick(PPCContext& ctx, uint8_t* base);
+
 namespace {
 // The calling guest thread's full context and guest memory, for a hook that needs
 // more than its registers.
@@ -634,6 +636,15 @@ void PdHookCustomObjectColour(PPCRegister& r3, PPCRegister& r4) {
   rgba = pd::custom::TintRgba(rgba, tint, strength);
   for (uint32_t i = 0; i < 4; ++i) pd::custom::StoreU32(base, r4.u32 + i * 4, (rgba >> (24 - i * 8)) & 0xFF);
 }
+
+// ---- Test tools (pd_player.h) ------------------------------------------------------
+
+// The player input step sub_820F2988, after its stack frame is made: the test
+// pipe's requests for the local player run here, on the game thread.
+void PdHookTestPlayerTick() {
+  PdTestPlayerTick(HookContext(), HookBase());
+}
+
 
 // ---- Custom weapons (pd_custom_weapons.h) ------------------------------------------
 // A few generic hooks, each placed at several addresses (perfect_dark_config.toml,
