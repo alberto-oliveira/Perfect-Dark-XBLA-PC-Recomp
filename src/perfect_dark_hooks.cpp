@@ -56,17 +56,8 @@ uint32_t PdStageNameText(const uint8_t* base, uint32_t offset, uint32_t text);
 uint32_t PdArenaRowLabel(PPCContext& ctx, uint8_t* base);
 bool PdRandomArena(uint32_t* stage);
 
-void PdXbowDetonateLog(uint8_t* base, uint32_t player);              // TEMP_XBOW
-void PdXbowExplodeLog(uint8_t* base, uint32_t prop, uint32_t type);  // TEMP_XBOW
-void PdXbowBoltCreated(uint8_t* base, uint32_t obj, const char* path);
-void PdRecolourGunLoaded(uint8_t* base, uint32_t result, uint32_t buffer, uint32_t player);  // TEMP_RECOLOUR
-void PdRecolourModelLoaded(uint8_t* base, uint32_t model, uint32_t model_x8);              // TEMP_RECOLOUR
+void PdXbowBoltCreated(uint8_t* base, uint32_t obj);
 bool PdXbowBoltTick(PPCContext& ctx, uint8_t* base, uint32_t prop, uint32_t obj);
-void PdCustomSiteLog(uint8_t* base, const char* what, uint32_t value);   // TEMP_CUSTOM
-void PdCustomReplayLog(uint8_t* base, uint32_t weapon);                 // TEMP_CUSTOM
-void PdCustomLeftHandLog(uint8_t* base, uint32_t weapon, uint32_t modeldef, uint32_t cmds_size);  // TEMP_DET
-bool PdDetSiteOff(int site);                         // TEMP_DET
-void PdDetGiveTick(PPCContext& ctx, uint8_t* base);  // TEMP_DET
 
 namespace {
 // The calling guest thread's full context and guest memory, for a hook that needs
@@ -410,21 +401,11 @@ bool PdHookPoisonTickLocalOnly(PPCRegister& r31) {
 
 // ---- Detonator crossbow (pd_crossbow.h) -------------------------------------------
 
-// TEMP_XBOW: player_activate_remote_mine_detonator's start (r3 = player number).
-void PdHookXbowDetonateLog(PPCRegister& r3) {
-  PdXbowDetonateLog(HookBase(), r3.u32);
-}
-
-// TEMP_XBOW: prop_explode's start (r3 = prop, r4 = explosion type).
-void PdHookXbowExplodeLog(PPCRegister& r3, PPCRegister& r4) {
-  PdXbowExplodeLog(HookBase(), r3.u32, r4.u32);
-}
-
 // Right after each fire path's weapon_create_projectile_from_weapon_num call for
 // a crossbow (r3 = the new bolt, 0 if none could be made): the bolt is tagged a
 // Detonator bolt when the Detonator Crossbow fired it.
-void PdHookXbowBoltMadeLocal(PPCRegister& r3) { PdXbowBoltCreated(HookBase(), r3.u32, "local"); }
-void PdHookXbowBoltMadeReplay(PPCRegister& r3) { PdXbowBoltCreated(HookBase(), r3.u32, "replay"); }
+void PdHookXbowBoltMadeLocal(PPCRegister& r3) { PdXbowBoltCreated(HookBase(), r3.u32); }
+void PdHookXbowBoltMadeReplay(PPCRegister& r3) { PdXbowBoltCreated(HookBase(), r3.u32); }
 
 // weapon_tick at the bolt branch's `cmplwi cr6,r11,86` (r11 = the weapon number,
 // r27 = the prop, r31 = the object). Every weapon not handled by an earlier branch
@@ -449,11 +430,9 @@ void PdHookCustomLeftHandEquip(PPCRegister& r26) {
   const uint32_t player = r26.u32;
   const custom::Weapon* w = custom::Find(uint8_t(base[player + custom::kPlayerWeapon]));
   if (!w || !w->left_weapon) return;
-  if (PdDetSiteOff(11)) return;  // TEMP_DET
   base[player + custom::kPlayerDualWield] |= 0x80;
   base[player + custom::kHandLeft + custom::kHandInUse] = 1;
   base[player + custom::kHandLeft + custom::kHandWeapon] = w->left_weapon;
-  PdCustomSiteLog(base, "the weapon switch (left hand set up)", w->number);  // TEMP_DET
 }
 
 // The gun loader (sub_8217B268) right after it made both hands' model instances
@@ -467,7 +446,6 @@ void PdHookCustomLeftHandModels(PPCRegister& r31) {
   const uint32_t player = r31.u32;
   const int i = custom::IndexOf(custom::LoadU32(base, player + custom::kPlayerGunMemNew));
   if (i < 0 || !custom::g_left_model[i] || !custom::g_left_cmds[i]) return;
-  if (PdDetSiteOff(12)) return;  // TEMP_DET
   const uint32_t hand = player + custom::kHandLeft;
   const uint32_t model = hand + custom::kHandGunModel;
   PPCContext call = HookContext();
@@ -480,10 +458,8 @@ void PdHookCustomLeftHandModels(PPCRegister& r31) {
   call.r3.u64 = model;
   call.r4.u64 = custom::LoadU32(base, custom::g_left_model[i]);  // the model's root node
   call.r5.u64 = custom::g_left_cmds[i];
-  sub_82172D58(call, base);  // bgun_create_model_cmd_list: returns its size
-  const uint32_t size = call.r3.u32;
+  sub_82172D58(call, base);  // bgun_create_model_cmd_list, into our kLeftCmdsSize bytes
   custom::StoreU32(base, hand + custom::kHandGunModelCmds, custom::g_left_cmds[i]);
-  PdCustomLeftHandLog(base, custom::kList[i].number, custom::g_left_model[i], size);  // TEMP_DET
 }
 
 // bgun_get_weapon_num (sub_821722D0; r3 = the hand number) right after it read the
@@ -510,23 +486,6 @@ void PdHookCustomLeftHandWeapon(PPCRegister& hand, PPCRegister& weapon) {
 void PdHookCustomLeftHandWeaponAddr(PPCRegister& hand_address, PPCRegister& player, PPCRegister& weapon) {
   if (hand_address.u32 - player.u32 == pd::custom::kHandSize) LeftHandItem(weapon);
 }
-
-// TEMP_DET: one wrapper per site (its number = the bit in pd_det_off), so single
-// sites can be turned off live to find which one moves the right hand's crossbow
-// (test 4a.3c: it points backwards). The cleanup puts the shared names back.
-#define PD_DET_SITE2(n)   void PdHookDetSite##n(PPCRegister& hand, PPCRegister& weapon) {     if (!PdDetSiteOff(n)) PdHookCustomLeftHandWeapon(hand, weapon);   }
-#define PD_DET_SITE3(n)   void PdHookDetSite##n(PPCRegister& hand_address, PPCRegister& player, PPCRegister& weapon) {     if (!PdDetSiteOff(n)) PdHookCustomLeftHandWeaponAddr(hand_address, player, weapon);   }
-PD_DET_SITE2(0)
-PD_DET_SITE2(1)
-PD_DET_SITE3(2)
-PD_DET_SITE2(3)
-PD_DET_SITE2(4)
-PD_DET_SITE2(5)
-PD_DET_SITE2(6)
-PD_DET_SITE3(7)
-PD_DET_SITE2(8)
-PD_DET_SITE2(9)
-PD_DET_SITE2(10)
 
 // bgun_tick_gameplay (sub_821807A0) where it decides which hands fire: "both hands
 // take turns unless the weapon is the remote mine" (0x82180C68, r10) and "the
@@ -555,19 +514,18 @@ void PdHookCustomDetonateShortcut(PPCRegister& r10) {
 void PdHookCustomLeftHandTick(PPCRegister& r14, PPCRegister& r22, PPCRegister& r25) {
   namespace custom = pd::custom;
   uint8_t* base = HookBase();
-  PdDetGiveTick(HookContext(), base);  // TEMP_DET
   if (r14.u32 != 1) return;  // the left hand
   const uint32_t player = r25.u32;
   const int i = custom::IndexOf(uint8_t(base[player + custom::kPlayerWeapon]));
   if (i < 0 || !custom::g_left_model[i]) return;
   const uint32_t model = player + custom::kHandLeft + custom::kHandGunModel;
   if (custom::LoadU32(base, model + custom::kModelDefinition) != custom::g_left_model[i]) return;
-  if (!PdDetSiteOff(13)) r22.u64 = custom::g_left_model[i];  // TEMP_DET bit 13
+  r22.u64 = custom::g_left_model[i];
   // While the right hand reloads, the left-hand item is hidden: the crossbow's
   // reload animation brings in a left arm of its own (test 4a.3e: two left hands).
   // The hand stays ticked, only not drawn this frame.
   const uint32_t right = player + custom::kPlayerHands;
-  if (!PdDetSiteOff(14) && int32_t(custom::LoadU32(base, right + custom::kHandState)) == custom::kHandStateReload) {
+  if (int32_t(custom::LoadU32(base, right + custom::kHandState)) == custom::kHandStateReload) {
     base[player + custom::kHandLeft + custom::kHandVisible] = 0;
   }
 }
@@ -584,7 +542,7 @@ bool PdHookCustomLeftHandNoCache(PPCRegister& r14, PPCRegister& r25) {
   if (r14.u32 != 1) return false;  // the left hand
   uint8_t* base = HookBase();
   const int i = custom::IndexOf(uint8_t(base[r25.u32 + custom::kPlayerWeapon]));
-  return i >= 0 && custom::g_left_model[i] && !PdDetSiteOff(15);  // TEMP_DET bit 15
+  return i >= 0 && custom::g_left_model[i];
 }
 
 // ---- Custom weapon tints (pd_custom_weapons.h, stage 3) ----------------------------
@@ -601,7 +559,6 @@ void PdHookCustomGunColour(PPCRegister& r1, PPCRegister& r29) {
   const uint32_t weapon = base[r29.u32];
   const uint32_t tint = pd::custom::TintOf(weapon);
   if (tint == pd::custom::kNoTint) return;
-  PdCustomSiteLog(base, "the first-person gun colour (tinted)", weapon);  // TEMP_RECOLOUR
   const uint32_t at = r1.u32 + 148;
   pd::custom::StoreU32(base, at, pd::custom::TintRgba(pd::custom::LoadU32(base, at), tint));
 }
@@ -631,7 +588,6 @@ bool ObjectOverlay(uint8_t* base, uint32_t obj, uint32_t& tint, uint32_t& streng
       pd::crossbow::g_detonator_bolts.count(obj)) {
     tint = pd::crossbow::g_bolt_tint;
     strength = pd::crossbow::BoltTintStrength(pd::custom::LoadU32(base, pd::crossbow::kLevelFrames));
-    PdCustomSiteLog(base, "a Detonator bolt colour", strength);  // TEMP_RECOLOUR (value = strength)
     return true;
   }
   return false;
@@ -645,7 +601,6 @@ void PdHookCustomHeldGunBefore(PPCRegister& r3, PPCRegister& r31) {
   if (!obj) return;
   uint32_t tint, strength;
   if (!ObjectOverlay(base, obj, tint, strength)) return;
-  PdCustomSiteLog(base, "a held gun colour (tinted)", base[obj + 92]);  // TEMP_RECOLOUR
   const uint32_t at = r3.u32 + 0x38;
   held_colour_saved = pd::custom::LoadU32(base, at);
   held_colour_changed = true;
@@ -670,7 +625,6 @@ void PdHookCustomObjectColour(PPCRegister& r3, PPCRegister& r4) {
   if (!obj) return;
   uint32_t tint, strength;
   if (!ObjectOverlay(base, obj, tint, strength)) return;
-  PdCustomSiteLog(base, "an object colour (tinted)", base[obj + 92]);  // TEMP_RECOLOUR
   // The colour is four s32 channels, 0-255 each (RGBA): blended as one RGBA word.
   uint32_t rgba = 0;
   for (uint32_t i = 0; i < 4; ++i) {
@@ -681,15 +635,6 @@ void PdHookCustomObjectColour(PPCRegister& r3, PPCRegister& r4) {
   for (uint32_t i = 0; i < 4; ++i) pd::custom::StoreU32(base, r4.u32 + i * 4, (rgba >> (24 - i * 8)) & 0xFF);
 }
 
-// TEMP_RECOLOUR (step 3.1): right after the gun loader loads a gun file, and right
-// after setupLoadModeldef loads a model's file. Log and dump only.
-void PdHookRecolourGunLoaded(PPCRegister& r3, PPCRegister& r30, PPCRegister& r31) {
-  PdRecolourGunLoaded(HookBase(), r3.u32, r30.u32, r31.u32);
-}
-void PdHookRecolourModelLoaded(PPCRegister& r3, PPCRegister& r30) {
-  PdRecolourModelLoaded(HookBase(), r3.u32, r30.u32);
-}
-
 // ---- Custom weapons (pd_custom_weapons.h) ------------------------------------------
 // A few generic hooks, each placed at several addresses (perfect_dark_config.toml,
 // "Custom weapons"). Each passes one register: the weapon number being checked.
@@ -698,9 +643,7 @@ void PdHookRecolourModelLoaded(PPCRegister& r3, PPCRegister& r30) {
 // means jumping to the code that follows for an accepted weapon: true for a
 // custom weapon (jump_address_on_true = that code). No register is changed.
 bool PdHookCustomPass(PPCRegister& weapon) {
-  if (!pd::custom::IsCustom(weapon.u32)) return false;
-  PdCustomSiteLog(HookBase(), "a gun-line check (passed)", weapon.u32);  // TEMP_CUSTOM
-  return true;
+  return pd::custom::IsCustom(weapon.u32);
 }
 
 // A check that asks "which weapon is this?" (is it a gun, the crossbow...), where
@@ -708,7 +651,6 @@ bool PdHookCustomPass(PPCRegister& weapon) {
 // becomes its base weapon's.
 void PdHookCustomAsBase(PPCRegister& weapon) {
   if (!pd::custom::IsCustom(weapon.u32)) return;
-  PdCustomSiteLog(HookBase(), "a weapon-number check (seen as the base weapon)", weapon.u32);  // TEMP_CUSTOM
   weapon.u64 = pd::custom::AsBase(weapon.u32);
 }
 
@@ -718,7 +660,6 @@ void PdHookCustomAsBase(PPCRegister& weapon) {
 void PdHookCustomFuncBit(PPCRegister& weapon_minus_1) {
   const int i = pd::custom::IndexOf(weapon_minus_1.u32 + 1);
   if (i < 0) return;
-  PdCustomSiteLog(HookBase(), "a function bit (spare bit used)", weapon_minus_1.u32 + 1);  // TEMP_CUSTOM
   weapon_minus_1.u64 = uint32_t(pd::custom::FuncBitWeapon(i) - 1);
 }
 
@@ -729,9 +670,9 @@ void PdHookCustomPickupNames(PPCRegister& r8) {
 }
 
 // The remote shot replay's crossbow check (sub_82171430 at 0x821715E0, r11 = the
-// shot's weapon number): logged (TEMP_CUSTOM), then as PdHookCustomAsBase.
+// shot's weapon number): remembered for the bolt made next, then as
+// PdHookCustomAsBase.
 void PdHookCustomFireReplay(PPCRegister& r11) {
-  PdCustomReplayLog(HookBase(), r11.u32);  // TEMP_CUSTOM
   pd::crossbow::g_firing_weapon = r11.u32;  // the bolt made next is this weapon's
   PdHookCustomAsBase(r11);
 }

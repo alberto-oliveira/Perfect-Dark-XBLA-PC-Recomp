@@ -372,18 +372,6 @@ return_on_true = true
 
 # ---- Detonator crossbow (src/pd_crossbow.h) -------------------------------------------
 
-# TEMP_XBOW: player_activate_remote_mine_detonator's start (sub_8220D220, r3 = player).
-[[midasm_hook]]
-address = 0x8220D220
-name = "PdHookXbowDetonateLog"
-registers = ["r3"]
-
-# TEMP_XBOW: prop_explode's start (sub_82205A18, r3 = prop, r4 = explosion type).
-[[midasm_hook]]
-address = 0x82205A18
-name = "PdHookXbowExplodeLog"
-registers = ["r3", "r4"]
-
 # `mr r31,r3` right after the crossbow's weapon_create_projectile_from_weapon_num
 # (sub_8221EC10, weapon number 86 = bolt) in the local fire path (sub_8217F5A0) and in
 # the path that replays a remote player's shot (sub_82171430). r3 = the new bolt,
@@ -786,7 +774,7 @@ jump_address_on_true = 0x82175AB0
 # player's weapon): the left hand of a custom weapon with a left-hand item gets it.
 [[midasm_hook]]
 address = 0x821722FC
-name = "PdHookDetSite0"  # TEMP_DET site 0 (was PdHookCustomLeftHandWeapon)
+name = "PdHookCustomLeftHandWeapon"
 registers = ["r3", "r11"]
 
 # The inlined copies of bgun_get_weapon_num, each at its `extsb` after
@@ -796,52 +784,52 @@ registers = ["r3", "r11"]
 # sub_8217AC28, sub_8217BF88, sub_8217C1E0, sub_8217CCA8, sub_821806E0).
 [[midasm_hook]]
 address = 0x82174F50
-name = "PdHookDetSite1"  # TEMP_DET site 1 (was PdHookCustomLeftHandWeapon)
+name = "PdHookCustomLeftHandWeapon"
 registers = ["r14", "r11"]
 
 [[midasm_hook]]
 address = 0x82178AFC
-name = "PdHookDetSite3"  # TEMP_DET site 3 (was PdHookCustomLeftHandWeapon)
+name = "PdHookCustomLeftHandWeapon"
 registers = ["r4", "r11"]
 
 [[midasm_hook]]
 address = 0x82178C70
-name = "PdHookDetSite4"  # TEMP_DET site 4 (was PdHookCustomLeftHandWeapon)
+name = "PdHookCustomLeftHandWeapon"
 registers = ["r31", "r9"]
 
 [[midasm_hook]]
 address = 0x82178D24
-name = "PdHookDetSite5"  # TEMP_DET site 5 (was PdHookCustomLeftHandWeapon)
+name = "PdHookCustomLeftHandWeapon"
 registers = ["r3", "r10"]
 
 [[midasm_hook]]
 address = 0x8217AC6C
-name = "PdHookDetSite6"  # TEMP_DET site 6 (was PdHookCustomLeftHandWeapon)
+name = "PdHookCustomLeftHandWeapon"
 registers = ["r29", "r11"]
 
 [[midasm_hook]]
 address = 0x8217C2FC
-name = "PdHookDetSite8"  # TEMP_DET site 8 (was PdHookCustomLeftHandWeapon)
+name = "PdHookCustomLeftHandWeapon"
 registers = ["r27", "r11"]
 
 [[midasm_hook]]
 address = 0x8217CCF4
-name = "PdHookDetSite9"  # TEMP_DET site 9 (was PdHookCustomLeftHandWeapon)
+name = "PdHookCustomLeftHandWeapon"
 registers = ["r31", "r11"]
 
 [[midasm_hook]]
 address = 0x8218071C
-name = "PdHookDetSite10"  # TEMP_DET site 10 (was PdHookCustomLeftHandWeapon)
+name = "PdHookCustomLeftHandWeapon"
 registers = ["r28", "r11"]
 
 [[midasm_hook]]
 address = 0x82176490
-name = "PdHookDetSite2"  # TEMP_DET site 2 (was PdHookCustomLeftHandWeaponAddr)
+name = "PdHookCustomLeftHandWeaponAddr"
 registers = ["r10", "r8", "r11"]
 
 [[midasm_hook]]
 address = 0x8217C008
-name = "PdHookDetSite7"  # TEMP_DET site 7 (was PdHookCustomLeftHandWeaponAddr)
+name = "PdHookCustomLeftHandWeaponAddr"
 registers = ["r31", "r30", "r11"]
 
 # bgun_tick_gameplay sub_821807A0's "is it the remote mine" firing checks.
@@ -863,17 +851,3 @@ address = 0x820F3DE8
 name = "PdHookCustomDetonateShortcut"
 registers = ["r10"]
 
-# ---- TEMP_RECOLOUR (step 3.1): the crossbow's model files ------------------------------
-# The gun loader sub_82170488 right after `bl file_load_to_addr` (0x82170520; r3 = its
-# result, r30 = the buffer, r31 = the player, file id at player+5594), and
-# setupLoadModeldef sub_821FD640 at `stwx r3,r30,r31` (r3 = the loaded model, r30 =
-# model number * 8). Log and dump the files.
-[[midasm_hook]]
-address = 0x82170524
-name = "PdHookRecolourGunLoaded"
-registers = ["r3", "r30", "r31"]
-
-[[midasm_hook]]
-address = 0x821FD678
-name = "PdHookRecolourModelLoaded"
-registers = ["r3", "r30"]
