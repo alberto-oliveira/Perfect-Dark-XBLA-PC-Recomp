@@ -60,23 +60,6 @@ void PdXbowBoltCreated(uint8_t* base, uint32_t obj);
 bool PdXbowBoltTick(PPCContext& ctx, uint8_t* base, uint32_t prop, uint32_t obj);
 
 void PdTestPlayerTick(PPCContext& ctx, uint8_t* base);
-// TEMP_RESEARCH probes (main.cpp)
-void PdProbeChrDamage(uint8_t* base, uint32_t chr, double& damage, uint32_t vector, uint32_t gset, uint32_t aprop,
-                      uint32_t hitpart, uint32_t shield);
-void PdProbeShotHits(uint8_t* base, uint32_t hand, uint32_t shooting, uint32_t pos, uint32_t dir);
-void PdProbeBeam(uint8_t* base, uint32_t beam, uint32_t weapon, uint32_t from, uint32_t to);
-void PdProbePlayerHit(uint8_t* base, uint32_t r1, uint32_t r3, uint32_t r4, double f1, double f2, uint32_t r7,
-                      uint32_t r8, uint32_t r9, uint32_t r10);
-void PdProbeBoostDisarm(uint8_t* base, const char* what, uint32_t r3);
-void PdProbeRicochet(PPCContext& ctx, uint8_t* base);
-void PdProbeBeamColour(uint8_t* base, uint32_t colour, uint32_t beam);
-void PdProbeBoltBeamColour(uint32_t& head, uint32_t& tail);
-void PdProbeSentryMade(uint8_t* base, uint32_t obj);
-void PdProbeAutogunGoals(uint8_t* base, uint32_t r1, uint32_t obj, uint32_t r18);
-void PdProbeAutogunFiring(uint8_t* base, uint32_t obj, uint32_t r18);
-void PdProbePushScale(double& f0);
-void PdProbePushCap(double& f12);
-void PdProbeSlowClock(uint8_t* base);
 
 namespace {
 // The calling guest thread's full context and guest memory, for a hook that needs
@@ -660,87 +643,6 @@ void PdHookCustomObjectColour(PPCRegister& r3, PPCRegister& r4) {
 // pipe's requests for the local player run here, on the game thread.
 void PdHookTestPlayerTick() {
   PdTestPlayerTick(HookContext(), HookBase());
-}
-
-// TEMP_RESEARCH: chr_damage sub_82128200 after its stack frame is made (arguments
-// still in their registers).
-void PdHookProbeChrDamage(PPCRegister& r3, PPCRegister& f1, PPCRegister& r5, PPCRegister& r6, PPCRegister& r7,
-                          PPCRegister& r8, PPCRegister& r9) {
-  PdProbeChrDamage(HookBase(), r3.u32, f1.f64, r5.u32, r6.u32, r7.u32, r8.u32, r9.u32);
-}
-
-// TEMP_RESEARCH: the player-hit function sub_821274A0 after its stack frame.
-void PdHookProbePlayerHit(PPCRegister& r1, PPCRegister& r3, PPCRegister& r4, PPCRegister& f1, PPCRegister& f2,
-                          PPCRegister& r7, PPCRegister& r8, PPCRegister& r9, PPCRegister& r10) {
-  PdProbePlayerHit(HookBase(), r1.u32, r3.u32, r4.u32, f1.f64, f2.f64, r7.u32, r8.u32, r9.u32, r10.u32);
-}
-
-// TEMP_RESEARCH: bgun_add_boost sub_82178668 after its stack frame (r3 = ticks).
-void PdHookProbeAddBoost(PPCRegister& r3) {
-  PdProbeBoostDisarm(HookBase(), "add boost", r3.u32);
-}
-
-// TEMP_RESEARCH: bgun_disarm sub_8217FED0 after its stack frame (r3 = attacker prop).
-void PdHookProbeDisarm(PPCRegister& r3) {
-  PdProbeBoostDisarm(HookBase(), "disarm", r3.u32);
-}
-
-// TEMP_RESEARCH: shot_create sub_821FC8C0 right after its shot_calculate_hits.
-void PdHookProbeRicochet() {
-  PdProbeRicochet(HookContext(), HookBase());
-}
-
-// TEMP_RESEARCH: beam_render sub_82182A30 where its colour branches join
-// (r25 = the beam's RGBA, r29 = the beam).
-void PdHookProbeBeamColour(PPCRegister& r25, PPCRegister& r29) {
-  PdProbeBeamColour(HookBase(), r25.u32, r29.u32);
-}
-
-// TEMP_RESEARCH: autogun_tick before apply_rotation (r1 frame: goals at 84/88,
-// r31 = obj, r18 != 0 = a copy receiving the owner's aim) and before the send.
-void PdHookProbeAutogunGoals(PPCRegister& r1, PPCRegister& r31, PPCRegister& r18) {
-  PdProbeAutogunGoals(HookBase(), r1.u32, r31.u32, r18.u32);
-}
-void PdHookProbeAutogunFiring(PPCRegister& r31, PPCRegister& r18) {
-  PdProbeAutogunFiring(HookBase(), r31.u32, r18.u32);
-}
-
-// TEMP_RESEARCH: the player-hit function's knockback factor (f0 = 0.75).
-void PdHookProbePushScale(PPCRegister& f0) {
-  PdProbePushScale(f0.f64);
-}
-
-// TEMP_RESEARCH: bmove_dampen_shotspeed's cap (f12 = 1.5).
-void PdHookProbePushCap(PPCRegister& f12) {
-  PdProbePushCap(f12.f64);
-}
-
-// TEMP_RESEARCH: the player move tick sub_820F4D40 before the input step.
-void PdHookProbeSlowClock() {
-  PdProbeSlowClock(HookBase());
-}
-
-// TEMP_RESEARCH: laptop_deploy sub_8221E5C8 returning the new sentry (r31).
-void PdHookProbeSentryMade(PPCRegister& r31) {
-  PdProbeSentryMade(HookBase(), r31.u32);
-}
-
-// TEMP_RESEARCH: boltbeams_render's beam_render_generic call (r7 head RGBA, r10 tail RGBA).
-void PdHookProbeBoltBeamColour(PPCRegister& r7, PPCRegister& r10) {
-  uint32_t head = r7.u32, tail = r10.u32;
-  PdProbeBoltBeamColour(head, tail);
-  r7.u64 = head;
-  r10.u64 = tail;
-}
-
-// TEMP_RESEARCH: shot_calculate_hits sub_821FBAA8 after its stack frame.
-void PdHookProbeShotHits(PPCRegister& r3, PPCRegister& r4, PPCRegister& r7, PPCRegister& r8) {
-  PdProbeShotHits(HookBase(), r3.u32, r4.u32, r7.u32, r8.u32);
-}
-
-// TEMP_RESEARCH: beam_create sub_82182130 after its stack frame.
-void PdHookProbeBeam(PPCRegister& r3, PPCRegister& r4, PPCRegister& r5, PPCRegister& r6) {
-  PdProbeBeam(HookBase(), r3.u32, r4.u32, r5.u32, r6.u32);
 }
 
 // ---- Custom weapons (pd_custom_weapons.h) ------------------------------------------

@@ -9,7 +9,8 @@ How the answers were found:
 
 - **Statically:** from the game's code, using `tools/re` and the N64 decomp.
 - **At runtime:** from test rounds T0–T7 on 2–3 game copies, driven by the test
-  pipe scenarios `research-*` in `tools/test-scripts/`.
+  pipe scenarios `research-*`, now in `tools/debug-bank/weapon-research-scenarios/`
+  (they need the probes back to run).
 - **Probes:** the logging and experiment code (`TEMP_RESEARCH`) is in
   `tools/debug-bank/weapon-research.cpp`.
 
@@ -88,7 +89,7 @@ vector, ...)` the vector is in r5, not r4 (verified).
 | Bounces at off-screen players | Not possible through `shot_calculate_hits` (on-screen props only). Use our own segment-vs-player test + `chr_damage_by_laser` (verified kill and credit, T3). |
 | Damage per bounce, one-hit kill | `chr_damage`'s damage (f1) can be scaled for tagged hits (probe, verified); `chr_damage_by_laser` takes the damage directly; damage 100 killed (verified). N64 note: a shield absorbs a whole hit (any shield hit sets damage 0), so a "kill after N bounces" against a shielded player needs two hits or a no-shield call (`chr_damage_by_dizziness` sub_8212DD90 skips the shield) (guess, not tested). |
 | Other PCs' view | Each PC recomputes the shooter's shot (above), so each PC can bounce it and draw the bounce itself; positions differ by ~30–50 units (verified, T3). Damage only on the shooter's PC. |
-| Bounce tracer | Crossbow-bolt trail pool `g_BoltBeams` 0x8262E958 (8 × 48 B: +0 owner, -1 = free; +5 tick mode, 1 = automatic; +20 head; +32 tail; +44 speed), drawn by `boltbeams_render` sub_821844F0 with the laser texture; a slot set to automatic shrinks and frees itself (verified in code). **Not yet seen on screen**: the probe claims a slot (logged), but no screenshot caught a visible tracer (T3, T4, T8). Check by eye with `research-handson`; if it doesn't show, a beam from the multiplayer fireslot pool (`g_Fireslots`, N64 bondgun.c `bgun_allocate_fireslot`) is the alternative. |
+| Bounce tracer | Crossbow-bolt trail pool `g_BoltBeams` 0x8262E958 (8 × 48 B: +0 owner, -1 = free; +5 tick mode, 1 = automatic; +20 head; +32 tail; +44 speed), drawn by `boltbeams_render` sub_821844F0 with the laser texture; a slot set to automatic shrinks and frees itself (verified in code). **Seen by eye, but unreliable** (user hands-on check, 2026-11-25): the bounce shows on the shooter's screen and on the other PC, but it is thinner than the Laser beam and vanishes from some viewpoints. Walking changes it even at the same view angles. Likely cause (guess): the bolt trail is a flat, narrow strip made for crossbow bolts, not a strip that turns to face the camera like the Laser beam, so seen edge-on it disappears. For the weapon, draw bounces as real Laser beams instead: a beam from the multiplayer fireslot pool (`g_Fireslots`, N64 bondgun.c `bgun_allocate_fireslot`) or our own `beam_render` call per segment. The bolt trail stays as a fallback (two crossed strips, or a wider one). |
 | Colour | `beam_render` sub_82182A30: RGBA written at 0x82182BB4 (r25), branches join at 0x82182C90 (r29 = beam, weapon at +1: 29 Laser, -2 Stream); setting the RGB there **turns the Laser beam green** (verified, T8 screenshot of the Stream). The bolt trail's colours are r7/r10 at 0x82184554 (0xAFAFFF00/0xAFAFFF7F) (verified in code). Every PC draws every player's beams through it, so a tint shows everywhere. |
 | Stream | Same path, range 300 (constant 300.0 at 0x82000B08), many shots per second: each needs its own bounce test. |
 
@@ -100,7 +101,7 @@ vector, ...)` the vector is in r5, not r4 (verified).
 2. **Settings (host blob, like 'XBOW'):** bounce count, damage growth, kill-after-N.
 3. **Hook at 0x821FC9B8, for every PC.** If the shot is this weapon's:
    - walk up to N bounces with the line test;
-   - draw each segment with a bolt-trail slot;
+   - draw each segment as a Laser beam (fireslot beam or our own `beam_render` call; the bolt trail is too thin, see Bounce tracer);
    - only on the shooter's PC (players[0] fired), test each segment against
      every player and apply `chr_damage_by_laser` with the bounce's damage;
    - the first segment is the game's own shot, so let the game damage it.
@@ -112,7 +113,7 @@ code is needed).
 
 **Tests it will need:**
 
-- 2–3 copies: bounces visible on every PC;
+- 2–3 copies: bounces visible on every PC, from any angle (the bolt-trail tracer failed this);
 - hits on and off screen;
 - frag credit;
 - damage growth and the kill-after-N rule;
@@ -134,7 +135,7 @@ code is needed).
 | Deploy | `laptop_deploy` sub_8221E5C8 (returns the obj, r31 at 0x8221E934); callers: local throw sub_8217EEA8, replay of a remote throw sub_82170F28, bots sub_820CD218 (verified). Autogun fields as N64: yzero +96, ymaxleft/right +100/+104, yrot +108, xzero +116, xrot +120, maxspeed +128, firing +94, beam +156, target +164, ammo +169 (verified). |
 | Online | Every PC makes its own copy; only the owner's copy has ammo and a target and does damage (RCP45, weapon 43). The other copies follow the owner's aim and firing (verified, T4). Landing spots differ by 200–300 units per PC (thrown physics are not synced). |
 | Aim sync | `autogun_tick` = **sub_82206E58** (the object tick sub_82227B30 calls it for type 13 objects, 0x82228534) (verified). Online it computes goal angles on its stack (84(r1), 88(r1)); the owner SENDS them with the firing flag (sub_82290770 at 0x82207B6C), the copies RECEIVE them (sub_8228DBF0 at 0x822078E4); r18 != 0 = a receiving copy (verified). |
-| Steering | Overriding the goals at 0x822078E8 and firing at 0x82207B08 on the owner: the owner's sentry turned and fired where told, **and the other PC's copy followed** (verified, T7). Goal 88(r1) lands in the +120 field, 84(r1) in +108. Skipping `autogun_tick` instead (T6) turned only the owner's copy. |
+| Steering | Overriding the goals at 0x822078E8 and firing at 0x82207B08 on the owner: the owner's sentry turned and fired where told, **and the other PC's copy followed** (verified, T7). Goal 88(r1) lands in the +120 field, 84(r1) in +108. Skipping `autogun_tick` instead (T6) turned only the owner's copy.  User hands-on check (2026-11-25): the steered sentry turned to the set angle as soon as it stuck to the wall, and it fired at once, because the probe forces the firing flag every tick while steering is on. In the weapon, firing follows the controlling player's trigger. The sentry was also tinted: the tint probes colour every bolt trail, not only the Laser's, so a weapon's tint must check whose trail or beam it is. |
 | Slayer view | `player_launch_slayer_rocket` = sub_820F9138: player+620 rocket, +16 vision mode (2), clears the vision devices at +196 (verified). The fly-by-wire rocket follows the same path on every PC (verified, T4). The Slayer branch steers a *projectile*, so a sentry needs its own camera hook (the call that places the camera at the rocket, `player_move_camera_from_pos_rooms` in N64 player_tick; XBLA address not found yet). |
 | Explode on leaving | `prop_explode` sub_82205A18 on the owner's PC, as the Detonator does (verified in the crossbow mod). |
 
@@ -234,5 +235,7 @@ The pipe commands `give`, `equip`, `look`, `face <player|gamertag> [verta]`,
 `tp`, `tp near`, `pos`, `track` and `watchplayer` (`src/pd_player.h`) are
 described in `tools/test-scripts/README.md`. The research scenarios are
 `research-tools`, `-hits`, `-ricochet`, `-ricochet2`, `-turret`, `-push`,
-`-sentry`, `-tint` and `-handson`. The probes they switch on are in the debug
-bank.
+`-sentry`, `-tint` and `-handson`. They and the probes they switch on are in the
+debug bank (`tools/debug-bank/weapon-research-scenarios/`,
+`tools/debug-bank/weapon-research.cpp`); to run one again, restore the probes and
+copy its folder back to `tools/test-scripts/`.
