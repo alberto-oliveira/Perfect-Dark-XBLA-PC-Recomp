@@ -1,0 +1,42 @@
+# Scenario "ricochet-func" (Ricochet Laser, R2 follow-up): 2 copies. Runs after
+# lobby-host.txt. Does the client learn the host's primary/secondary choice?
+# The choice is one bit per weapon in the player config (+199, 6 bytes; bit =
+# weapon - 1): the vanilla Laser's is bit 28 (byte 3), the Ricochet Laser's the
+# spare bit of weapon 37 (bit 36, byte 4). Each side peeks its config of the
+# host (host: cfg 0 = 0x82641950; client: cfg 1 = 0x82641A28) after each toggle.
+
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start
+waitmenu none 60
+wait 5000
+give 29
+give 0x52
+equip 0x52
+wait 2500
+peek 82641A17 6 host-start
+signal step-1
+waitsignal seen-1 1 60
+btn rb                       # the Ricochet Laser's Stream
+wait 1500
+peek 82641A17 6 host-rico-stream
+trig 0 255 800
+signal step-2
+waitsignal seen-2 1 60
+equip 29
+wait 2500
+btn rb                       # the Laser's Stream
+wait 1500
+peek 82641A17 6 host-laser-stream
+trig 0 255 800
+signal step-3
+waitsignal seen-3 1 60
+equip 0x52                   # back to the Ricochet Laser: still the Stream here
+wait 2500
+peek 82641A17 6 host-rico-again
+trig 0 255 800
+signal step-4
+waitsignal seen-4 1 60
+signal host-done
+log ricochet-func: host done

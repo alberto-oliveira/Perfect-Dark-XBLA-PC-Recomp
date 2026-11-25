@@ -1,0 +1,70 @@
+# Scenario "ricochet-bounce" (Ricochet Laser, test R2): 2 copies. Runs after
+# lobby-host.txt. Zqclient stands 600 units in front of the host and watches;
+# the host turns 90 degrees away from it and fires Ricochet Laser pulses at the
+# floor (slow bounce beams: pd_rico_beam_speed), so the client sees each path
+# from the side. Both logs list each pulse's bounces ([rico] pulse ...) to
+# compare the PCs. Then the Stream, and the vanilla Laser's Stream (does the
+# client see the host's Stream as the Stream? [rico] ... function lines).
+
+cvar pd_rico_beam_speed 15
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start
+waitmenu none 60
+wait 5000
+give 0x52
+equip 0x52
+wait 2500
+signal host-armed
+waitsignal placed 1 60
+wait 500
+log ricochet-bounce: floor pulse, side-on
+face Zqclient -35 90
+wait 300
+trig 0 255 120
+signal fired-a
+wait 150
+shot bounce-host-a1
+wait 400
+shot bounce-host-a2
+wait 2500
+log ricochet-bounce: floor pulse, the other side
+face Zqclient -35 -90
+wait 300
+trig 0 255 120
+signal fired-b
+wait 150
+shot bounce-host-b1
+wait 400
+shot bounce-host-b2
+wait 2500
+log ricochet-bounce: wall pulse, shallow
+face Zqclient 0 60
+wait 300
+trig 0 255 120
+signal fired-c
+wait 300
+shot bounce-host-c1
+wait 2500
+log ricochet-bounce: stream
+btn rb
+wait 800
+face Zqclient -35 90
+trig 0 255 1500
+wait 700
+shot bounce-host-stream
+signal fired-stream
+wait 1500
+log ricochet-bounce: vanilla Laser stream
+give 29
+equip 29
+wait 2500
+btn rb
+wait 800
+face Zqclient -35 90
+trig 0 255 1500
+wait 1500
+pos end
+signal host-done
+log ricochet-bounce: host done

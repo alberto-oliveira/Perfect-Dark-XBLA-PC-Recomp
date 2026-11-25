@@ -1,0 +1,30 @@
+# Scenario "ricochet-bounce", client: watches the host's bounces from 600 units. Runs after lobby-client.txt.
+
+cvar pd_rico_beam_speed 15
+pick 825FA2F8                # Ready
+signal ready-{copy}
+waitmenu none 120
+wait 3000
+waitsignal host-armed 1 60
+tp near Zqhost 600
+face Zqhost 0
+signal placed
+waitsignal fired-a 1 60
+wait 250
+shot bounce-client-a1
+wait 500
+shot bounce-client-a2
+waitsignal fired-b 1 60
+wait 250
+shot bounce-client-b1
+wait 500
+shot bounce-client-b2
+waitsignal fired-c 1 60
+wait 400
+shot bounce-client-c1
+waitsignal fired-stream 1 60
+wait 100
+shot bounce-client-stream
+waitsignal host-done 1 60
+pos end
+log ricochet-bounce: client done

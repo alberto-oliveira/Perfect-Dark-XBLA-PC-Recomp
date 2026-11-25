@@ -6095,11 +6095,13 @@ class PerfectDarkApp : public rex::ReXApp {
       request.action = pd::player::Action::kLook;
       request.a = num(0);
       request.b = num(1);
-    } else if (c.verb == "face") {  // face <player number> [verta]: aim at that player's chest (or at verta)
+    } else if (c.verb == "face") {  // face <player number> [verta] [turn]: aim at that player's chest (or at
+                                    // verta), then turn by `turn` degrees (positive = left)
       request.action = pd::player::Action::kFace;
       set_player(arg(0));
       request.c = arg(1).empty() ? 0.0f : 1.0f;  // 1 = use verta b
       request.b = num(1);
+      request.d = num(2);
     } else if (c.verb == "tp" && arg(0) == "near") {  // tp near <player> <distance>
       request.action = pd::player::Action::kTeleportNear;
       set_player(arg(1));

@@ -545,7 +545,11 @@ registers = ["r10"]
 jump_address_on_true = 0x8219815C
 
 # ... and the bit itself: at each `srawi rD,rS,3` with rS = weapon number - 1, a
-# custom weapon's own spare bit (weapons 36-48 have unused bits).
+# custom weapon's own spare bit (weapons 36-48 have unused bits). Where the bit's
+# mask (`clrlwi rM,rS,29`) is worked out BEFORE the srawi, the hook is on the
+# first of them instead (0x82107044, 0x82180BA0, 0x8217D2C0, 0x8217D49C), so the
+# byte and the mask both come from the spare bit (Ricochet Laser test R2: the
+# remote player's Stream choice set bit 33 = byte of bit 36, mask of bit 81).
 [[midasm_hook]]
 address = 0x820F300C
 name = "PdHookCustomFuncBit"
@@ -592,13 +596,13 @@ name = "PdHookCustomFuncBit"
 registers = ["r11"]
 
 [[midasm_hook]]
-address = 0x82180BA4
+address = 0x82180BA0
 name = "PdHookCustomFuncBit"
 registers = ["r11"]
 
 # ... the bits in those functions too.
 [[midasm_hook]]
-address = 0x82107048
+address = 0x82107044
 name = "PdHookCustomFuncBit"
 registers = ["r10"]
 
@@ -613,7 +617,7 @@ name = "PdHookCustomFuncBit"
 registers = ["r8"]
 
 [[midasm_hook]]
-address = 0x8217D2D8
+address = 0x8217D2C0
 name = "PdHookCustomFuncBit"
 registers = ["r11"]
 
@@ -633,7 +637,7 @@ name = "PdHookCustomFuncBit"
 registers = ["r10"]
 
 [[midasm_hook]]
-address = 0x8217D4A0
+address = 0x8217D49C
 name = "PdHookCustomFuncBit"
 registers = ["r11"]
 
@@ -936,6 +940,21 @@ registers = ["r3"]
 address = 0x82182C90
 name = "PdHookRicoBeamColour"
 registers = ["r25", "r29"]
+
+# shot_create sub_821FC8C0 right after its shot_calculate_hits call (r3 = the prop
+# hit, r31 = the hand number, r1 frame: start 144(r1), direction 112(r1)), on
+# every PC for every player's shot: the bounces.
+[[midasm_hook]]
+address = 0x821FC9B8
+name = "PdHookRicoShot"
+
+# The player's render sub_820FC6E0 after boltbeams_render (`bl 0x821844f0` at
+# 0x820FC7A0 returned the display list in r3), before the gun renderer: the
+# bounce beams are drawn.
+[[midasm_hook]]
+address = 0x820FC7A4
+name = "PdHookRicoRenderBeams"
+registers = ["r3"]
 
 # ---- Test tools ---------------------------------------------------------------------
 

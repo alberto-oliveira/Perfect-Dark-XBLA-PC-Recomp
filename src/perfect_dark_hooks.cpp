@@ -61,6 +61,8 @@ void PdXbowBoltCreated(uint8_t* base, uint32_t obj);
 bool PdXbowBoltTick(PPCContext& ctx, uint8_t* base, uint32_t prop, uint32_t obj);
 
 void PdTestPlayerTick(PPCContext& ctx, uint8_t* base);
+void PdRicoShot(PPCContext& ctx, uint8_t* base);
+uint32_t PdRicoRenderBeams(PPCContext& ctx, uint8_t* base, uint32_t gdl);
 
 namespace {
 // The calling guest thread's full context and guest memory, for a hook that needs
@@ -682,6 +684,14 @@ void PdHookRicoBeamColour(PPCRegister& r25, PPCRegister& r29) {
   base[r25.u32 + 1] = uint8_t(rico::g_beam_tint >> 8);
   base[r25.u32 + 2] = uint8_t(rico::g_beam_tint);
 }
+
+// shot_create (sub_821FC8C0) right after its shot_calculate_hits: the shot's
+// bounces (main.cpp, PdRicoShot).
+void PdHookRicoShot() { PdRicoShot(HookContext(), HookBase()); }
+
+// The player's render (sub_820FC6E0) after the crossbow bolt trails (r3 = the
+// display list): the bounce beams are drawn into it.
+void PdHookRicoRenderBeams(PPCRegister& r3) { r3.u64 = PdRicoRenderBeams(HookContext(), HookBase(), r3.u32); }
 
 // ---- Test tools (pd_player.h) ------------------------------------------------------
 

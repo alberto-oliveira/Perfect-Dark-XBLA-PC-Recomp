@@ -83,7 +83,7 @@ join order (the local player is always 0), so scripts are safer with names.
 | `give <weapon>` | give a weapon (number, e.g. `29` or `0x1D`) and fill every ammo type |
 | `equip <weapon>` | switch to a weapon the player has |
 | `look <theta> <verta>` | set the view angles (degrees; verta up from the horizon) |
-| `face <player> [verta]` | aim at that player's chest (or in its direction, at that vertical angle) |
+| `face <player> [verta] [turn]` | aim at that player's chest (or in its direction, at that vertical angle), then turn `turn` degrees (its sign picks the side) |
 | `tp <x> <y> <z> [theta]` | move there (onto the floor below that point), facing theta |
 | `tp near <player> <distance>` | move to `distance` units in front of that player, facing them |
 | `pos [tag]` | log every player's position, room, view, weapon and knockback speed |
