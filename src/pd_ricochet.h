@@ -235,5 +235,6 @@ inline int g_debug_drawn = 0;
 inline int g_debug_filled_player = -1;
 inline int g_debug_bounces = 0;  // bounce segments made
 inline int g_debug_pool_full = 0;  // bounce beams not drawn: no free beam in the pool
+inline double g_debug_shot_us = 0;  // time spent in the shot hook (microseconds)
 
 }  // namespace pd::ricochet

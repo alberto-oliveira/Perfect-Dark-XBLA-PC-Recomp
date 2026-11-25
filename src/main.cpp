@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <csignal>
 #include <map>
 #include <filesystem>
@@ -1369,10 +1370,11 @@ void PdRicoDebugFrame() {
   rico_debug_frames = 0;
   if (REXCVAR_GET(pd_rico_debug) && (rico::g_debug_filled || rico::g_debug_drawn || rico::g_debug_bounces)) {
     REXLOG_INFO("[rico] last second: {} beams filled (last by player {}), {} drawn; {} beams noted; {} bounce "
-                "beams made, {} not (pool full)",
+                "beams made, {} not (pool full); shot hook {:.0f} us",
                 rico::g_debug_filled, rico::g_debug_filled_player, rico::g_debug_drawn, rico::g_beams.size(),
-                rico::g_debug_bounces, rico::g_debug_pool_full);
+                rico::g_debug_bounces, rico::g_debug_pool_full, rico::g_debug_shot_us);
   }
+  rico::g_debug_shot_us = 0;
   rico::g_debug_filled = 0;
   rico::g_debug_drawn = 0;
   rico::g_debug_bounces = 0;
@@ -1713,7 +1715,16 @@ void RicoDamage(PPCContext& ctx, uint8_t* base, uint32_t shooter, const rico::Se
 // r3 = the prop the shot hit (0 = none: it ended on a wall), r31 = the hand
 // number, r1 = shot_create's frame (the shot's start at 144(r1), its direction at
 // 112(r1)); g_Vars.currentplayer = the player who fired, on every PC.
+void PdRicoShotImpl(PPCContext& ctx, uint8_t* base);
 void PdRicoShot(PPCContext& ctx, uint8_t* base) {
+  // TEMP_RICO: the time the bounces take, for the once-a-second log line.
+  const auto start = std::chrono::steady_clock::now();
+  PdRicoShotImpl(ctx, base);
+  pd::ricochet::g_debug_shot_us +=
+      std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count();
+}
+
+void PdRicoShotImpl(PPCContext& ctx, uint8_t* base) {
   namespace pl = pd::player;
   const uint32_t player = pl::LoadU32(base, pl::kGVars + 1188);
   if (!player) return;
