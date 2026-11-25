@@ -1833,6 +1833,10 @@ void PdTestPlayerTick(PPCContext& ctx, uint8_t* base) {
 
   pl::Request r;
   if (!pl::Take(&r)) return;
+  if (!r.who.empty()) {
+    r.number = pl::PlayerByName(base, r.who);
+    if (r.number < 0) REXLOG_WARN("[test] no player named {}", r.who);
+  }
   switch (r.action) {
     case pl::Action::kGive: {
       PPCContext call = ctx;
@@ -1866,6 +1870,7 @@ void PdTestPlayerTick(PPCContext& ctx, uint8_t* base) {
       target.y -= 40.0f;  // the prop is at eye height: aim at the chest
       float theta, verta;
       pl::AnglesTowards(pl::LoadVec(base, pl::PropOf(base, player) + pl::kPropPos), target, &theta, &verta);
+      if (r.c != 0.0f) verta = r.b;  // face <player> <verta>: that player's direction, this vertical angle
       TestSetLook(base, player, theta, verta);
       REXLOG_INFO("[test] face player {}: theta {:.1f} verta {:.1f}", r.number, theta, verta);
       break;

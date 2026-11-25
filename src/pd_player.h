@@ -25,6 +25,7 @@
 //   +6692 the previous frame's vv_theta (render interpolation)
 //   +7112 room, +7128 pos, +7140 look, +7152 up: the camera's copy (the respawn
 //   sets these after moving the player)
+//   +7324 combat boost time left, +7328 combat boost on (XBLA: per player)
 //
 // Header-only, like pd_crossbow.h.
 #pragma once
@@ -68,6 +69,10 @@ constexpr uint32_t kCamRoom = 7112;
 constexpr uint32_t kCamPos = 7128;
 constexpr uint32_t kCamLook = 7140;
 constexpr uint32_t kCamUp = 7152;
+// Combat boost is per player on XBLA (bgun_add_boost sub_82178668): +7324 s32 the
+// time left, +7328 u8 "on" (the player's own tick runs at double speed, sub_820F4D40).
+constexpr uint32_t kBoostTime = 7324;
+constexpr uint32_t kBoostOn = 7328;
 
 // Props: position f32 x/y/z at +8, rooms at +58 (s16 list ending in -1).
 constexpr uint32_t kPropPos = 8;
@@ -103,7 +108,9 @@ inline void StoreS16(uint8_t* base, uint32_t address, int16_t value) {
 }
 
 // players[n], 0 if there is none.
-inline uint32_t Player(const uint8_t* base, int n) { return LoadU32(base, kPlayers + uint32_t(n) * 4); }
+inline uint32_t Player(const uint8_t* base, int n) {
+  return n >= 0 && n < 8 ? LoadU32(base, kPlayers + uint32_t(n) * 4) : 0;
+}
 inline uint32_t PropOf(const uint8_t* base, uint32_t player) {
   return player ? LoadU32(base, player + kProp) : 0;
 }
@@ -141,10 +148,30 @@ inline std::string Describe(const uint8_t* base, int n) {
   const Vec push = LoadVec(base, player + kShotSpeed);
   char text[256];
   std::snprintf(text, sizeof(text),
-                "player %d at %.1f %.1f %.1f room %d theta %.1f weapon %d push %.3f %.3f", n, pos.x, pos.y,
-                pos.z, LoadS16(base, prop + kPropRooms), LoadF32(base, player + kTheta),
-                int(int8_t(base[player + kWeapon])), push.x, push.z);
+                "player %d at %.1f %.1f %.1f room %d theta %.1f weapon %d push %.3f %.3f boost %u/%d", n, pos.x,
+                pos.y, pos.z, LoadS16(base, prop + kPropRooms), LoadF32(base, player + kTheta),
+                int(int8_t(base[player + kWeapon])), push.x, push.z, base[player + kBoostOn],
+                int(LoadU32(base, player + kBoostTime)));
   return text;
+}
+
+// The player number whose gamertag is `name`, or -1. Player n uses player config n
+// (0x82641950, 216 bytes each); in a network match the gamertag is at +75 (a remote
+// one ends in a line break, so the comparison stops at the first control character).
+// Player numbers differ between PCs (each puts itself first) and with the join
+// order, so test scripts name players instead.
+constexpr uint32_t kConfigs = 0x82641950;
+constexpr uint32_t kConfigSize = 216;
+constexpr uint32_t kConfigGamertag = 75;
+inline int PlayerByName(const uint8_t* base, const std::string& name) {
+  for (int n = 0; n < 8; ++n) {
+    if (!Player(base, n)) continue;
+    const uint32_t tag = kConfigs + uint32_t(n) * kConfigSize + kConfigGamertag;
+    std::string have;
+    for (uint32_t i = 0; i < 32 && base[tag + i] >= 0x20; ++i) have += char(base[tag + i]);
+    if (have == name) return n;
+  }
+  return -1;
 }
 
 // ---- Requests from the test pipe ----------------------------------------------------
@@ -154,6 +181,7 @@ enum class Action { kNone, kGive, kEquip, kLook, kFace, kTeleport, kTeleportNear
 struct Request {
   Action action = Action::kNone;
   int number = 0;     // the weapon (give/equip) or the other player (face/tp near)
+  std::string who;    // face/tp near: the other player's gamertag, if not given by number
   float a = 0, b = 0, c = 0, d = 0;  // look: theta verta; tp: x y z theta; tp near: distance
   std::string tag;    // pos: a label for the log line
 };

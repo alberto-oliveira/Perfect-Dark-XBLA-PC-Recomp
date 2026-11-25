@@ -6082,6 +6082,12 @@ class PerfectDarkApp : public rex::ReXApp {
     }
     pd::player::Request request;
     auto num = [&](size_t i) { return float(std::atof(arg(i).c_str())); };
+    // A player: a number (this PC's numbering) or a gamertag.
+    auto set_player = [&](const std::string& text) {
+      const bool numeric = !text.empty() && std::isdigit(static_cast<unsigned char>(text[0]));
+      request.number = numeric ? std::atoi(text.c_str()) : -1;
+      if (!numeric) request.who = text;
+    };
     if (c.verb == "give" || c.verb == "equip") {  // give|equip <weapon number>
       request.action = c.verb == "give" ? pd::player::Action::kGive : pd::player::Action::kEquip;
       request.number = int(std::strtol(arg(0).c_str(), nullptr, 0));  // 27 or 0x1B
@@ -6089,12 +6095,14 @@ class PerfectDarkApp : public rex::ReXApp {
       request.action = pd::player::Action::kLook;
       request.a = num(0);
       request.b = num(1);
-    } else if (c.verb == "face") {  // face <player number>: aim at that player's chest
+    } else if (c.verb == "face") {  // face <player number> [verta]: aim at that player's chest (or at verta)
       request.action = pd::player::Action::kFace;
-      request.number = std::atoi(arg(0).c_str());
+      set_player(arg(0));
+      request.c = arg(1).empty() ? 0.0f : 1.0f;  // 1 = use verta b
+      request.b = num(1);
     } else if (c.verb == "tp" && arg(0) == "near") {  // tp near <player> <distance>
       request.action = pd::player::Action::kTeleportNear;
-      request.number = std::atoi(arg(1).c_str());
+      set_player(arg(1));
       request.a = num(2);
     } else if (c.verb == "tp") {  // tp <x> <y> <z> [theta]
       request.action = pd::player::Action::kTeleport;
