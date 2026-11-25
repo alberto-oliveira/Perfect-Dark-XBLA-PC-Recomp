@@ -1,0 +1,36 @@
+# Scenario "research-tools": checks the player commands (give, equip, face, tp,
+# pos, track) and logs the first hits for the custom weapons research
+# (pd_probe_hits: every chr_damage call). 2 copies. Runs after lobby-host.txt.
+# The client moves in front of the host; the host shoots it with the Laser (29),
+# then the Shotgun (19).
+
+cvar pd_probe_hits true
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start
+waitmenu none 60
+wait 5000
+pos start
+give 29                      # Laser
+equip 29
+wait 2500
+signal host-armed
+waitsignal client-placed {clients} 30
+wait 500
+pos placed
+face 1                       # player 1 here = the client
+wait 300
+shot research-host-aim
+trig 0 255 150               # one Laser pulse
+wait 1500
+pos after-laser
+give 19                      # Shotgun
+equip 19
+wait 2500
+face 1
+trig 0 255 150
+wait 1500
+pos after-shotgun
+shot research-host-end
+log research-tools: host done

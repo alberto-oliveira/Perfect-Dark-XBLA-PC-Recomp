@@ -1947,6 +1947,61 @@ void PdTestPlayerTick(PPCContext& ctx, uint8_t* base) {
 }
 // ---- end of the test tools ---------------------------------------------------------------
 
+// ---- TEMP_RESEARCH: custom weapons research (logging only) -------------------------------
+//
+// What for: learning what each PC runs when a player is hit online (chr_damage
+// sub_82128200), for the Push Gun, Slow Gun and Ricochet Laser research
+// (docs/research/custom-weapons.md). Off unless pd_probe_hits is on.
+REXCVAR_DEFINE_BOOL(pd_probe_hits, false, "PerfectDark", "TEMP_RESEARCH: log every chr_damage call");
+
+namespace {
+// The number of the player whose prop is `prop`, or whose chr is `chr`; -1 if none.
+int ProbePlayerOf(const uint8_t* base, uint32_t prop, uint32_t chr) {
+  namespace pl = pd::player;
+  for (int n = 0; n < 8; ++n) {
+    const uint32_t p = pl::PropOf(base, pl::Player(base, n));
+    if (!p) continue;
+    if ((prop && p == prop) || (chr && pl::LoadU32(base, p + 4) == chr)) return n;
+  }
+  return -1;
+}
+}  // namespace
+
+// chr_damage's start (after its stack frame): r3 = the chr hit, f1 = damage,
+// r5 = the hit vector (coord*), r6 = gset (weapon number +0, function +3),
+// r7 = the attacker's prop, r8 = hit part, r9 = damage the shield.
+void PdProbeChrDamage(uint8_t* base, uint32_t chr, double damage, uint32_t vector, uint32_t gset, uint32_t aprop,
+                      uint32_t hitpart, uint32_t shield) {
+  if (!REXCVAR_GET(pd_probe_hits)) return;
+  namespace pl = pd::player;
+  const pl::Vec v = vector ? pl::LoadVec(base, vector) : pl::Vec{};
+  REXLOG_INFO(
+      "[probe] chr_damage frame {}: victim player {} (chr 0x{:08X}), attacker player {} (prop 0x{:08X}), "
+      "weapon {} func {}, damage {:.3f}, vector {:.3f} {:.3f} {:.3f}, hitpart {}, shield {}",
+      pl::LoadU32(base, pl::kLevelFrames), ProbePlayerOf(base, 0, chr), chr, ProbePlayerOf(base, aprop, 0), aprop,
+      gset ? int(base[gset]) : -1, gset ? int(base[gset + 3]) : -1, damage, v.x, v.y, v.z, int32_t(hitpart), shield);
+}
+// shot_calculate_hits sub_821FBAA8 after its stack frame (r3 hand, r4 isshooting,
+// r7 gunpos3d, r8 gundir3d): which player's shot each PC works out, and from where.
+void PdProbeShotHits(uint8_t* base, uint32_t hand, uint32_t shooting, uint32_t pos, uint32_t dir) {
+  if (!REXCVAR_GET(pd_probe_hits)) return;
+  namespace pl = pd::player;
+  const pl::Vec p = pl::LoadVec(base, pos), d = pl::LoadVec(base, dir);
+  REXLOG_INFO("[probe] shot frame {}: player {} hand {} shooting {} from {:.1f} {:.1f} {:.1f} dir {:.4f} {:.4f} {:.4f}",
+              pl::LoadU32(base, pl::kLevelFrames), int32_t(pl::LoadU32(base, 0x82648BF8 + 1196)), hand, shooting, p.x,
+              p.y, p.z, d.x, d.y, d.z);
+}
+
+// beam_create sub_82182130 (r3 beam, r4 weapon number, r5 from, r6 to): tracers.
+void PdProbeBeam(uint8_t* base, uint32_t beam, uint32_t weapon, uint32_t from, uint32_t to) {
+  if (!REXCVAR_GET(pd_probe_hits)) return;
+  namespace pl = pd::player;
+  const pl::Vec f = pl::LoadVec(base, from), t = pl::LoadVec(base, to);
+  REXLOG_INFO("[probe] beam frame {}: player {} beam 0x{:08X} weapon {} from {:.1f} {:.1f} {:.1f} to {:.1f} {:.1f} {:.1f}",
+              pl::LoadU32(base, pl::kLevelFrames), int32_t(pl::LoadU32(base, 0x82648BF8 + 1196)), beam,
+              int32_t(weapon), f.x, f.y, f.z, t.x, t.y, t.z);
+}
+// ---- end of TEMP_RESEARCH ----------------------------------------------------------------
 
 void PdNoteGameFrame(uint8_t* base) {
   PdCustomInstall(base);

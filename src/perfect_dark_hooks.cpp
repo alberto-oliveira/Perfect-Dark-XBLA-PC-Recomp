@@ -60,6 +60,10 @@ void PdXbowBoltCreated(uint8_t* base, uint32_t obj);
 bool PdXbowBoltTick(PPCContext& ctx, uint8_t* base, uint32_t prop, uint32_t obj);
 
 void PdTestPlayerTick(PPCContext& ctx, uint8_t* base);
+void PdProbeChrDamage(uint8_t* base, uint32_t chr, double damage, uint32_t vector, uint32_t gset, uint32_t aprop,
+                      uint32_t hitpart, uint32_t shield);  // TEMP_RESEARCH
+void PdProbeShotHits(uint8_t* base, uint32_t hand, uint32_t shooting, uint32_t pos, uint32_t dir);  // TEMP_RESEARCH
+void PdProbeBeam(uint8_t* base, uint32_t beam, uint32_t weapon, uint32_t from, uint32_t to);  // TEMP_RESEARCH
 
 namespace {
 // The calling guest thread's full context and guest memory, for a hook that needs
@@ -645,6 +649,22 @@ void PdHookTestPlayerTick() {
   PdTestPlayerTick(HookContext(), HookBase());
 }
 
+// TEMP_RESEARCH: chr_damage sub_82128200 after its stack frame is made (arguments
+// still in their registers).
+void PdHookProbeChrDamage(PPCRegister& r3, PPCRegister& f1, PPCRegister& r5, PPCRegister& r6, PPCRegister& r7,
+                          PPCRegister& r8, PPCRegister& r9) {
+  PdProbeChrDamage(HookBase(), r3.u32, f1.f64, r5.u32, r6.u32, r7.u32, r8.u32, r9.u32);
+}
+
+// TEMP_RESEARCH: shot_calculate_hits sub_821FBAA8 after its stack frame.
+void PdHookProbeShotHits(PPCRegister& r3, PPCRegister& r4, PPCRegister& r7, PPCRegister& r8) {
+  PdProbeShotHits(HookBase(), r3.u32, r4.u32, r7.u32, r8.u32);
+}
+
+// TEMP_RESEARCH: beam_create sub_82182130 after its stack frame.
+void PdHookProbeBeam(PPCRegister& r3, PPCRegister& r4, PPCRegister& r5, PPCRegister& r6) {
+  PdProbeBeam(HookBase(), r3.u32, r4.u32, r5.u32, r6.u32);
+}
 
 // ---- Custom weapons (pd_custom_weapons.h) ------------------------------------------
 // A few generic hooks, each placed at several addresses (perfect_dark_config.toml,

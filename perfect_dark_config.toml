@@ -861,3 +861,24 @@ registers = ["r10"]
 address = 0x820F29A4
 name = "PdHookTestPlayerTick"
 
+# ---- TEMP_RESEARCH: custom weapons research (logging only, pd_probe_hits) -----------
+
+# chr_damage sub_82128200 after `stwu r1,-672(r1)`: r3 chr, f1 damage, r5 vector,
+# r6 gset, r7 attacker prop, r8 hit part, r9 damage shield.
+[[midasm_hook]]
+address = 0x82128214
+name = "PdHookProbeChrDamage"
+registers = ["r3", "f1", "r5", "r6", "r7", "r8", "r9"]
+
+# shot_calculate_hits sub_821FBAA8 after `stwu r1,-1888(r1)`: r3 hand, r4 isshooting,
+# r7 gunpos3d, r8 gundir3d.
+[[midasm_hook]]
+address = 0x821FBAC0
+name = "PdHookProbeShotHits"
+registers = ["r3", "r4", "r7", "r8"]
+
+# beam_create sub_82182130 after `stwu r1,-128(r1)`: r3 beam, r4 weapon, r5 from, r6 to.
+[[midasm_hook]]
+address = 0x82182148
+name = "PdHookProbeBeam"
+registers = ["r3", "r4", "r5", "r6"]
