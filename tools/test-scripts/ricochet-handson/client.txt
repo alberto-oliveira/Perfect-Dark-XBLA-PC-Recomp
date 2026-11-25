@@ -1,0 +1,11 @@
+# Scenario "ricochet-handson", client. Runs after lobby-client.txt.
+
+pick 825FA2F8                # Ready
+signal ready-{copy}
+waitmenu none 120
+wait 3000
+give 6
+give 29
+give 0x52
+equip 0x52
+log ricochet-handson: client ready, play by hand

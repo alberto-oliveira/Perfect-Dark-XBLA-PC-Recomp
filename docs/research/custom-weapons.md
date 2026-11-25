@@ -111,6 +111,52 @@ vector, ...)` the vector is in r5, not r4 (verified).
 **Feasibility: high. Difficulty: ★★★☆☆** (lower than estimated: no network
 code is needed).
 
+### Implementation notes (branch ricochet-laser, 2026-11-25)
+
+Built as planned (`src/pd_ricochet.h`, toml section "Ricochet Laser"), with these
+findings on the way:
+
+- **Look:** weapon 0x52 is a Laser that looks like the Mauler. Its definition takes
+  from the Mauler's the model files, equip animations, position and part visibility
+  (+0x00..+0x13, +0x28..+0x43). The MP entry takes the Mauler's pickup model
+  (+6..+9), and the third-person model hook sees 6 (verified).
+  Its function definitions are copies with `FUNCFLAG_NOMUZZLEFLASH` (0x2000 at
+  +0x10), because the Mauler model has a green flash.
+- **Laser checks mapped (verified):**
+  - `bgun_create_fx` 0x82174E70 (r26);
+  - hit sounds 0x82176C64 (r7) and 0x821772AC (r11);
+  - `gset_populate` 0x821863D4 (r8);
+  - `shot_calculate_hits` 0x821FBC0C (r10) and 0x821FC268 (r11);
+  - `obj_hit` 0x82222608 (r11);
+  - pickup sound 0x8220C614 (r4);
+  - `beam_create_for_hand` 0x82182428 (r11).
+
+  `bgun_update_laser` (0x82175810) is left out, because it moves the Laser model's
+  own parts.
+- **Beams:** a beam is 44 bytes. `beam_tick` = sub_82183688. `g_Fireslots` =
+  0x8262E560 (48 B; beam at +4; chr+380 = fireslot). The Laser's `beam_create`
+  values:
+  - length capped at 10000, minimum 500;
+  - speed 0.25 × length (4 frames to cross);
+  - streak 0.6 × length (at most 3000);
+  - `dist` starts negative.
+
+  Bounce beams come from a pool of our own, drawn after `boltbeams_render` in the
+  player render (0x820FC7A4, r3 = display list) with `beam_render(gdl, beam, 0, 0)`.
+  This works on every PC, from any angle (verified).
+- **Bug found and fixed, in all custom weapons:** four primary/secondary bit hooks
+  ran after the game had already computed the bit's mask (`clrlwi` before
+  `srawi`). As a result, a remote player's choice set the wrong bit on the other
+  PCs, so the Stream replayed as pulses. They now run on the `clrlwi`
+  (0x82107044, 0x82180BA0, 0x8217D2C0, 0x8217D49C). Remote PCs keep only the
+  current weapon's bit of a remote player (vanilla).
+- **Hits:** a player's health and shield are applied on that player's own PC. The
+  shooter's copy of a remote chr does not change. Two `chr_damage_by_laser` calls
+  kill through a shield (verified, test R3). Self-hits kill (verified).
+- **Cost:** about 15–25 µs per shot (verified, test R4).
+- **Arena note:** the stage 50 corridors have no ceiling collision, so floor
+  bounces fly to the sky.
+
 **Tests it will need:**
 
 - 2–3 copies: bounces visible on every PC, from any angle (the bolt-trail tracer failed this);
