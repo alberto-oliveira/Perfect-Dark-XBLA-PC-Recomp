@@ -1,0 +1,58 @@
+# Scenario "ricochet-hits" (Ricochet Laser, test R3): 3 copies. Runs after
+# lobby-host.txt. The host shoots the floor in front of Zqclient (300 units
+# away), so the bounce rises into it:
+#   A: one bounce, default rules: damage 1.5 (pulse 1.0 + 50%), no kill;
+#   C: pd_rico_kill_bounce 1 (sent to the joined PCs) and the victim with a
+#      full shield (on the host's PC): the bounce still kills (two hits), frag
+#      to the host;
+#   D: the host shoots straight down at its own feet: the bounce goes straight
+#      up through the host and kills it.
+# (Round B, a kill without a shield, passed in an earlier run: logs host 173-174.)
+# [rico] hit lines on the host give each hit's damage and the victim's shield
+# on the host's PC (a player's health is applied on its own PC); Zqclient2
+# stays out of the way and logs the rules it received.
+
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start
+waitmenu none 60
+wait 5000
+give 0x52
+equip 0x52
+wait 2500
+signal host-armed
+waitsignal placed-a 1 60
+wait 500
+log ricochet-hits: A, one bounce, default rules
+face Zqclient -40
+wait 300
+trig 0 255 120
+wait 600
+shot hits-host-a
+wait 1500
+log ricochet-hits: C, kill after 1 bounce, shielded victim
+cvar pd_rico_kill_bounce 1
+wait 2000
+signal rules-c
+waitsignal placed-c 1 60
+wait 500
+cvar pd_rico_debug_shield Zqclient
+wait 300
+face Zqclient -40
+wait 300
+trig 0 255 120
+wait 400
+shot hits-host-c
+signal fired-c
+wait 3000
+log ricochet-hits: D, self-hit: straight down at the host's own feet
+face Zqclient -89 90
+wait 300
+trig 0 255 120
+wait 400
+shot hits-host-d
+wait 2000
+pos end
+signal host-done
+log ricochet-hits: host done

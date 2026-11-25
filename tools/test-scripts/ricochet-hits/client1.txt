@@ -1,0 +1,23 @@
+# Scenario "ricochet-hits", client 1 (Zqclient): the victim. Runs after lobby-client.txt.
+
+pick 825FA2F8                # Ready
+signal ready-{copy}
+waitmenu none 120
+wait 3000
+waitsignal host-armed 1 60
+tp near Zqhost 300
+face Zqhost
+signal placed-a
+waitsignal rules-c 1 60
+tp near Zqhost 300
+face Zqhost
+cvar pd_rico_debug_shield Zqclient   # a full shield on its own PC too
+wait 300
+shot hits-victim-shield
+signal placed-c
+waitsignal fired-c 1 60
+wait 300
+shot hits-victim-c           # dead, through the shield?
+waitsignal host-done 1 120
+pos end
+log ricochet-hits: client done

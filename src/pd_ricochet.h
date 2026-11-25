@@ -26,9 +26,11 @@
 // perfect_dark_hooks.cpp.
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <set>
+#include <vector>
 
 namespace pd::ricochet {
 
@@ -82,16 +84,109 @@ inline float Length(Vec a) { return std::sqrt(Dot(a, a)); }
 // The reflection of direction `d` off a surface with unit normal `n`.
 inline Vec Reflect(Vec d, Vec n) { return d - n * (2.0f * Dot(d, n)); }
 
+constexpr int kMaxBounces = 10;
+
 // One straight part of a shot's path: bounce `bounce` (0 = the shot itself).
+// `victim` = the player (this PC's numbering) it ends on, or -1 (it ends on a
+// wall, or nowhere).
 struct Segment {
   Vec from, to;
   int bounce;
+  int victim = -1;
 };
+
+// ---- Hitting players ------------------------------------------------------------------
+//
+// A bounce is tested against every player, the shooter included (a bounce
+// coming back can hit its own shooter). A player is a vertical capsule: its axis
+// from the feet (the prop's position is at eye height: feet = eye - eye height)
+// to just above the eyes, kPlayerRadius thick. The first player a bounce meets
+// ends the shot there. Every PC tests (so each draws the shot ending at the
+// player); only the shooter's PC applies the damage (the game's rule for
+// gunfire: the hit then reaches the victim's PC through the network).
+constexpr float kPlayerRadius = 30.0f;
+constexpr float kPlayerAboveEyes = 10.0f;
+
+// Closest approach of segment AB to segment CD: returns the squared distance
+// and sets `s` to the position along AB (0 = A, 1 = B) where it happens.
+// (The standard clamped closest-points computation for two segments.)
+inline float SegmentDistance2(Vec a, Vec b, Vec c, Vec d, float* s) {
+  const Vec d1 = b - a, d2 = d - c, r = a - c;
+  const float aa = Dot(d1, d1), ee = Dot(d2, d2), f = Dot(d2, r);
+  float sc = 0.0f, tc = 0.0f;
+  if (aa <= 1e-6f && ee <= 1e-6f) {
+    sc = tc = 0.0f;
+  } else if (aa <= 1e-6f) {
+    tc = std::clamp(f / ee, 0.0f, 1.0f);
+  } else {
+    const float cc = Dot(d1, r);
+    if (ee <= 1e-6f) {
+      sc = std::clamp(-cc / aa, 0.0f, 1.0f);
+    } else {
+      const float bb = Dot(d1, d2), denom = aa * ee - bb * bb;
+      sc = denom > 1e-6f ? std::clamp((bb * f - cc * ee) / denom, 0.0f, 1.0f) : 0.0f;
+      tc = (bb * sc + f) / ee;
+      if (tc < 0.0f) {
+        tc = 0.0f;
+        sc = std::clamp(-cc / aa, 0.0f, 1.0f);
+      } else if (tc > 1.0f) {
+        tc = 1.0f;
+        sc = std::clamp((bb - cc) / aa, 0.0f, 1.0f);
+      }
+    }
+  }
+  *s = sc;
+  const Vec diff = (a + d1 * sc) - (c + d2 * tc);
+  return Dot(diff, diff);
+}
+
+// ---- Damage -------------------------------------------------------------------------
+//
+// A bounce's hit does the function's damage (the Laser's: pulse 1.0, Stream
+// 0.1) plus g_growth percent of it for each bounce before the hit; a pulse that
+// hits after g_kill_bounce bounces or more kills (0 = never). A shield takes a
+// whole hit (N64 chr_damage: damage 0 once it absorbed one), so a kill is two
+// hits: the first takes the shield, the second kills.
+constexpr float kKillDamage = 100.0f;
+
+inline int g_growth = 50;      // percent of the base damage added per bounce (pd_rico_damage_growth)
+inline int g_kill_bounce = 3;  // pd_rico_kill_bounce
+
+inline float BounceDamage(float base_damage, int bounce) {
+  return base_damage * (1.0f + float(g_growth) / 100.0f * float(bounce));
+}
+inline bool BounceKills(int bounce, bool stream) { return !stream && g_kill_bounce > 0 && bounce >= g_kill_bounce; }
+
+// ---- The host's rules -----------------------------------------------------------------
+//
+// Bounces are drawn on every PC and damage is worked out on the shooter's PC, so
+// every PC must use the same rules: online, the host's. It sends them as a host
+// blob (netplay::SetHostBlob, as the Detonator Crossbow's explosion) and each
+// joined PC uses what it last heard. Blob: [version][bounces][growth][kill bounce].
+constexpr uint32_t kBlobKey = 0x5249434F;  // "RICO"
+constexpr uint8_t kBlobVersion = 1;
+
+struct Rules {
+  int bounces = 3, growth = 50, kill_bounce = 3;
+  bool operator!=(const Rules& o) const {
+    return bounces != o.bounces || growth != o.growth || kill_bounce != o.kill_bounce;
+  }
+};
+
+inline std::vector<uint8_t> EncodeBlob(const Rules& r) {
+  return {kBlobVersion, uint8_t(r.bounces), uint8_t(r.growth), uint8_t(r.kill_bounce)};
+}
+inline bool DecodeBlob(const std::vector<uint8_t>& blob, Rules* r) {
+  if (blob.size() < 4 || blob[0] != kBlobVersion) return false;
+  r->bounces = std::min<int>(blob[1], kMaxBounces);
+  r->growth = blob[2];
+  r->kill_bounce = blob[3];
+  return true;
+}
 
 constexpr float kPulseRange = 20000.0f;   // how far a pulse (or one bounce of it) is followed
 constexpr float kStreamRange = 300.0f;    // the Stream's whole path, bounces included (the game's 300.0 at 0x82000B08)
 constexpr float kOffWall = 2.0f;          // a bounce starts this far off the wall, so its own wall is not hit again
-constexpr int kMaxBounces = 10;
 
 // What a bounce can hit: the stage's walls and floors (CDTYPE_BG 0x20) and doors
 // (CDTYPE_DOORS 0x02), as the research probe used.

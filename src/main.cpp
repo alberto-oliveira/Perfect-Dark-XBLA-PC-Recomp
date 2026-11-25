@@ -1346,7 +1346,13 @@ REXCVAR_DEFINE_STRING(pd_rico_beam_tint, "red", "PerfectDark",
                       "The Ricochet Laser's beams' colour: red, orange, yellow, green, cyan, blue, purple, "
                       "pink, white, #RRGGBB, or off (the Laser's own)");
 REXCVAR_DEFINE_INT32(pd_rico_bounces, 3, "PerfectDark",
-                     "How many times a Ricochet Laser shot bounces off walls: 0-10");
+                     "How many times a Ricochet Laser shot bounces off walls: 0-10. Online, the host's counts");
+REXCVAR_DEFINE_INT32(pd_rico_damage_growth, 50, "PerfectDark",
+                     "Ricochet Laser: how much damage each bounce adds, in percent of the shot's own. Online, "
+                     "the host's counts");
+REXCVAR_DEFINE_INT32(pd_rico_kill_bounce, 3, "PerfectDark",
+                     "Ricochet Laser: a pulse that hits a player after this many bounces kills (0 = never; "
+                     "not the Stream). Online, the host's counts");
 REXCVAR_DEFINE_INT32(pd_rico_beam_speed, 100, "PerfectDark",
                      "TEMP_RICO: how fast the Ricochet Laser's bounce beams move, in percent (to see them in "
                      "screenshots)");
@@ -1374,12 +1380,87 @@ void PdRicoDebugFrame() {
 }
 }  // namespace
 
+// Each frame (game thread): the rules this PC's Ricochet Lasers use. The host
+// sends its own whenever it starts hosting or they change; a joined PC asks
+// twice a second for the host's latest (the defaults until it has them); with
+// no session, its own settings. As PdXbowNetFrame does.
+namespace {
+bool rico_hosting = false;
+pd::ricochet::Rules rico_sent;
+int rico_poll_frames = 0;
+
+void RicoApply(const pd::ricochet::Rules& r) {
+  pd::ricochet::g_bounces = r.bounces;
+  pd::ricochet::g_growth = r.growth;
+  pd::ricochet::g_kill_bounce = r.kill_bounce;
+}
+
+void PdRicoRulesFrame() {
+  namespace netplay = rex::kernel::xam::netplay;
+  namespace rico = pd::ricochet;
+  rico::Rules own;
+  own.bounces = std::clamp(REXCVAR_GET(pd_rico_bounces), 0, rico::kMaxBounces);
+  own.growth = std::clamp(REXCVAR_GET(pd_rico_damage_growth), 0, 255);
+  own.kill_bounce = std::clamp(REXCVAR_GET(pd_rico_kill_bounce), 0, rico::kMaxBounces);
+  if (netplay::IsHostingSession()) {
+    if (!rico_hosting || own != rico_sent) {
+      const std::vector<uint8_t> blob = rico::EncodeBlob(own);
+      netplay::SetHostBlob(rico::kBlobKey, blob.data(), blob.size());
+      REXLOG_INFO("[rico] hosting: rules sent to the joined PCs: {} bounces, +{}% damage per bounce, kill after {}",
+                  own.bounces, own.growth, own.kill_bounce);
+      rico_hosting = true;
+      rico_sent = own;
+    }
+    RicoApply(own);
+    return;
+  }
+  rico_hosting = false;
+  if (!netplay::IsJoinedSession()) {
+    RicoApply(own);
+    return;
+  }
+  if (++rico_poll_frames % 30 != 0) return;
+  netplay::HostBlob blob;
+  rico::Rules host;  // the defaults until the host's are heard
+  const bool heard = netplay::LatestHostBlob(rico::kBlobKey, &blob) && rico::DecodeBlob(blob.data, &host);
+  const rico::Rules current{rico::g_bounces, rico::g_growth, rico::g_kill_bounce};
+  if (host != current) {
+    REXLOG_INFO("[rico] joined: {} rules: {} bounces, +{}% damage per bounce, kill after {}",
+                heard ? "the host's" : "default (nothing heard from the host yet)", host.bounces, host.growth,
+                host.kill_bounce);
+  }
+  RicoApply(host);
+}
+}  // namespace
+
+// TEMP_RICO: pd_rico_debug_shield = a gamertag: that player's chr gets a full
+// shield (chr+0x180 = 8, N64 chr_set_shield's full amount) on this PC, once.
+REXCVAR_DEFINE_STRING(pd_rico_debug_shield, "", "PerfectDark", "TEMP_RICO: give this player a full shield here");
+namespace {
+void PdRicoDebugShield(uint8_t* base) {
+  namespace pl = pd::player;
+  const std::string who = REXCVAR_GET(pd_rico_debug_shield);
+  if (who.empty()) return;
+  REXCVAR_SET(pd_rico_debug_shield, std::string());
+  const int n = pl::PlayerByName(base, who);
+  const uint32_t prop = n >= 0 ? pl::PropOf(base, pl::Player(base, n)) : 0;
+  const uint32_t chr = prop ? pl::LoadU32(base, prop + 4) : 0;
+  if (!chr) {
+    REXLOG_WARN("[rico] debug shield: no player {}", who);
+    return;
+  }
+  pl::StoreF32(base, chr + 0x180, 8.0f);
+  REXLOG_INFO("[rico] debug shield: player {} ({}) has a full shield here", n, who);
+}
+}  // namespace
+
 // Each frame (game thread): the settings.
-void PdRicoFrame() {
+void PdRicoFrame(uint8_t* base) {
+  PdRicoDebugShield(base);  // TEMP_RICO
   namespace rico = pd::ricochet;
   pd::custom::g_tint[pd::custom::IndexOf(rico::kWeaponRicochet)] = pd::custom::ParseTint(REXCVAR_GET(pd_rico_tint));
   rico::g_beam_tint = pd::custom::ParseTint(REXCVAR_GET(pd_rico_beam_tint));
-  rico::g_bounces = std::clamp(REXCVAR_GET(pd_rico_bounces), 0, rico::kMaxBounces);
+  PdRicoRulesFrame();
   rico::g_debug_beam_speed = std::clamp(REXCVAR_GET(pd_rico_beam_speed), 1, 1000);  // TEMP_RICO
   PdRicoDebugFrame();  // TEMP_RICO
 }
@@ -1462,6 +1543,34 @@ bool RicoFindWall(PPCContext& ctx, uint8_t* base, const RicoScratch& s, rico::Ve
   return true;
 }
 
+// The first player the segment from -> to meets (this PC's numbering), and how
+// far along it (0 = from, 1 = to); -1 if none. Players dying or dead (chr+7
+// actiontype 4/5, N64 ACT_DIE/ACT_DEAD) are not hit.
+int RicoFirstPlayer(const uint8_t* base, rico::Vec from, rico::Vec to, float* along) {
+  namespace pl = pd::player;
+  int best = -1;
+  float best_s = 2.0f;
+  for (int n = 0; n < 8; ++n) {
+    const uint32_t player = pl::Player(base, n);
+    const uint32_t prop = pl::PropOf(base, player);
+    if (!prop) continue;
+    const uint32_t chr = pl::LoadU32(base, prop + 4);
+    if (!chr || base[chr + 7] == 4 || base[chr + 7] == 5) continue;
+    const rico::Vec eye = RicoLoadVec(base, prop + pl::kPropPos);
+    float eye_height = pl::LoadF32(base, player + pl::kEyeHeight);
+    if (!(eye_height > 20.0f && eye_height < 400.0f)) eye_height = 160.0f;
+    const rico::Vec feet{eye.x, eye.y - eye_height, eye.z};
+    const rico::Vec head{eye.x, eye.y + rico::kPlayerAboveEyes, eye.z};
+    float s = 0.0f;
+    if (rico::SegmentDistance2(from, to, feet, head, &s) <= rico::kPlayerRadius * rico::kPlayerRadius && s < best_s) {
+      best = n;
+      best_s = s;
+    }
+  }
+  *along = best_s;
+  return best;
+}
+
 // The path of a shot fired from `pos` along `dir` (unit): the bounce segments
 // after the shot's own one (which ends on the first wall), at most `bounces`.
 // The Stream's whole path is kStreamRange long; a pulse's each segment kPulseRange.
@@ -1483,6 +1592,13 @@ std::vector<rico::Segment> RicoBounces(PPCContext& ctx, uint8_t* base, uint32_t 
     const uint32_t rooms = RicoRoomsAt(ctx, base, s, start);
     const bool wall = RicoFindWall(ctx, base, s, start, reach_end, rooms, &at, &n);
     const rico::Vec end = wall ? at : reach_end;
+    // A player before the wall ends the shot there.
+    float along = 0.0f;
+    const int victim = RicoFirstPlayer(base, start, end, &along);
+    if (victim >= 0) {
+      path.push_back({start, start + (end - start) * along, k, victim});
+      break;
+    }
     path.push_back({start, end, k});
     if (!wall) break;
     if (stream) left -= rico::Length(end - start);
@@ -1545,6 +1661,52 @@ void RicoDrawBounces(PPCContext& ctx, uint8_t* base, rico::Vec pos, const std::v
     ++rico::g_debug_bounces;
   }
 }
+
+// A bounce `seg` of `shooter`'s shot hit player seg.victim: its damage through
+// chr_damage_by_laser (sub_8212DDE0: r3 chr, f1 damage, r5 direction, r6 gset,
+// r7 the attacker's prop; the shield takes hits as the Laser's), which gives the
+// shooter the frag and reaches the victim's PC (research T3). A kill is two hits:
+// the first takes a shield, the second kills (pd_ricochet.h, Damage).
+void RicoDamage(PPCContext& ctx, uint8_t* base, uint32_t shooter, const rico::Segment& seg, bool stream,
+                uint8_t function) {
+  namespace pl = pd::player;
+  const uint32_t victim_prop = pl::PropOf(base, pl::Player(base, seg.victim));
+  const uint32_t chr = victim_prop ? pl::LoadU32(base, victim_prop + 4) : 0;
+  if (!chr) return;
+  // The function's own damage: its definition's +0x1C (N64 funcdef_shoot.damage).
+  float base_damage = stream ? 0.1f : 1.0f;
+  const uint32_t def = pl::LoadU32(base, pd::custom::kWeapons + uint32_t(rico::kWeaponRicochet) * 4);
+  const uint32_t func = def ? pl::LoadU32(base, def + 0x14 + uint32_t(function & 1) * 4) : 0;
+  if (func) base_damage = pl::LoadF32(base, func + 0x1C);
+  const bool kill = rico::BounceKills(seg.bounce, stream);
+  const float damage = kill ? rico::kKillDamage : rico::BounceDamage(base_damage, seg.bounce);
+  rico::Vec dir = seg.to - seg.from;
+  const float len = rico::Length(dir);
+  dir = len > 0.001f ? dir * (1.0f / len) : rico::Vec{0, 0, 1};
+  // TEMP_RICO: the victim's shield before the hit (N64 chrdata +0x180 cshield).
+  const float before_shield = pl::LoadF32(base, chr + 0x180);
+  const RicoScratch s(ctx);
+  RicoStoreVec(base, s.from, dir);
+  pl::StoreU32(base, s.to, (uint32_t(rico::kWeaponRicochet) << 24) | (function & 1));  // gset {weapon, 0, 0, function}
+  for (int hit = 0; hit < (kill ? 2 : 1); ++hit) {
+    PPCContext call = ctx;
+    call.r1.u64 = s.Stack();
+    call.r3.u64 = chr;
+    call.f1.f64 = damage;
+    call.r5.u64 = s.from;
+    call.r6.u64 = s.to;
+    call.r7.u64 = pl::PropOf(base, shooter);
+    sub_8212DDE0(call, base);  // chr_damage_by_laser
+  }
+  if (REXCVAR_GET(pd_rico_debug)) {  // TEMP_RICO
+    // (A player's health is kept in its player struct and applied on its own PC,
+    // so only the shield is logged.)
+    REXLOG_INFO("[rico] hit: player {} ({}) after {} bounce(s), {} damage {:.2f}{}; shield here {:.2f} -> {:.2f}",
+                seg.victim, seg.victim == 0 ? "the shooter" : pd::crossbow::PlayerName(base, seg.victim), seg.bounce,
+                stream ? "Stream" : "pulse", damage, kill ? " (kill: two hits)" : "", before_shield,
+                pl::LoadF32(base, chr + 0x180));
+  }
+}
 }  // namespace
 
 // shot_create (sub_821FC8C0) right after its shot_calculate_hits (0x821FC9B8):
@@ -1578,6 +1740,10 @@ void PdRicoShot(PPCContext& ctx, uint8_t* base) {
   const std::vector<rico::Segment> path =
       RicoBounces(ctx, base, pl::PropOf(base, player), pos, dir, stream, rico::g_bounces);
   RicoDrawBounces(ctx, base, pos, path, stream);
+  // The damage, on the shooter's own PC only (its player is players[0] there).
+  if (!path.empty() && path.back().victim >= 0 && player == pl::Player(base, 0)) {
+    RicoDamage(ctx, base, player, path.back(), stream, base[hand + 3]);
+  }
   if (REXCVAR_GET(pd_rico_debug) && !stream) {  // TEMP_RICO (the Stream would log every frame)
     std::string text;
     for (const rico::Segment& seg : path) {
@@ -2254,7 +2420,7 @@ void PdTestPlayerTick(PPCContext& ctx, uint8_t* base) {
 void PdNoteGameFrame(uint8_t* base) {
   PdCustomInstall(base);
   PdXbowNetFrame();
-  PdRicoFrame();
+  PdRicoFrame(base);
   PdMpMusicFrame(base);
   PdWeaponsFrame();
   PerfectDarkApp::NoteGameStage(
