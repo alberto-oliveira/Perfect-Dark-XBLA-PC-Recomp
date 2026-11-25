@@ -1372,8 +1372,8 @@ void PdRicoDebugFrame() {
   rico_debug_frames = 0;
   if (REXCVAR_GET(pd_rico_debug) && (rico::g_debug_filled || rico::g_debug_drawn || rico::g_debug_bounces)) {
     REXLOG_INFO("[rico] last second: {} beams filled (last by player {}), {} drawn; {} beams noted; {} bounce "
-                "beams made, {} not (pool full); shot hook {:.0f} us; first walls: {} at the game's hit, {} from "
-                "the eye, {} none",
+                "beams made, {} not (pool full); shot hook {:.0f} us; first walls: {} by the bullet test, {} by "
+                "collision only, {} none",
                 rico::g_debug_filled, rico::g_debug_filled_player, rico::g_debug_drawn, rico::g_beams.size(),
                 rico::g_debug_bounces, rico::g_debug_pool_full, rico::g_debug_shot_us, rico::g_debug_probe_hits,
                 rico::g_debug_eye_hits, rico::g_debug_no_wall);
@@ -1486,6 +1486,8 @@ void RicoStoreVec(uint8_t* base, uint32_t address, rico::Vec v) { pd::player::St
 // crossbow's scorch fix does. The callee's stack starts under it.
 struct RicoScratch {
   uint32_t from, to, hit, normal, inrooms, aboverooms, best, rooms;
+  // For the visible-geometry test (RicoFindWallVisible). +192..+240 is RicoSparks'.
+  uint32_t final_rooms, crossed, hitthing, seg_from, seg_to, room_list;
   explicit RicoScratch(const PPCContext& ctx) {
     from = ctx.r1.u32 - 0x400;
     to = from + 16;
@@ -1495,6 +1497,12 @@ struct RicoScratch {
     aboverooms = from + 112;  // 21 s16
     best = from + 160;        // s16
     rooms = from + 168;       // {room, -1}
+    final_rooms = from + 256; // 16 s16
+    crossed = from + 288;     // 31 s16
+    hitthing = from + 352;    // struct hitthing (N64: 48 bytes; 128 kept)
+    seg_from = from + 480;
+    seg_to = from + 496;
+    room_list = from + 512;   // {room, -1}
   }
   uint32_t Stack() const { return from - 0x200; }
 };
@@ -1579,19 +1587,79 @@ int RicoFirstPlayer(const uint8_t* base, rico::Vec from, rico::Vec to, float* al
   return best;
 }
 
-// The wall a shot fired from `pos` along `dir` (unit) ended on: its point and
-// normal. First probed around the game's own hit point `hitpos` (where the
-// shot's beam ends and the game made its sparks: the user's test showed the
-// line from the eye missed ~35% of the walls the game hit); else along the line
-// from the eye, from the shooter's rooms. False if neither finds a wall.
+// The first wall, floor or ceiling on the line from -> to, as the game's bullets
+// find it (shot_calculate_hits, N64 prop.c ~685): the rooms the line crosses
+// (portal_find_rooms sub_820DC1A8(from, to, fromrooms, finalrooms, crossed, 30))
+// and in each the room's VISIBLE triangles (bg_test_hit_in_room sub_820D4DC8(from,
+// to, room, &hitthing): hitthing +0 the point, +0x0C the surface normal). The
+// collision geometry RicoFindWall uses stops below high walls and ceilings
+// nobody can reach (the user's check: shots there made sparks but no bounce).
+// True with the nearest hit's point, unit normal (facing back along the line)
+// and room.
+bool RicoFindWallVisible(PPCContext& ctx, uint8_t* base, const RicoScratch& s, rico::Vec from, rico::Vec to,
+                         uint32_t fromrooms, rico::Vec* at, rico::Vec* normal, int16_t* room) {
+  namespace pl = pd::player;
+  RicoStoreVec(base, s.seg_from, from);
+  RicoStoreVec(base, s.seg_to, to);
+  pl::StoreS16(base, s.crossed, -1);
+  PPCContext call = ctx;
+  call.r1.u64 = s.Stack();
+  call.r3.u64 = s.seg_from;
+  call.r4.u64 = s.seg_to;
+  call.r5.u64 = fromrooms;
+  call.r6.u64 = s.final_rooms;
+  call.r7.u64 = s.crossed;
+  call.r8.u64 = 30;
+  sub_820DC1A8(call, base);  // portal_find_rooms
+  bool found = false;
+  float best = 0.0f;
+  for (int i = 0; i < 30; ++i) {
+    const int16_t r = pl::LoadS16(base, s.crossed + uint32_t(i) * 2);
+    if (r < 0) break;
+    call = ctx;
+    call.r1.u64 = s.Stack();
+    call.r3.u64 = s.seg_from;
+    call.r4.u64 = s.seg_to;
+    call.r5.u64 = uint32_t(int32_t(r));
+    call.r6.u64 = s.hitthing;
+    sub_820D4DC8(call, base);  // bg_test_hit_in_room
+    if (call.r3.u32 == 0) continue;
+    const rico::Vec p = RicoLoadVec(base, s.hitthing);
+    const float d = rico::Dot(p - from, to - from);
+    if (d <= 0.0f || (found && d >= best)) continue;  // behind the start, or farther than one already found
+    rico::Vec n = RicoLoadVec(base, s.hitthing + 12);
+    const float len = rico::Length(n);
+    if (len < 0.001f) continue;
+    n = n * (1.0f / len);
+    if (rico::Dot(to - from, n) > 0) n = n * -1.0f;
+    found = true;
+    best = d;
+    *at = p;
+    *normal = n;
+    *room = r;
+  }
+  return found;
+}
+
+// The wall a shot fired from `pos` along `dir` (unit) ended on: its point,
+// normal and room (-1 when only the collision test found it). Tried in order:
+//   1. the game's own test (RicoFindWallVisible) from the eye to just past the
+//      game's hit point `hitpos` (where the shot's beam ends and the game made
+//      its sparks), from the shooter's rooms;
+//   2. the collision geometry around the game's hit point;
+//   3. the collision geometry along the line from the eye.
+// False if none finds a wall.
 bool RicoFirstWall(PPCContext& ctx, uint8_t* base, const RicoScratch& s, uint32_t shooter_prop, rico::Vec pos,
-                   rico::Vec dir, rico::Vec hitpos, float range, rico::Vec* at, rico::Vec* n) {
-  const rico::Vec a = hitpos - dir * rico::kProbe, b = hitpos + dir * rico::kProbe;
-  if (RicoFindWall(ctx, base, s, a, b, RicoRoomsAt(ctx, base, s, a), at, n)) {
+                   rico::Vec dir, rico::Vec hitpos, float range, rico::Vec* at, rico::Vec* n, int16_t* room) {
+  *room = -1;
+  if (RicoFindWallVisible(ctx, base, s, pos, hitpos + dir * rico::kProbe, shooter_prop + pd::player::kPropRooms, at, n,
+                          room)) {
     ++rico::g_debug_probe_hits;
     return true;
   }
-  if (RicoFindWall(ctx, base, s, pos, pos + dir * range, shooter_prop + pd::player::kPropRooms, at, n)) {
+  const rico::Vec a = hitpos - dir * rico::kProbe, b = hitpos + dir * rico::kProbe;
+  if (RicoFindWall(ctx, base, s, a, b, RicoRoomsAt(ctx, base, s, a), at, n) ||
+      RicoFindWall(ctx, base, s, pos, pos + dir * range, shooter_prop + pd::player::kPropRooms, at, n)) {
     ++rico::g_debug_eye_hits;
     return true;
   }
@@ -1602,25 +1670,42 @@ bool RicoFirstWall(PPCContext& ctx, uint8_t* base, const RicoScratch& s, uint32_
 // The path of a shot fired from `pos` along `dir` (unit) whose own segment ended
 // at the game's hit point `hitpos`: the bounce segments after it, at most
 // `bounces`. The Stream's whole path is kStreamRange long; each segment of a
-// pulse kPulseRange. With `test_players` (the Stream) a player before the wall
-// ends the shot there at once; a pulse's players are tested as its streak
-// travels (PdRicoTick).
+// pulse kPulseRange. Each bounce's wall is found as the game's bullets find
+// walls (RicoFindWallVisible), starting in the room of the wall it left; else
+// with the collision geometry. With `test_players` (the Stream) a player before
+// the wall ends the shot there at once; a pulse's players are tested as its
+// streak travels (PdRicoTick).
 std::vector<rico::Segment> RicoBounces(PPCContext& ctx, uint8_t* base, uint32_t shooter_prop, rico::Vec pos,
                                        rico::Vec dir, rico::Vec hitpos, bool stream, int bounces,
                                        bool test_players) {
+  namespace pl = pd::player;
   std::vector<rico::Segment> path;
   const RicoScratch s(ctx);
   float left = stream ? rico::kStreamRange : rico::kPulseRange;
   rico::Vec at, n;
-  if (!RicoFirstWall(ctx, base, s, shooter_prop, pos, dir, hitpos, left, &at, &n)) return path;
+  int16_t room = -1;
+  if (!RicoFirstWall(ctx, base, s, shooter_prop, pos, dir, hitpos, left, &at, &n, &room)) return path;
   if (stream) left -= rico::Length(at - pos);
   for (int k = 1; k <= bounces && left > 1.0f; ++k) {
     dir = rico::Reflect(dir, n);
     const rico::Vec start = at + n * rico::kOffWall;
     const float reach = stream ? left : rico::kPulseRange;
     const rico::Vec reach_end = start + dir * reach;
-    const uint32_t rooms = RicoRoomsAt(ctx, base, s, start);
-    const bool wall = RicoFindWall(ctx, base, s, start, reach_end, rooms, &at, &n);
+    // The rooms the bounce starts in: the room of the wall it left, else the
+    // rooms its start point is in.
+    uint32_t rooms;
+    if (room >= 0) {
+      pl::StoreS16(base, s.room_list, room);
+      pl::StoreS16(base, s.room_list + 2, -1);
+      rooms = s.room_list;
+    } else {
+      rooms = RicoRoomsAt(ctx, base, s, start);
+    }
+    bool wall = RicoFindWallVisible(ctx, base, s, start, reach_end, rooms, &at, &n, &room);
+    if (!wall) {
+      room = -1;
+      wall = RicoFindWall(ctx, base, s, start, reach_end, RicoRoomsAt(ctx, base, s, start), &at, &n);
+    }
     rico::Segment seg;
     seg.from = start;
     seg.to = wall ? at : reach_end;

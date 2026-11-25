@@ -275,8 +275,8 @@ inline int g_debug_filled_player = -1;
 inline int g_debug_bounces = 0;  // bounce segments made
 inline int g_debug_pool_full = 0;  // bounce beams not drawn: no free beam in the pool
 inline double g_debug_shot_us = 0;  // time spent in the shot hook (microseconds)
-inline int g_debug_probe_hits = 0;   // first bounces found at the game's hit point
-inline int g_debug_eye_hits = 0;     // ... found only by the line from the eye
+inline int g_debug_probe_hits = 0;   // first walls found by the bullets' test (visible geometry)
+inline int g_debug_eye_hits = 0;     // ... found only by the collision geometry
 inline int g_debug_no_wall = 0;      // shots that ended on no wall (no bounce)
 
 // The beams' width in percent of the Laser's (pd_rico_beam_width, default 200).

@@ -1,0 +1,49 @@
+# Scenario "ricochet-high" (Ricochet Laser, round 3): 2 copies, stage 50 (the
+# host's saved arena). Replays shots from the user's hands-on #2 that made
+# sparks on high walls / ceilings but did not bounce (log client 139): the host
+# goes to each spot, looks the same way and fires pulses. [rico] pulse lines
+# give each shot's bounces; screenshots with slow bounce beams.
+
+cvar pd_rico_beam_speed 30
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start
+waitmenu none 60
+wait 5000
+give 0x52
+equip 0x52
+wait 2500
+log ricochet-high: spot A, up at 51 degrees (logged hit 1887 548 412)
+tp 2200 159 427 92.7
+look 92.7 51
+wait 500
+trig 0 255 200
+wait 400
+shot high-a1
+wait 1200
+trig 0 255 200
+wait 1500
+log ricochet-high: spot B, up at 16 degrees (logged hit 1822 600 -294)
+tp 2685 159 948 145.2
+look 145.2 16.3
+wait 500
+trig 0 255 200
+wait 400
+shot high-b1
+wait 1200
+trig 0 255 200
+wait 1500
+log ricochet-high: spot C, up at 40 degrees (logged hit 1655 970 1955)
+tp 828 -44 2843 222.8
+look 222.8 39.8
+wait 500
+trig 0 255 200
+wait 400
+shot high-c1
+wait 1200
+trig 0 255 200
+wait 1500
+pos end
+signal host-done
+log ricochet-high: host done
