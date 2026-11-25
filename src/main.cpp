@@ -6,6 +6,8 @@
 #include "pd_weapons.h"  // more multiplayer weapons, shuffled weapon spawns
 #include "pd_stages.h"   // the solo mission stages as Combat Simulator arenas
 #include "pd_stage_layouts.h"  // their hand-picked spawn and weapon pads
+#include "pd_crossbow.h"  // the detonator crossbow
+#include "pd_custom_weapons.h"  // new weapons under borrowed weapon numbers
 
 #include <rex/chrono/clock.h>
 #include <rex/diag_timing.h>
@@ -15,9 +17,12 @@
 #include <dbghelp.h>
 
 #include <algorithm>
+#include <atomic>
 #include <csignal>
+#include <map>
 #include <filesystem>
 #include <random>
+#include <set>
 #include <thread>
 #include <vector>
 
@@ -26,7 +31,7 @@
 // Developer F-key diagnostics (see PerfectDarkInputTracker::OnDraw). Players
 // never need these; set pd_dev_hotkeys = true in perfect_dark.toml to enable.
 REXCVAR_DEFINE_BOOL(pd_dev_hotkeys, false, "PerfectDark",
-                    "Enable developer diagnostic hotkeys (F1, F2, F5, F6, F8, F10-F12)");
+                    "Enable developer diagnostic hotkeys (F1, F2, F5, F6, F8, F10-F12, End)");
 REXCVAR_DEFINE_BOOL(pd_frame_stats, false, "PerfectDark",
                     "Log presented frame rate and slow frames every five seconds (developer "
                     "aid for performance work)");
@@ -794,15 +799,31 @@ void CheckHostStageSetup() {
 // Decides this stage's weapon slots and shuffle (the host also sends them; a
 // joined PC waits for them), then notes the stage's weapon pickups and the
 // weapons they start with.
+void PdCustomInstall(uint8_t* base);  // custom weapons (further down)
+uint32_t PdCustomLoadGunModel(PPCContext& ctx, uint8_t* base, uint32_t id);  // further down
+
 void PdSetupCreateProps(PPCContext& ctx, uint8_t* base) {
   namespace netplay = rex::kernel::xam::netplay;
   namespace weapons = pd::weapons;
+  PdCustomInstall(base);  // before the slots are read: they may name a custom weapon's index
   weapons::g_match = {};
   weapons::g_pickups.clear();
   weapons::g_selection.clear();
   weapons::g_crates.clear();
+  pd::crossbow::g_pending.clear();  // the detonator crossbow's pending explosions
+  pd::crossbow::g_pending_tries.clear();
+  pd::crossbow::g_detonator_bolts.clear();
+  pd::crossbow::g_firing_weapon = 0;
   if (weapons::LoadU32(base, weapons::kMatchRunning) == 0 && weapons::LoadU32(base, weapons::kMatchRunning2) == 0) {
     return;  // not a multiplayer match: the stage has no weapon spawn locations
+  }
+  // The custom weapons' left-hand models (stage 4a), for this stage.
+  for (int i = 0; i < pd::custom::kCount; ++i) {
+    const pd::custom::Weapon& w = pd::custom::kList[i];
+    pd::custom::g_left_model[i] = w.left_model_file ? PdCustomLoadGunModel(ctx, base, w.left_model_file) : 0;
+    if (w.left_model_file && !pd::custom::g_left_cmds[i]) {
+      pd::custom::g_left_cmds[i] = rex::system::kernel_state()->memory()->SystemHeapAlloc(pd::custom::kLeftCmdsSize);
+    }
   }
 
   const char* source = "own settings";
@@ -904,7 +925,7 @@ bool FloorLift(PPCContext& ctx, uint8_t* base, uint32_t model, const float rot_y
 // pickup the stage left out (player count or difficulty) was never loaded.
 bool SetPickupWeapon(PPCContext& ctx, uint8_t* base, uint32_t prop, uint32_t obj, uint8_t index) {
   namespace weapons = pd::weapons;
-  const uint32_t entry = weapons::kWeaponTable + index * weapons::kWeaponEntrySize;
+  const uint32_t entry = weapons::EntryAddress(index);
   const uint8_t weapon_num = base[entry];
   const uint16_t model_num = weapons::LoadU16(base, entry + 6);
   const uint32_t state = weapons::kModelStates + uint32_t(model_num) * 8;
@@ -1061,7 +1082,7 @@ bool PdWeaponByLocation(const uint8_t* base, int32_t location, uint32_t* entry) 
   namespace weapons = pd::weapons;
   if (weapons::g_match.extra.empty()) return false;
   const uint8_t index = weapons::IndexForLocation(base, location, weapons::AllSlots(base, weapons::g_match));
-  *entry = weapons::kWeaponTable + index * weapons::kWeaponEntrySize;
+  *entry = weapons::EntryAddress(index);
   return true;
 }
 
@@ -1249,6 +1270,245 @@ bool PdRandomArena(uint32_t* stage) {
   return true;
 }
 
+// ---- The Detonator Crossbow (pd_crossbow.h) --------------------------------------
+// A custom weapon (pd_custom_weapons.h): the crossbow with Detonate as its
+// secondary function, which explodes every Detonator bolt its player fired.
+REXCVAR_DEFINE_INT32(pd_custom_tint_strength, 60, "PerfectDark",
+                     "How strongly custom weapons (the Detonator Crossbow) show their colour: 0-100");
+REXCVAR_DEFINE_STRING(pd_xbow_tint, "orange", "PerfectDark",
+                      "The Detonator Crossbow's colour: red, orange, yellow, green, cyan, blue, purple, "
+                      "pink, #RRGGBB, or off");
+REXCVAR_DEFINE_STRING(pd_xbow_bolt_tint, "red", "PerfectDark",
+                      "The Detonator Crossbow's bolts' colour: red, orange, yellow, green, cyan, blue, "
+                      "purple, pink, #RRGGBB, or off (like the crossbow's bolts)");
+REXCVAR_DEFINE_BOOL(pd_xbow_bolt_blink, true, "PerfectDark",
+                    "The Detonator Crossbow's bolts blink (true) or keep their colour steady (false)");
+REXCVAR_DEFINE_STRING(pd_xbow_explosion, "medium", "PerfectDark",
+                      "The Detonator Crossbow's bolt explosions: small (the Phoenix's), medium (a "
+                      "SuperDragon grenade's), large (a rocket's), or an explosion type 1-25");
+
+// Each frame (game thread): which explosion this PC's Detonator bolts use. The
+// host sends its own whenever it starts hosting or the setting changes; a joined
+// PC asks twice a second for the host's latest (medium until it has one); with
+// no session, its own setting.
+namespace {
+bool xbow_hosting = false;               // the host blob went out for this hosting session
+uint32_t xbow_sent = 0;                  // the explosion type last sent
+int xbow_poll_frames = 0;
+}
+
+void PdXbowNetFrame() {
+  namespace netplay = rex::kernel::xam::netplay;
+  namespace xbow = pd::crossbow;
+  // The Detonator Crossbow's tint (cosmetic: each PC uses its own setting).
+  pd::custom::g_tint[pd::custom::IndexOf(xbow::kWeaponDetonator)] =
+      pd::custom::ParseTint(REXCVAR_GET(pd_xbow_tint));
+  pd::custom::g_tint_strength = uint32_t(std::clamp(REXCVAR_GET(pd_custom_tint_strength), 0, 100)) * 255 / 100;
+  xbow::g_bolt_tint = pd::custom::ParseTint(REXCVAR_GET(pd_xbow_bolt_tint));
+  xbow::g_bolt_blink = REXCVAR_GET(pd_xbow_bolt_blink);
+  const uint32_t own = xbow::ParseExplosion(REXCVAR_GET(pd_xbow_explosion));
+  if (netplay::IsHostingSession()) {
+    if (!xbow_hosting || own != xbow_sent) {
+      const std::vector<uint8_t> blob = xbow::EncodeBlob(own);
+      netplay::SetHostBlob(xbow::kBlobKey, blob.data(), blob.size());
+      REXLOG_INFO("[xbow] hosting: Detonator explosion type {} sent to the joined PCs", own);
+      xbow_hosting = true;
+      xbow_sent = own;
+    }
+    xbow::g_explosion = own;
+    return;
+  }
+  xbow_hosting = false;
+  if (!netplay::IsJoinedSession()) {
+    xbow::g_explosion = own;
+    return;
+  }
+  if (++xbow_poll_frames % 30 != 0) return;
+  netplay::HostBlob blob;
+  uint32_t host = 0;
+  if (!netplay::LatestHostBlob(xbow::kBlobKey, &blob) || !xbow::DecodeBlob(blob.data, &host)) host = xbow::kExplosionMedium;
+  if (host != xbow::g_explosion) {
+    REXLOG_INFO("[xbow] joined: Detonator explosion type {} ({})", host,
+                blob.valid ? "the host's" : "medium, nothing heard from the host yet");
+  }
+  xbow::g_explosion = host;
+}
+
+// A fire path just made a bolt (`obj`, 0 if it could not): it is a Detonator bolt
+// when the Detonator Crossbow fired it (its crossbow check saw that weapon).
+void PdXbowBoltCreated(uint8_t* base, uint32_t obj) {
+  namespace xbow = pd::crossbow;
+  const bool detonator = xbow::g_firing_weapon == xbow::kWeaponDetonator;
+  xbow::g_firing_weapon = 0;
+  if (!obj) return;
+  if (detonator) {
+    xbow::g_detonator_bolts.insert(obj);
+  } else {
+    xbow::g_detonator_bolts.erase(obj);  // a vanilla bolt at an address a Detonator bolt had
+  }
+}
+
+namespace {
+// Marks a bolt for deletion: its timer at 1 (= at rest, so nothing in its branch
+// runs again before the object is freed), then the DELETING flag, as the game's
+// mine branch sets it after an explosion.
+void XbowDeleteBolt(uint8_t* base, uint32_t obj) {
+  namespace xbow = pd::crossbow;
+  base[obj + xbow::kObjTimer240] = 0;
+  base[obj + xbow::kObjTimer240 + 1] = 1;
+  StoreU32(base, obj + xbow::kObjHidden, xbow::LoadU32(base, obj + xbow::kObjHidden) | xbow::kHiddenDeleting);
+}
+
+// Before a bolt stuck in a wall or floor explodes: points its scorch mark the
+// way the surface faces. prop_explode puts the scorch of an object stuck to a
+// surface (a mine) at the object's position plus its up axis (realrot row 1)
+// times the bottom of its model, facing along that up axis. A mine lies flat on
+// the surface, so its up axis is the surface's normal; a bolt keeps the line it
+// flew along, so its up axis runs along the wall and the scorch stood out of it.
+// This casts a ray along the bolt's flight line (realrot row 2, the way its tip
+// points) to find the surface and its normal, then turns the bolt's up axis to
+// that normal and moves the bolt so the scorch lands on the surface. The bolt is
+// deleted right after its explosion, so nothing else sees these changes.
+void XbowAlignScorch(PPCContext& ctx, uint8_t* base, uint32_t prop, uint32_t obj) {
+  namespace xbow = pd::crossbow;
+  if (xbow::LoadU32(base, prop + xbow::kPropParent)) return;  // stuck in a player: no scorch
+  const uint32_t model = xbow::LoadU32(base, obj + xbow::kObjModel);
+  if (!model) return;
+  PPCContext call = ctx;
+  call.r3.u64 = model;
+  sub_82202DA8(call, base);  // the model's bounding-box node
+  if (!call.r3.u32) return;
+  const uint32_t bbox = xbow::LoadU32(base, call.r3.u32 + 4);  // {?, xmin, xmax, ymin, ymax, zmin, zmax}
+  if (!bbox) return;
+  const float ymin = LoadF32(base, bbox + 12);
+  const float zmax = LoadF32(base, bbox + 24);
+
+  float pos[3], forward[3];
+  for (int i = 0; i < 3; ++i) {
+    pos[i] = LoadF32(base, prop + xbow::kPropPos + uint32_t(i) * 4);
+    forward[i] = LoadF32(base, obj + xbow::kObjRealRot + uint32_t(6 + i) * 4);  // row 2, times the scale
+  }
+  // The ray: from 2 bolt lengths behind the bolt's position to 6 lengths ahead.
+  // Points in guest memory, because the game's collision test reads them there:
+  // the stack below the game's own stack pointer is free scratch space.
+  const uint32_t from = ctx.r1.u32 - 0x400;
+  const uint32_t to = from + 16;
+  const uint32_t hit = from + 32;
+  const uint32_t normal = from + 48;
+  for (int i = 0; i < 3; ++i) {
+    StoreF32(base, from + uint32_t(i) * 4, pos[i] - forward[i] * zmax * 2.0f);
+    StoreF32(base, to + uint32_t(i) * 4, pos[i] + forward[i] * zmax * 6.0f);
+  }
+  call = ctx;
+  call.r1.u64 = from - 0x200;  // the game's functions get stack below the scratch points
+  call.r3.u64 = from;
+  call.r4.u64 = prop + xbow::kPropRooms;
+  call.r5.u64 = to;
+  call.r6.u64 = xbow::kCdTypeSurfaces;
+  sub_820E4E88(call, base);  // cd_test_los_oobok_findclosest_autoflags: 0 = it hit something
+  if (call.r3.s32 != 0) {
+    // No surface found. The bolt points into whatever it is stuck in, so the
+    // reverse of its flight line is a fair guess at that surface's normal: exact
+    // for a straight-on shot, tilted for a slanted one, but never standing out
+    // of the wall as the scorch did with the bolt's own up axis.
+    const float length = std::sqrt(forward[0] * forward[0] + forward[1] * forward[1] + forward[2] * forward[2]);
+    if (length < 0.001f) return;
+    for (int i = 0; i < 3; ++i) {
+      const float n = -forward[i] / length;
+      StoreF32(base, obj + xbow::kObjRealRot + uint32_t(3 + i) * 4, n);
+      StoreF32(base, prop + xbow::kPropPos + uint32_t(i) * 4, pos[i] - n * ymin);
+    }
+    return;
+  }
+  call.r3.u64 = hit;
+  call.r4.u64 = 0;
+  call.r5.u64 = 0;
+  sub_820DDDC0(call, base);  // cd_get_obstacle_pos
+  call.r3.u64 = normal;
+  sub_820E7070(call, base);  // cd_get_obstacle_normal
+
+  float n[3], at[3];
+  for (int i = 0; i < 3; ++i) {
+    n[i] = LoadF32(base, normal + uint32_t(i) * 4);
+    at[i] = LoadF32(base, hit + uint32_t(i) * 4);
+  }
+  const float length = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+  if (length < 0.001f) return;
+  float facing = 0.0f;  // the normal must face back towards where the bolt came from
+  for (int i = 0; i < 3; ++i) {
+    n[i] /= length;
+    facing += n[i] * forward[i];
+  }
+  if (facing > 0.0f) {
+    for (float& c : n) c = -c;
+  }
+  // Up axis = the normal; position = the surface point minus normal * ymin, so
+  // prop_explode's "position + up * ymin" is the surface point itself.
+  for (int i = 0; i < 3; ++i) {
+    StoreF32(base, obj + xbow::kObjRealRot + uint32_t(3 + i) * 4, n[i]);
+    StoreF32(base, prop + xbow::kPropPos + uint32_t(i) * 4, at[i] - n[i] * ymin);
+  }
+}
+}  // namespace
+
+// weapon_tick's bolt branch (sub_82214A40 at 0x82215080; r27 = prop, r31 = obj),
+// on every PC for every bolt each tick. When the bolt's owner presses Detonate
+// (their bit in g_PlayersDetonatingMines; every PC sees every player's press):
+//   - on the owner's own PC the bolt explodes exactly as the game's remote-mine
+//     branch explodes a mine (prop_explode, then the object is deleted); the
+//     explosion is sent to the other PCs. If no explosion slot is free it stays
+//     pending and is tried again at the next tick.
+//   - on every other PC this copy of the bolt is just deleted: the explosion
+//     arrives from the owner's PC.
+// True = done: the hook jumps past the rest of the bolt branch.
+bool PdXbowBoltTick(PPCContext& ctx, uint8_t* base, uint32_t prop, uint32_t obj) {
+  namespace xbow = pd::crossbow;
+  if (!xbow::g_detonator_bolts.count(obj)) return false;  // only the Detonator Crossbow's bolts
+
+  const int owner = xbow::OwnerPlayer(base, obj);
+  const bool detonating = (xbow::LoadU32(base, xbow::kDetonatingMines) >> owner) & 1;
+  const auto pending = xbow::g_pending.find(prop);
+  const bool was_pending = pending != xbow::g_pending.end() && pending->second == obj;
+  if (!detonating && !was_pending) return false;
+
+  if (!xbow::IsLocalPlayer(base, owner)) {
+    XbowDeleteBolt(base, obj);
+    xbow::g_detonator_bolts.erase(obj);
+    return true;
+  }
+
+  // A bolt outside every room (it flew out of the level) can never explode: the
+  // game makes no explosion without a room. Test 2.1 found such bolts retried
+  // every frame for minutes; they are removed instead, as is any bolt still
+  // without an explosion slot after 10 seconds.
+  int& tries = xbow::g_pending_tries[prop];
+  if (!was_pending) tries = 0;
+  // (Only a free bolt: one stuck in a player explodes where the player is.)
+  const bool outside = !xbow::LoadU32(base, prop + xbow::kPropParent) && xbow::LoadS16(base, prop + xbow::kPropRooms) < 0;
+  if (outside || ++tries > xbow::kMaxPendingTries) {
+    if (was_pending) xbow::g_pending.erase(pending);
+    xbow::g_pending_tries.erase(prop);
+    XbowDeleteBolt(base, obj);
+    xbow::g_detonator_bolts.erase(obj);
+    return true;
+  }
+
+  if (!was_pending) XbowAlignScorch(ctx, base, prop, obj);
+  PPCContext call = ctx;
+  call.r3.u64 = prop;
+  call.r4.u64 = xbow::g_explosion;  // this PC's, or the host's online (PdXbowNetFrame)
+  sub_82205A18(call, base);  // prop_explode: false if no explosion slot is free
+  if (!call.r3.u32) {
+    xbow::g_pending[prop] = obj;  // try again next tick, as the game does for a mine
+    return false;
+  }
+  if (was_pending) xbow::g_pending.erase(pending);
+  xbow::g_pending_tries.erase(prop);
+  XbowDeleteBolt(base, obj);
+  xbow::g_detonator_bolts.erase(obj);
+  return true;
+}
+
 // Each frame on a joined PC (from PdNoteGameFrame).
 void PdMpMusicFrame(uint8_t* base) {
   namespace netplay = rex::kernel::xam::netplay;
@@ -1285,7 +1545,141 @@ void PdMpMusicFrame(uint8_t* base) {
 // twice or more is a double step: the game jumps ahead on screen, which is what
 // the 4aj clock fault looked like. Every 10 s one line also gives game time
 // against real time (100% = the game runs at its own speed).
+// ---- Custom weapons (pd_custom_weapons.h) ----------------------------------------
+
+// Makes the custom weapons once, the first time the game thread gets here.
+void PdCustomInstall(uint8_t* base) {
+  if (pd::custom::g_installed) return;
+  auto* memory = rex::system::kernel_state()->memory();
+  pd::custom::Install(base, [memory](uint32_t size) { return memory->SystemHeapAlloc(size); });
+}
+
+// ---- Custom weapons: a first-person gun model of our own (stage 4a) -------------------
+// Loads a first-person gun model file (e.g. the remote mine's 0x393, which holds the
+// mine and the detonator) into memory of our own, with the same calls, in the same
+// order, as the game's gun loader (sub_82170488; N64 bgun_tick_gun_load), so a
+// custom weapon's left hand can be drawn with it (pd_custom_weapons.h). Done at each
+// stage start, as the game reloads its own gun models then. Test 4a.2: every step
+// works; the textures do not go into the pool (XBLA keeps them elsewhere).
+namespace {
+constexpr uint32_t kGunModelBlockSize = 0x60000;    // the model, then its textures (a gun gets ~0x25800)
+constexpr uint32_t kGunModelTexPoolSize = 64;       // struct texpool (N64: 4 pointers; room to spare)
+constexpr uint32_t kGunModelLoadType = 0x8262BF84;  // g_LoadType byte; 7 = LOADTYPE_GUN
+constexpr uint32_t kGunModelFileInfo = 0x826302F0;  // g_FileInfo: per file id {u32 loaded size, u32 alloc size}
+constexpr uint32_t kGunModelSegment = 0x05000000;   // a gun file's pointers are offsets from this
+constexpr int32_t kGunModelNumTextures = 5747;      // texture numbers below this are loadable (N64 NUM_TEXTURES)
+struct GunModelMemory {
+  uint32_t block = 0;  // our memory for one model file (allocated once, reused every stage)
+  uint32_t pool = 0;   // its texture pool
+};
+std::map<uint32_t, GunModelMemory> gun_model_memory;  // by file id
+}
+
+// Returns the loaded modeldef, or 0.
+uint32_t PdCustomLoadGunModel(PPCContext& ctx, uint8_t* base, uint32_t id) {
+  auto* memory = rex::system::kernel_state()->memory();
+  GunModelMemory& mem = gun_model_memory[id];
+  if (!mem.block) mem.block = memory->SystemHeapAlloc(kGunModelBlockSize);
+  if (!mem.pool) mem.pool = memory->SystemHeapAlloc(kGunModelTexPoolSize);
+  const uint32_t block = mem.block;
+  const uint32_t pool = mem.pool;
+  if (!block || !pool) {
+    REXLOG_WARN("[custom] no memory for gun model file 0x{:03X}", id);
+    return 0;
+  }
+  const uint32_t ptr = (block + 15) & ~15u;
+  uint32_t remaining = kGunModelBlockSize - (ptr - block);
+  std::memset(base + pool, 0, kGunModelTexPoolSize);
+
+  PPCContext call = ctx;
+  call.r3.u64 = id;
+  sub_821971F0(call, base);  // file_get_inflated_size
+  const uint32_t inflated = call.r3.u32;
+  uint32_t load_size = ((inflated + 63) & ~63u) + 0x8000;
+  if (load_size > remaining) load_size = remaining;
+  base[kGunModelLoadType] = 7;
+  call = ctx;
+  call.r3.u64 = id;
+  call.r4.u64 = 17;  // FILELOADMETHOD_EXTRAMEM, as the gun loader
+  call.r5.u64 = ptr;
+  call.r6.u64 = load_size;
+  sub_82197290(call, base);  // file_load_to_addr
+  const uint32_t modeldef = call.r3.u32;
+  call = ctx;
+  call.r3.u64 = id;
+  sub_82197398(call, base);  // file_get_loaded_size
+  const uint32_t loaded = call.r3.u32;
+  if (!modeldef || !loaded) return 0;
+
+  // As the gun loader: room for textures after the file, then the texture pool.
+  const uint32_t alloc_size = loaded + 0xE00;
+  StoreU32(base, kGunModelFileInfo + id * 8 + 4, alloc_size);
+  const uint32_t end = (ptr + alloc_size + 15) & ~15u;
+  remaining -= end - ptr;
+  call = ctx;
+  call.r3.u64 = pool;
+  call.r4.u64 = end;
+  call.r5.u64 = remaining;
+  sub_8224B5D8(call, base);  // tex_init_pool
+  call = ctx;
+  call.r3.u64 = modeldef;
+  sub_82196928(call, base);  // model_promote_type_to_pointer
+  call = ctx;
+  call.r3.u64 = modeldef;
+  sub_82194F20(call, base);  // an XBLA step of the gun loader (unknown; done as the game does)
+  call = ctx;
+  call.r3.u64 = modeldef;
+  call.r4.u64 = kGunModelSegment;
+  call.r5.u64 = modeldef;
+  sub_82195498(call, base);  // model_promote_offsets_to_pointers
+  call = ctx;
+  sub_82194F10(call, base);  // an XBLA step of the gun loader (unknown)
+  const uint32_t saved_loaded = pd::weapons::LoadU32(base, kGunModelFileInfo + id * 8);
+  const uint32_t saved_alloc = pd::weapons::LoadU32(base, kGunModelFileInfo + id * 8 + 4);
+
+  // The textures (the loader's state 2): tex_load for each config with a real number.
+  const int numtex = int16_t(pd::weapons::LoadU16(base, modeldef + 0x16));
+  const uint32_t texconfigs = pd::weapons::LoadU32(base, modeldef + 0x18);
+  int textures = 0;
+  for (int i = 0; i < numtex && texconfigs; ++i) {
+    const uint32_t config = texconfigs + uint32_t(i) * 12;
+    if (int32_t(pd::weapons::LoadU32(base, config)) >= kGunModelNumTextures) continue;
+    call = ctx;
+    call.r3.u64 = config;
+    call.r4.u64 = pool;
+    call.r5.u64 = 1;
+    sub_8224B5F0(call, base);  // tex_load
+    base[config + 11] = 1;
+    ++textures;
+  }
+  StoreU32(base, kGunModelFileInfo + id * 8, saved_loaded);  // the loader puts the file info back
+  StoreU32(base, kGunModelFileInfo + id * 8 + 4, saved_alloc);
+
+  // The display lists (the loader's state 3), then the model's working data.
+  call = ctx;
+  call.r3.u64 = modeldef;
+  call.r4.u64 = id;
+  call.r5.u64 = kGunModelSegment;
+  call.r6.u64 = modeldef;
+  call.r7.u64 = pool;
+  call.r8.u64 = 0;
+  sub_821967A0(call, base);  // modeldef0f1a7560: links the display lists to the textures
+  StoreU32(base, kGunModelFileInfo + id * 8, saved_loaded);
+  StoreU32(base, kGunModelFileInfo + id * 8 + 4, saved_alloc);
+  call = ctx;
+  call.r3.u64 = modeldef;
+  sub_821957D0(call, base);  // model_allocate_rw_data
+  call = ctx;
+  call.r3.u64 = pool;
+  sub_823544C8(call, base);  // tex_get_pool_left_pos (the loader calls it; the result is not needed)
+  REXLOG_INFO("[custom] gun model file 0x{:03X} loaded ({} bytes, {} textures)", id, loaded, textures);
+  return modeldef;
+}
+// ---- end of the custom weapons' gun model loader ---------------------------------------
+
 void PdNoteGameFrame(uint8_t* base) {
+  PdCustomInstall(base);
+  PdXbowNetFrame();
   PdMpMusicFrame(base);
   PdWeaponsFrame();
   PerfectDarkApp::NoteGameStage(

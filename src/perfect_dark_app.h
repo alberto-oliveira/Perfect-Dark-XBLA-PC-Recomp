@@ -53,6 +53,7 @@
 #include "pd_update.h"         // Check for Updates
 #include "pd_handicap.h"       // pd_handicaps: online handicaps by gamertag
 #include "pd_weapons.h"        // pd_mp_weapons: weapon slots 7-16, shuffled respawns
+#include "pd_custom_weapons.h"  // new weapons under borrowed weapon numbers
 #include "pd_stages.h"         // pd_solo_stages: the solo mission stages as arenas
 #include <rex/input/sdl/sdl_input_driver.h>
 #include <rex/cvar.h>
@@ -5237,6 +5238,27 @@ class PerfectDarkApp : public rex::ReXApp {
   // whole-string entries above get the port's English wording, since what
   // they name changed. The How To Play pages keep their translated text,
   // Xbox LIVE mentions and all - they are long and only quote these names.
+  // The custom weapons' names (pd_custom_weapons.h): each borrows a solo-only
+  // item's text id, which its weapon definition and pickup-message row point at;
+  // the text becomes the custom weapon's name once the game's text is loaded.
+  // Game strings end in a line break, so these do too.
+  static void TickCustomWeaponNames() {
+    static bool done = false;
+    static int frames = 0;
+    if (done || ++frames % 60 != 0) return;
+    PerfectDarkApp* app = current_instance_;
+    if (!app || !app->runtime() || !app->runtime()->memory()) return;
+    auto* mem = app->runtime()->memory();
+    if (!TextTableLoaded(mem)) return;
+    done = true;
+    for (const pd::custom::Weapon& w : pd::custom::kList) {
+      const std::string text = std::string(w.name) + "\n";
+      const bool ok = OverrideText(mem, w.text_id, text.c_str());
+      REXLOG_INFO("[custom] weapon 0x{:02X}: name text 0x{:04X} = \"{}\"{}", w.number, w.text_id, w.name,
+                  ok ? "" : " FAILED (text id not loaded)");
+    }
+  }
+
   static void OverrideLobbyLabels(rex::memory::Memory* mem) {
     static const struct {
       uint32_t tid;
@@ -6614,7 +6636,7 @@ class PerfectDarkApp : public rex::ReXApp {
 
   // Whether weapon table entry `index` is unlocked (mpIsFeatureUnlocked, sub_8219C168).
   static bool WeaponUnlocked(PPCContext& ctx, uint8_t* base, int index) {
-    const uint8_t feature = base[pd::weapons::kWeaponTable + uint32_t(index) * pd::weapons::kWeaponEntrySize + 5] & 0x7F;
+    const uint8_t feature = base[pd::weapons::EntryAddress(uint8_t(index)) + 5] & 0x7F;
     return CallGame(ctx, base, sub_8219C168, feature) != 0;
   }
 
@@ -6642,21 +6664,36 @@ class PerfectDarkApp : public rex::ReXApp {
     uint32_t ret = 0;
     if (mem && data) {
       switch (op) {
+        // The game's options (its unlocked weapons), then the custom weapons
+        // (pd_custom_weapons.h), whose options come after the game's count.
         case 1:  // how many options
-          WriteGuestU32(mem, data, CallGame(ctx, base, sub_821CC250, 0));
+          WriteGuestU32(mem, data, CallGame(ctx, base, sub_821CC250, 0) + uint32_t(pd::custom::kCount));
           break;
-        case 3:  // the name of option *data
-          ret = CallGame(ctx, base, sub_821CC2A0, ReadGuestU32(mem, data));
+        case 3: {  // the name of option *data
+          const uint32_t option = ReadGuestU32(mem, data);
+          const uint32_t game_count = CallGame(ctx, base, sub_821CC250, 0);
+          ret = option >= game_count
+                    ? CallGame(ctx, base, sub_821886E8, pd::custom::kList[option - game_count].text_id)  // text id -> string
+                    : CallGame(ctx, base, sub_821CC2A0, option);
           break;
+        }
         case 6: {  // option *data was picked
+          const uint32_t option = ReadGuestU32(mem, data);
+          const uint32_t game_count = CallGame(ctx, base, sub_821CC250, 0);
           std::vector<uint8_t> slots = MenuExtraSlots();
-          slots[extra] = pd::weapons::IndexFromOption(int(ReadGuestU32(mem, data)), unlocked);
+          slots[extra] = option >= game_count ? pd::custom::TableIndex(int(option - game_count))
+                                              : pd::weapons::IndexFromOption(int(option), unlocked);
           SaveExtraSlots(slots);
           break;
         }
-        case 7:  // the option the row shows
-          WriteGuestU32(mem, data, uint32_t(pd::weapons::OptionFromIndex(MenuExtraSlots()[extra], unlocked)));
+        case 7: {  // the option the row shows
+          const uint8_t index = MenuExtraSlots()[extra];
+          const uint32_t option = index >= pd::weapons::kWeaponTableCount
+                                      ? CallGame(ctx, base, sub_821CC250, 0) + (index - pd::weapons::kWeaponTableCount)
+                                      : uint32_t(pd::weapons::OptionFromIndex(index, unlocked));
+          WriteGuestU32(mem, data, option);
           break;
+        }
         default:
           break;
       }
@@ -6726,7 +6763,13 @@ class PerfectDarkApp : public rex::ReXApp {
         std::mt19937 rng(std::random_device{}());
         std::shuffle(pool.begin(), pool.end(), rng);
         std::vector<uint8_t> picks;
-        for (int i = 0; i < weapons::kMaxSlots; ++i) picks.push_back(pool[size_t(i) % pool.size()]);
+        // Slots 1-6 are the game's and can only hold its own weapons.
+        for (int i = 0; i < weapons::kGameSlotCount; ++i) picks.push_back(pool[size_t(i) % pool.size()]);
+        // Slots 7-16: the weapons not picked yet, the custom ones (pd_custom_weapons.h) too.
+        std::vector<uint8_t> rest(pool.begin() + std::min(pool.size(), size_t(weapons::kGameSlotCount)), pool.end());
+        for (int i = 0; i < pd::custom::kCount; ++i) rest.push_back(pd::custom::TableIndex(i));
+        std::shuffle(rest.begin(), rest.end(), rng);
+        for (int i = 0; i < weapons::kExtraSlotCount; ++i) picks.push_back(rest[size_t(i) % rest.size()]);
         // Slots 1-6 are the game's: written as its slot dropdowns would, and the
         // weapon set becomes Custom, as after choosing a slot by hand.
         for (int i = 0; i < weapons::kGameSlotCount; ++i) base[weapons::kGameSlots + uint32_t(i)] = picks[size_t(i)];
@@ -9585,6 +9628,7 @@ inline void PerfectDarkInputTracker::OnDraw(ImGuiIO& /*io*/) {
   PerfectDarkApp::TickKeyCapture(app_ && app_->HasWindowFocus());
   PerfectDarkApp::TickStarterName();
   PerfectDarkApp::TickLobbyLabels();
+  PerfectDarkApp::TickCustomWeaponNames();
   PerfectDarkApp::TickNameEntry();
   PerfectDarkApp::TickStoryComplete();
   PerfectDarkApp::TickFrameStats();

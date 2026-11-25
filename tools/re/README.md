@@ -25,6 +25,8 @@ python3 -I asm_index.py /mnt/f/Workspace/git/pd/generated/default out/asm.txt
 | `asm_index.py <generated/default> <asm.txt>` | Pulls the original instruction comments out of the generated C++: one `== sub_XXXXXXXX` header per function, then its instructions and `loc_` labels. Hook calls show as `[HOOK]`. |
 | `fnfind.py <asm.txt> [--max N] <regex>...` | Lists functions (and their length in lines) whose instructions match every regex. `--max` skips longer functions. |
 | `img.py` | Imported by your own scripts: `u8/u16/u32/f32(address)`, `find(bytes)` and `cstr(address)` on the image. Set `PD_IMAGE` to `out/image.bin`. |
+| `fnaddr.py <asm.txt> sub_X [sub_Y...] [--grep REGEX] [--ctx N]` | Prints functions with each instruction's guest address (counted from the function start, re-synced at every `loc_` label, so data inside a function cannot shift them). With `--grep`, only the matching lines and N lines around them: the way to find a midasm hook address. |
+| `modeldump.py <file.bin> <base>` | Summarises a dumped model file (an N64 modeldef): texture configs, the node tree, each display list's commands, and which colour tables are used lit or unlit. `<base>` = what its pointers are relative to: `05000000` for an unrelocated gun file, the load address for a relocated model. |
 
 ## Examples
 

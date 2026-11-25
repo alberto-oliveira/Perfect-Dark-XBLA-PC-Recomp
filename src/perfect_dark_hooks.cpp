@@ -8,11 +8,15 @@
 
 #include "generated/default/perfect_dark_init.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 
 #include <rex/system/kernel_state.h>
 #include <rex/system/thread_state.h>
+
+#include "pd_crossbow.h"        // the Detonator Crossbow
+#include "pd_custom_weapons.h"
 
 // main.cpp
 bool PdSkipArcadeLogo();
@@ -51,6 +55,10 @@ uint32_t PdSoloStageSetup(PPCContext& ctx, uint8_t* base, uint32_t loaded);
 uint32_t PdStageNameText(const uint8_t* base, uint32_t offset, uint32_t text);
 uint32_t PdArenaRowLabel(PPCContext& ctx, uint8_t* base);
 bool PdRandomArena(uint32_t* stage);
+
+void PdXbowBoltCreated(uint8_t* base, uint32_t obj);
+bool PdXbowBoltTick(PPCContext& ctx, uint8_t* base, uint32_t prop, uint32_t obj);
+
 namespace {
 // The calling guest thread's full context and guest memory, for a hook that needs
 // more than its registers.
@@ -389,4 +397,290 @@ bool PdHookPoisonTickLocalOnly(PPCRegister& r31) {
     remote = cfg < 8 && int8_t(base[0x82641950 + cfg * 216 + 109]) < 0;
   }
   return remote && PdN64Poison(base);
+}
+
+// ---- Detonator crossbow (pd_crossbow.h) -------------------------------------------
+
+// Right after each fire path's weapon_create_projectile_from_weapon_num call for
+// a crossbow (r3 = the new bolt, 0 if none could be made): the bolt is tagged a
+// Detonator bolt when the Detonator Crossbow fired it.
+void PdHookXbowBoltMadeLocal(PPCRegister& r3) { PdXbowBoltCreated(HookBase(), r3.u32); }
+void PdHookXbowBoltMadeReplay(PPCRegister& r3) { PdXbowBoltCreated(HookBase(), r3.u32); }
+
+// weapon_tick at the bolt branch's `cmplwi cr6,r11,86` (r11 = the weapon number,
+// r27 = the prop, r31 = the object). Every weapon not handled by an earlier branch
+// passes here, so it first checks for a bolt. True = the bolt exploded: the config
+// jumps to the end of the weapon branches (0x82215678), where the mine branch goes
+// after its explosion.
+bool PdHookXbowBoltTick(PPCRegister& r11, PPCRegister& r27, PPCRegister& r31) {
+  if (r11.u32 != 86) return false;
+  return PdXbowBoltTick(HookContext(), HookBase(), r27.u32, r31.u32);
+}
+
+// ---- Custom weapons: the left hand (pd_custom_weapons.h, stage 4a) ------------------
+
+// The weapon switch (sub_8217C4A8) right after it set both hands' weapon to the new
+// one (0x8217C7FC, before inv_calculate_current_index; r26 = the player). For a
+// custom weapon with a left-hand item: dual-wielding on, the left hand in use,
+// holding that item (the remote mine for the Detonator, whose left hand the game
+// then treats as its detonator).
+void PdHookCustomLeftHandEquip(PPCRegister& r26) {
+  namespace custom = pd::custom;
+  uint8_t* base = HookBase();
+  const uint32_t player = r26.u32;
+  const custom::Weapon* w = custom::Find(uint8_t(base[player + custom::kPlayerWeapon]));
+  if (!w || !w->left_weapon) return;
+  base[player + custom::kPlayerDualWield] |= 0x80;
+  base[player + custom::kHandLeft + custom::kHandInUse] = 1;
+  base[player + custom::kHandLeft + custom::kHandWeapon] = w->left_weapon;
+}
+
+// The gun loader (sub_8217B268) right after it made both hands' model instances
+// from the player's gun model (0x8217B6D0; r31 = the player). For a custom weapon
+// with a left-hand model, the left hand's instance and command list are made
+// again from that model (model_init sub_82195A70, bgun_create_model_cmd_list
+// sub_82172D58), the list in memory of our own.
+void PdHookCustomLeftHandModels(PPCRegister& r31) {
+  namespace custom = pd::custom;
+  uint8_t* base = HookBase();
+  const uint32_t player = r31.u32;
+  const int i = custom::IndexOf(custom::LoadU32(base, player + custom::kPlayerGunMemNew));
+  if (i < 0 || !custom::g_left_model[i] || !custom::g_left_cmds[i]) return;
+  const uint32_t hand = player + custom::kHandLeft;
+  const uint32_t model = hand + custom::kHandGunModel;
+  PPCContext call = HookContext();
+  call.r3.u64 = model;
+  call.r4.u64 = custom::g_left_model[i];
+  call.r5.u64 = hand + custom::kHandGunModelSave;
+  call.r6.u64 = 0;
+  sub_82195A70(call, base);  // model_init
+  call = HookContext();
+  call.r3.u64 = model;
+  call.r4.u64 = custom::LoadU32(base, custom::g_left_model[i]);  // the model's root node
+  call.r5.u64 = custom::g_left_cmds[i];
+  sub_82172D58(call, base);  // bgun_create_model_cmd_list, into our kLeftCmdsSize bytes
+  custom::StoreU32(base, hand + custom::kHandGunModelCmds, custom::g_left_cmds[i]);
+}
+
+// bgun_get_weapon_num (sub_821722D0; r3 = the hand number) right after it read the
+// player's weapon (0x821722FC, r11): the game asks it, not the hand's own weapon,
+// for almost everything a hand does (its weapon info and definition, animations,
+// functions, part visibility, the detonator test). For the left hand of a custom
+// weapon with a left-hand item the answer is that item, so the left hand behaves
+// as the remote mine's detonator hand (test 4a.3: without this it played the
+// crossbow's animations on the mine model and fired).
+// The compiler also INLINED this function in about a dozen places (test 4a.3b: the
+// hand tick's copy left the detonator frozen in the middle of the screen); each
+// copy gets the same hook at its `extsb`, passing whatever register still tells
+// the hand: its number (left = 1) or its offset from the player (left = 1956).
+namespace {
+void LeftHandItem(PPCRegister& weapon) {
+  const pd::custom::Weapon* w = pd::custom::Find(uint8_t(weapon.u32));
+  if (w && w->left_weapon) weapon.u64 = w->left_weapon;
+}
+}  // namespace
+void PdHookCustomLeftHandWeapon(PPCRegister& hand, PPCRegister& weapon) {
+  if (hand.u32 == 1 || hand.u32 == pd::custom::kHandSize) LeftHandItem(weapon);
+}
+// The same, where the hand is only known by its address next to the player's.
+void PdHookCustomLeftHandWeaponAddr(PPCRegister& hand_address, PPCRegister& player, PPCRegister& weapon) {
+  if (hand_address.u32 - player.u32 == pd::custom::kHandSize) LeftHandItem(weapon);
+}
+
+// bgun_tick_gameplay (sub_821807A0) where it decides which hands fire: "both hands
+// take turns unless the weapon is the remote mine" (0x82180C68, r10) and "the
+// remote mine fires only the right hand" (0x82180D58, r11), each comparing the
+// player's weapon with 34. A custom weapon with a left-hand item reads as that item.
+void PdHookCustomAsLeftWeapon(PPCRegister& weapon) {
+  const pd::custom::Weapon* w = pd::custom::Find(uint8_t(weapon.u32));
+  if (w && w->left_weapon) weapon.u64 = w->left_weapon;
+}
+
+// The remote mine's detonate shortcut (stage 5): the input function sub_820F2988
+// detonates when Use and Reload are held together (N64 A+B, recomp E+R), only if
+// the current weapon is the remote mine (`cmpwi r10,34` at 0x820F3DE8, r10 = the
+// weapon). If so it cancels the right hand's pending reload and calls the
+// detonator. A custom weapon whose secondary function is the mine's Detonate reads
+// as 34 there, so the Detonator Crossbow detonates with E+R, in either function.
+void PdHookCustomDetonateShortcut(PPCRegister& r10) {
+  const pd::custom::Weapon* w = pd::custom::Find(uint8_t(r10.u32));
+  if (w && w->secondary == pd::custom::kFuncMineDetonate) r10.u64 = 34;
+}
+
+// bgun_tick_hand (sub_82174EC8; r14 = the hand number) right after it read the
+// player's gun model for this hand (`lwz r22,5560(r25)` at 0x821753E4; r25 = the
+// player): the left hand of a custom weapon with a left-hand model uses that
+// model, when its instance is made from it.
+void PdHookCustomLeftHandTick(PPCRegister& r14, PPCRegister& r22, PPCRegister& r25) {
+  namespace custom = pd::custom;
+  uint8_t* base = HookBase();
+  if (r14.u32 != 1) return;  // the left hand
+  const uint32_t player = r25.u32;
+  const int i = custom::IndexOf(uint8_t(base[player + custom::kPlayerWeapon]));
+  if (i < 0 || !custom::g_left_model[i]) return;
+  const uint32_t model = player + custom::kHandLeft + custom::kHandGunModel;
+  if (custom::LoadU32(base, model + custom::kModelDefinition) != custom::g_left_model[i]) return;
+  r22.u64 = custom::g_left_model[i];
+  // While the right hand reloads, the left-hand item is hidden: the crossbow's
+  // reload animation brings in a left arm of its own (test 4a.3e: two left hands).
+  // The hand stays ticked, only not drawn this frame.
+  const uint32_t right = player + custom::kPlayerHands;
+  if (int32_t(custom::LoadU32(base, right + custom::kHandState)) == custom::kHandStateReload) {
+    base[player + custom::kHandLeft + custom::kHandVisible] = 0;
+  }
+}
+
+// bgun_tick_hand (sub_82174EC8) at 0x821759E8, where a gun that is not animating
+// (r30 = N64's a0) has its joints worked out ONCE into a cache, the right hand's
+// matrix block (hands[RIGHT].unk0dd8, flag unk0dd4 at player+3580), which BOTH
+// hands then reuse. Fine when both hands hold the same model; with a left-hand
+// model of our own it mixed the two (test 4a.3h: the idle crossbow drawn with the
+// mine model's joints, its body turned). The left hand of a custom weapon with a
+// left-hand model skips the cache: true jumps to the per-frame path (0x82175AB0).
+bool PdHookCustomLeftHandNoCache(PPCRegister& r14, PPCRegister& r25) {
+  namespace custom = pd::custom;
+  if (r14.u32 != 1) return false;  // the left hand
+  uint8_t* base = HookBase();
+  const int i = custom::IndexOf(uint8_t(base[r25.u32 + custom::kPlayerWeapon]));
+  return i >= 0 && custom::g_left_model[i];
+}
+
+// ---- Custom weapon tints (pd_custom_weapons.h, stage 3) ----------------------------
+
+// The first-person gun renderer (sub_821761F8) at 0x821767D8, where every path has
+// stored the gun's render colour at 148(r1) (the room's light on the gun,
+// gunshadecol at player+5692, blended towards red for a charging Mauler); r29 =
+// the hand (its weapon number in its first byte). For a custom weapon the colour
+// is blended towards its tint, as the Mauler's charge does. r28 keeps the colour
+// from before the Mauler's blend: the game draws the hands (arms) with it, so it
+// is left alone (test 3.2b: tinting it tinted the arms too).
+void PdHookCustomGunColour(PPCRegister& r1, PPCRegister& r29) {
+  uint8_t* base = HookBase();
+  const uint32_t weapon = base[r29.u32];
+  const uint32_t tint = pd::custom::TintOf(weapon);
+  if (tint == pd::custom::kNoTint) return;
+  const uint32_t at = r1.u32 + 148;
+  pd::custom::StoreU32(base, at, pd::custom::TintRgba(pd::custom::LoadU32(base, at), tint));
+}
+
+// A gun in a player's hand is not drawn by obj_render: chr_render_attached_object
+// (sub_8210A070; r31 = the attached prop) draws it with the player's render data
+// (model_render sub_82194778 at 0x8210A0AC; r3 = the render data, whose colour is
+// fogcolour at +0x38). For a custom weapon that colour is tinted just for this
+// model_render call and put back right after it (0x8210A0B0, r30 = the render
+// data), so the player's body keeps its own colour.
+namespace {
+uint32_t held_colour_saved = 0;
+bool held_colour_changed = false;
+
+// The overlay for weapon object `obj` (a pickup, a gun in a hand, or a projectile
+// such as a bolt), shared by the two object hooks below. A custom weapon gets its
+// tint; a Detonator bolt (weapon 86, tagged when fired: pd_crossbow.h) gets the
+// bolt colour, pulsing with the level frame counter. Returns false for anything else.
+bool ObjectOverlay(uint8_t* base, uint32_t obj, uint32_t& tint, uint32_t& strength) {
+  const uint32_t weapon = base[obj + 92];
+  tint = pd::custom::TintOf(weapon);
+  if (tint != pd::custom::kNoTint) {
+    strength = pd::custom::g_tint_strength;
+    return true;
+  }
+  if (weapon == 86 && pd::crossbow::g_bolt_tint != pd::custom::kNoTint &&
+      pd::crossbow::g_detonator_bolts.count(obj)) {
+    tint = pd::crossbow::g_bolt_tint;
+    strength = pd::crossbow::BoltTintStrength(pd::custom::LoadU32(base, pd::crossbow::kLevelFrames));
+    return true;
+  }
+  return false;
+}
+}
+void PdHookCustomHeldGunBefore(PPCRegister& r3, PPCRegister& r31) {
+  uint8_t* base = HookBase();
+  const uint32_t prop = r31.u32;
+  if (!prop || base[prop] != 4) return;  // prop type 4 = a weapon
+  const uint32_t obj = pd::custom::LoadU32(base, prop + 4);
+  if (!obj) return;
+  uint32_t tint, strength;
+  if (!ObjectOverlay(base, obj, tint, strength)) return;
+  const uint32_t at = r3.u32 + 0x38;
+  held_colour_saved = pd::custom::LoadU32(base, at);
+  held_colour_changed = true;
+  pd::custom::StoreU32(base, at, pd::custom::TintRgba(held_colour_saved, tint, strength));
+}
+void PdHookCustomHeldGunAfter(PPCRegister& r30) {
+  if (!held_colour_changed) return;
+  held_colour_changed = false;
+  pd::custom::StoreU32(HookBase(), r30.u32 + 0x38, held_colour_saved);
+}
+
+// scenario_highlight_prop (sub_821E1900; r3 = the prop, r4 = its colour, s32[4] RGBA),
+// which obj_render calls in multiplayer before drawing an object: a weapon object
+// (a pickup, or a gun in a player's hand) of a custom weapon gets its colour
+// blended towards its tint, before the scenario may highlight it. Projectiles are
+// weapon objects too: a Detonator bolt, flying or lodged, gets the bolt colour.
+void PdHookCustomObjectColour(PPCRegister& r3, PPCRegister& r4) {
+  uint8_t* base = HookBase();
+  const uint32_t prop = r3.u32;
+  if (!prop || base[prop] != 4) return;  // prop type 4 = a weapon
+  const uint32_t obj = pd::custom::LoadU32(base, prop + 4);
+  if (!obj) return;
+  uint32_t tint, strength;
+  if (!ObjectOverlay(base, obj, tint, strength)) return;
+  // The colour is four s32 channels, 0-255 each (RGBA): blended as one RGBA word.
+  uint32_t rgba = 0;
+  for (uint32_t i = 0; i < 4; ++i) {
+    const int32_t value = int32_t(pd::custom::LoadU32(base, r4.u32 + i * 4));
+    rgba |= uint32_t(std::clamp(value, 0, 255)) << (24 - i * 8);
+  }
+  rgba = pd::custom::TintRgba(rgba, tint, strength);
+  for (uint32_t i = 0; i < 4; ++i) pd::custom::StoreU32(base, r4.u32 + i * 4, (rgba >> (24 - i * 8)) & 0xFF);
+}
+
+// ---- Custom weapons (pd_custom_weapons.h) ------------------------------------------
+// A few generic hooks, each placed at several addresses (perfect_dark_config.toml,
+// "Custom weapons"). Each passes one register: the weapon number being checked.
+
+// A check that rejects weapon numbers above 0x2C (or 0x41, or 35), where passing
+// means jumping to the code that follows for an accepted weapon: true for a
+// custom weapon (jump_address_on_true = that code). No register is changed.
+bool PdHookCustomPass(PPCRegister& weapon) {
+  return pd::custom::IsCustom(weapon.u32);
+}
+
+// A check that asks "which weapon is this?" (is it a gun, the crossbow...), where
+// the register is not used afterwards for anything else: a custom weapon's number
+// becomes its base weapon's.
+void PdHookCustomAsBase(PPCRegister& weapon) {
+  if (!pd::custom::IsCustom(weapon.u32)) return;
+  weapon.u64 = pd::custom::AsBase(weapon.u32);
+}
+
+// The primary/secondary bit of the current weapon, at `srawi rD,rS,3` where rS =
+// weapon number - 1 (the bit's position in the player config's gunfuncs): a
+// custom weapon gets the position of its spare bit.
+void PdHookCustomFuncBit(PPCRegister& weapon_minus_1) {
+  const int i = pd::custom::IndexOf(weapon_minus_1.u32 + 1);
+  if (i < 0) return;
+  weapon_minus_1.u64 = uint32_t(pd::custom::FuncBitWeapon(i) - 1);
+}
+
+// weapon_get_pickup_text (sub_8220CD78) right after it loads the pickup-name table
+// into r8: the copy with the custom weapons' rows.
+void PdHookCustomPickupNames(PPCRegister& r8) {
+  if (pd::custom::g_pickup_names) r8.u64 = pd::custom::g_pickup_names;
+}
+
+// The remote shot replay's crossbow check (sub_82171430 at 0x821715E0, r11 = the
+// shot's weapon number): remembered for the bolt made next, then as
+// PdHookCustomAsBase.
+void PdHookCustomFireReplay(PPCRegister& r11) {
+  pd::crossbow::g_firing_weapon = r11.u32;  // the bolt made next is this weapon's
+  PdHookCustomAsBase(r11);
+}
+
+// The local fire path's crossbow check (sub_8217F5A0 at 0x8217F9B8, r11 = the
+// firing weapon's number): remembered for the bolt made next, then as
+// PdHookCustomAsBase.
+void PdHookCustomFireLocal(PPCRegister& r11) {
+  pd::crossbow::g_firing_weapon = r11.u32;
+  PdHookCustomAsBase(r11);
 }

@@ -1,0 +1,15 @@
+# Scenario "detonator": the Detonator Crossbow mod. Runs after lobby-host.txt.
+# The host's extra weapon slots 7-16 are all the Detonator Crossbow (index 47,
+# pd_mp_weapons), so the stage has plenty of them to pick up; the match starts and
+# the copies are left in it to play by hand.
+
+cvar pd_mp_weapons 47,47,47,47,47,47,47,47,47,47
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start
+waitmenu none 60
+wait 7000
+log detonator: in the match
+shot detonator-host
+log detonator: done (the copies stay in the match)

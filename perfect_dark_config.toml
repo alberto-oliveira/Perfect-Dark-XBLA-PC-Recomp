@@ -369,3 +369,485 @@ address = 0x821D51A0
 name = "PdHookRandomArena"
 registers = ["r3"]
 return_on_true = true
+
+# ---- Detonator crossbow (src/pd_crossbow.h) -------------------------------------------
+
+# `mr r31,r3` right after the crossbow's weapon_create_projectile_from_weapon_num
+# (sub_8221EC10, weapon number 86 = bolt) in the local fire path (sub_8217F5A0) and in
+# the path that replays a remote player's shot (sub_82171430). r3 = the new bolt,
+# tagged a Detonator bolt when the Detonator Crossbow fired it.
+[[midasm_hook]]
+address = 0x8217F9D4
+name = "PdHookXbowBoltMadeLocal"
+registers = ["r3"]
+
+[[midasm_hook]]
+address = 0x821715F4
+name = "PdHookXbowBoltMadeReplay"
+registers = ["r3"]
+
+# weapon_tick (sub_82214A40) at the bolt branch's `cmplwi cr6,r11,86` (loc_82215080;
+# r11 = weapon number, r27 = prop, r31 = object). A Detonator bolt whose owner
+# pressed Detonate explodes; true jumps to the end of the weapon branches, as
+# the remote-mine branch does after its explosion.
+[[midasm_hook]]
+address = 0x82215080
+name = "PdHookXbowBoltTick"
+registers = ["r11", "r27", "r31"]
+jump_address_on_true = 0x82215678
+
+# ---- Custom weapons (src/pd_custom_weapons.h) ------------------------------------------
+# The game treats weapon numbers above 0x2C as items, not guns. These hooks make it
+# accept a custom weapon (a borrowed number) as a gun. Each passes the register
+# holding the weapon number being checked.
+
+# Checks that skip items, passed by jumping to the "accepted" code (no register
+# changes): inventory cycling (inv_choose_cycle_forward/back_weapon, `cmpwi r3,44;
+# bgt` before the item is chosen), "previous weapon" (sub_8217C4A8: kept only for
+# weapons 1-44), and the weapon wheel (am_assign_weapon_slots sub_82198858: shows
+# weapons below 66 and three items).
+[[midasm_hook]]
+address = 0x82105F14
+name = "PdHookCustomPass"
+registers = ["r3"]
+jump_address_on_true = 0x82105F1C
+
+[[midasm_hook]]
+address = 0x82106130
+name = "PdHookCustomPass"
+registers = ["r3"]
+jump_address_on_true = 0x82106138
+
+[[midasm_hook]]
+address = 0x8217C6E4
+name = "PdHookCustomPass"
+registers = ["r25"]
+jump_address_on_true = 0x8217C6EC
+
+[[midasm_hook]]
+address = 0x821988D0
+name = "PdHookCustomPass"
+registers = ["r11"]
+jump_address_on_true = 0x821988F0
+
+[[midasm_hook]]
+address = 0x82198A18
+name = "PdHookCustomPass"
+registers = ["r8"]
+jump_address_on_true = 0x82198A30
+
+# The primary/secondary choice: kept per weapon only for weapons 1-35 (`cmpwi rX,36;
+# bge`), in the player input tick (sub_820F2988) and two gun functions
+# (sub_8217E4E0, sub_821807A0). Passed by jumping past the bge.
+[[midasm_hook]]
+address = 0x820F2FEC
+name = "PdHookCustomPass"
+registers = ["r10"]
+jump_address_on_true = 0x820F2FF4
+
+[[midasm_hook]]
+address = 0x820F30A4
+name = "PdHookCustomPass"
+registers = ["r4"]
+jump_address_on_true = 0x820F30AC
+
+[[midasm_hook]]
+address = 0x820F39D4
+name = "PdHookCustomPass"
+registers = ["r4"]
+jump_address_on_true = 0x820F39DC
+
+[[midasm_hook]]
+address = 0x820F3AA0
+name = "PdHookCustomPass"
+registers = ["r9"]
+jump_address_on_true = 0x820F3AA8
+
+[[midasm_hook]]
+address = 0x8217E710
+name = "PdHookCustomPass"
+registers = ["r10"]
+jump_address_on_true = 0x8217E718
+
+[[midasm_hook]]
+address = 0x82180A00
+name = "PdHookCustomPass"
+registers = ["r10"]
+jump_address_on_true = 0x82180A08
+
+[[midasm_hook]]
+address = 0x82180ABC
+name = "PdHookCustomPass"
+registers = ["r9"]
+jump_address_on_true = 0x82180AC4
+
+[[midasm_hook]]
+address = 0x82180B78
+name = "PdHookCustomPass"
+registers = ["r10"]
+jump_address_on_true = 0x82180B80
+
+# The same range check in the other functions that read or change the choice
+# (sub_82106FE8, sub_821775F0, sub_8217D148, sub_82197AD8, sub_82197E98; found in
+# test 2.1, when the switch still did nothing).
+[[midasm_hook]]
+address = 0x8210701C
+name = "PdHookCustomPass"
+registers = ["r4"]
+jump_address_on_true = 0x82107024
+
+[[midasm_hook]]
+address = 0x8217760C
+name = "PdHookCustomPass"
+registers = ["r9"]
+jump_address_on_true = 0x82177614
+
+[[midasm_hook]]
+address = 0x8217D264
+name = "PdHookCustomPass"
+registers = ["r4"]
+jump_address_on_true = 0x8217D26C
+
+[[midasm_hook]]
+address = 0x8217D36C
+name = "PdHookCustomPass"
+registers = ["r10"]
+jump_address_on_true = 0x8217D374
+
+[[midasm_hook]]
+address = 0x8217D3F0
+name = "PdHookCustomPass"
+registers = ["r4"]
+jump_address_on_true = 0x8217D3F8
+
+[[midasm_hook]]
+address = 0x8217D4C0
+name = "PdHookCustomPass"
+registers = ["r10"]
+jump_address_on_true = 0x8217D4C8
+
+[[midasm_hook]]
+address = 0x82197CE4
+name = "PdHookCustomPass"
+registers = ["r9"]
+jump_address_on_true = 0x82197CEC
+
+[[midasm_hook]]
+address = 0x821980AC
+name = "PdHookCustomPass"
+registers = ["r10"]
+jump_address_on_true = 0x821980B4
+
+[[midasm_hook]]
+address = 0x82198154
+name = "PdHookCustomPass"
+registers = ["r10"]
+jump_address_on_true = 0x8219815C
+
+# ... and the bit itself: at each `srawi rD,rS,3` with rS = weapon number - 1, a
+# custom weapon's own spare bit (weapons 36-48 have unused bits).
+[[midasm_hook]]
+address = 0x820F300C
+name = "PdHookCustomFuncBit"
+registers = ["r11"]
+
+[[midasm_hook]]
+address = 0x820F30C4
+name = "PdHookCustomFuncBit"
+registers = ["r9"]
+
+[[midasm_hook]]
+address = 0x820F3108
+name = "PdHookCustomFuncBit"
+registers = ["r11"]
+
+[[midasm_hook]]
+address = 0x820F39FC
+name = "PdHookCustomFuncBit"
+registers = ["r9"]
+
+[[midasm_hook]]
+address = 0x820F3A40
+name = "PdHookCustomFuncBit"
+registers = ["r9"]
+
+[[midasm_hook]]
+address = 0x820F3AC0
+name = "PdHookCustomFuncBit"
+registers = ["r10"]
+
+[[midasm_hook]]
+address = 0x8217E73C
+name = "PdHookCustomFuncBit"
+registers = ["r11"]
+
+[[midasm_hook]]
+address = 0x82180A20
+name = "PdHookCustomFuncBit"
+registers = ["r11"]
+
+[[midasm_hook]]
+address = 0x82180ADC
+name = "PdHookCustomFuncBit"
+registers = ["r11"]
+
+[[midasm_hook]]
+address = 0x82180BA4
+name = "PdHookCustomFuncBit"
+registers = ["r11"]
+
+# ... the bits in those functions too.
+[[midasm_hook]]
+address = 0x82107048
+name = "PdHookCustomFuncBit"
+registers = ["r10"]
+
+[[midasm_hook]]
+address = 0x82177638
+name = "PdHookCustomFuncBit"
+registers = ["r11"]
+
+[[midasm_hook]]
+address = 0x8217D290
+name = "PdHookCustomFuncBit"
+registers = ["r8"]
+
+[[midasm_hook]]
+address = 0x8217D2D8
+name = "PdHookCustomFuncBit"
+registers = ["r11"]
+
+[[midasm_hook]]
+address = 0x8217D38C
+name = "PdHookCustomFuncBit"
+registers = ["r11"]
+
+[[midasm_hook]]
+address = 0x8217D410
+name = "PdHookCustomFuncBit"
+registers = ["r9"]
+
+[[midasm_hook]]
+address = 0x8217D448
+name = "PdHookCustomFuncBit"
+registers = ["r10"]
+
+[[midasm_hook]]
+address = 0x8217D4A0
+name = "PdHookCustomFuncBit"
+registers = ["r11"]
+
+[[midasm_hook]]
+address = 0x8217D4E0
+name = "PdHookCustomFuncBit"
+registers = ["r11"]
+
+[[midasm_hook]]
+address = 0x82197D0C
+name = "PdHookCustomFuncBit"
+registers = ["r11"]
+
+[[midasm_hook]]
+address = 0x821980D8
+name = "PdHookCustomFuncBit"
+registers = ["r11"]
+
+[[midasm_hook]]
+address = 0x82198180
+name = "PdHookCustomFuncBit"
+registers = ["r11"]
+
+# Checks that see the base weapon's number instead (the register is not used
+# for anything else afterwards): weapon switching (sub_82172308/sub_82172408: a
+# weapon above 0x2C sends you back to the previous one), the third-person model
+# (sub_821F4C68 entry, r3), the pickup sound (sub_8220C698 entry, r3), and the
+# fire paths' crossbow checks (`cmplwi r11,27`: local sub_8217F5A0; remote replay
+# sub_82171430, which also logs the shot's weapon number).
+[[midasm_hook]]
+address = 0x82172368
+name = "PdHookCustomAsBase"
+registers = ["r10"]
+
+[[midasm_hook]]
+address = 0x82172384
+name = "PdHookCustomAsBase"
+registers = ["r11"]
+
+[[midasm_hook]]
+address = 0x82172468
+name = "PdHookCustomAsBase"
+registers = ["r10"]
+
+[[midasm_hook]]
+address = 0x82172498
+name = "PdHookCustomAsBase"
+registers = ["r11"]
+
+[[midasm_hook]]
+address = 0x821F4C68
+name = "PdHookCustomAsBase"
+registers = ["r3"]
+
+[[midasm_hook]]
+address = 0x8220C698
+name = "PdHookCustomAsBase"
+registers = ["r3"]
+
+[[midasm_hook]]
+address = 0x8217F9B8
+name = "PdHookCustomFireLocal"
+registers = ["r11"]
+
+[[midasm_hook]]
+address = 0x821715E0
+name = "PdHookCustomFireReplay"
+registers = ["r11"]
+
+# weapon_get_pickup_text (sub_8220CD78, called by the pickup message sub_8220CE58)
+# right after `addi r8,r11,10704` loads the pickup-name table 0x825E29D0: the copy
+# with the custom weapons' rows.
+[[midasm_hook]]
+address = 0x8220CE34
+name = "PdHookCustomPickupNames"
+registers = ["r8"]
+
+# ---- Custom weapon tints (stage 3) ------------------------------------------------------
+# The first-person gun renderer sub_821761F8 at loc_821767D8, after every path stored
+# the gun's render colour at 148(r1) (r29 = the hand; r28, the hands' colour, is left
+# alone), and
+# scenario_highlight_prop sub_821E1900 (r3 = prop, r4 = its s32[4] colour), which
+# obj_render calls in multiplayer. A custom weapon's colour is blended towards its tint.
+[[midasm_hook]]
+address = 0x821767D8
+name = "PdHookCustomGunColour"
+registers = ["r1", "r29"]
+
+[[midasm_hook]]
+address = 0x821E1900
+name = "PdHookCustomObjectColour"
+registers = ["r3", "r4"]
+
+# A gun in a player's hand: chr_render_attached_object sub_8210A070 around its
+# model_render call (`bl 0x82194778` at 0x8210A0AC; r3 = render data, r31 = the
+# attached prop; after it, r30 = render data): the colour (render data +0x38) is
+# tinted for a custom weapon, then put back.
+[[midasm_hook]]
+address = 0x8210A0AC
+name = "PdHookCustomHeldGunBefore"
+registers = ["r3", "r31"]
+
+[[midasm_hook]]
+address = 0x8210A0B0
+name = "PdHookCustomHeldGunAfter"
+registers = ["r30"]
+
+# ---- Custom weapons: the left hand (stage 4a) ---------------------------------------------
+# The weapon switch sub_8217C4A8 after setting both hands' weapon (0x8217C7FC, before
+# `bl inv_calculate_current_index`; r26 = player); the gun loader sub_8217B268 after
+# its per-hand model_init/command-list loop (0x8217B6D0; r31 = player); bgun_tick_hand
+# sub_82174EC8 after `lwz r22,5560(r25)` reads the gun model (0x821753E8; r14 = hand).
+[[midasm_hook]]
+address = 0x8217C7FC
+name = "PdHookCustomLeftHandEquip"
+registers = ["r26"]
+
+[[midasm_hook]]
+address = 0x8217B6D0
+name = "PdHookCustomLeftHandModels"
+registers = ["r31"]
+
+[[midasm_hook]]
+address = 0x821753E8
+name = "PdHookCustomLeftHandTick"
+registers = ["r14", "r22", "r25"]
+
+# bgun_tick_hand sub_82174EC8 at `cmpwi r30,0` (0x821759E8; r30 = "not animating",
+# r14 = hand, r25 = player): the left hand of a custom weapon with a left-hand model
+# skips the shared matrix cache (player+3580/3584) and takes the per-frame path.
+[[midasm_hook]]
+address = 0x821759E8
+name = "PdHookCustomLeftHandNoCache"
+registers = ["r14", "r25"]
+jump_address_on_true = 0x82175AB0
+
+# bgun_get_weapon_num sub_821722D0 at `extsb r3,r11` (0x821722FC; r3 = hand, r11 = the
+# player's weapon): the left hand of a custom weapon with a left-hand item gets it.
+[[midasm_hook]]
+address = 0x821722FC
+name = "PdHookCustomLeftHandWeapon"
+registers = ["r3", "r11"]
+
+# The inlined copies of bgun_get_weapon_num, each at its `extsb` after
+# `lbz rW,5544(player)`, with the register that still tells the hand (its number
+# or player offset, or its address with the player's): bgun_tick_hand, the gun
+# renderer, and the per-hand helpers (sub_82178AD0, sub_82178C38, sub_82178CE8,
+# sub_8217AC28, sub_8217BF88, sub_8217C1E0, sub_8217CCA8, sub_821806E0).
+[[midasm_hook]]
+address = 0x82174F50
+name = "PdHookCustomLeftHandWeapon"
+registers = ["r14", "r11"]
+
+[[midasm_hook]]
+address = 0x82178AFC
+name = "PdHookCustomLeftHandWeapon"
+registers = ["r4", "r11"]
+
+[[midasm_hook]]
+address = 0x82178C70
+name = "PdHookCustomLeftHandWeapon"
+registers = ["r31", "r9"]
+
+[[midasm_hook]]
+address = 0x82178D24
+name = "PdHookCustomLeftHandWeapon"
+registers = ["r3", "r10"]
+
+[[midasm_hook]]
+address = 0x8217AC6C
+name = "PdHookCustomLeftHandWeapon"
+registers = ["r29", "r11"]
+
+[[midasm_hook]]
+address = 0x8217C2FC
+name = "PdHookCustomLeftHandWeapon"
+registers = ["r27", "r11"]
+
+[[midasm_hook]]
+address = 0x8217CCF4
+name = "PdHookCustomLeftHandWeapon"
+registers = ["r31", "r11"]
+
+[[midasm_hook]]
+address = 0x8218071C
+name = "PdHookCustomLeftHandWeapon"
+registers = ["r28", "r11"]
+
+[[midasm_hook]]
+address = 0x82176490
+name = "PdHookCustomLeftHandWeaponAddr"
+registers = ["r10", "r8", "r11"]
+
+[[midasm_hook]]
+address = 0x8217C008
+name = "PdHookCustomLeftHandWeaponAddr"
+registers = ["r31", "r30", "r11"]
+
+# bgun_tick_gameplay sub_821807A0's "is it the remote mine" firing checks.
+[[midasm_hook]]
+address = 0x82180C68
+name = "PdHookCustomAsLeftWeapon"
+registers = ["r10"]
+
+[[midasm_hook]]
+address = 0x82180D58
+name = "PdHookCustomAsLeftWeapon"
+registers = ["r11"]
+
+# The remote mine's E+R detonate shortcut in sub_820F2988 (`cmpwi r10,34` at
+# 0x820F3DE8, r10 = the current weapon): a custom weapon with the mine's Detonate
+# as its secondary reads as the mine there.
+[[midasm_hook]]
+address = 0x820F3DE8
+name = "PdHookCustomDetonateShortcut"
+registers = ["r10"]
+

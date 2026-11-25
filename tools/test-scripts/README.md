@@ -92,3 +92,5 @@ current menu, and the selected option of an open dropdown.
 - `host-settings`: as `basic`, then log every copy's handicap bytes (with the
   `[handicap]` and `[weapons]` lines, they show the host's settings reached
   everyone), and the host walks forward for 2 seconds.
+- `detonator`: as `basic`, with the host's weapon slots 7-16 all Detonator
+  Crossbows (`pd_mp_weapons`), for playing the Detonator Crossbow by hand.
