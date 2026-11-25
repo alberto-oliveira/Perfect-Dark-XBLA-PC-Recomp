@@ -87,12 +87,14 @@ inline Vec Reflect(Vec d, Vec n) { return d - n * (2.0f * Dot(d, n)); }
 constexpr int kMaxBounces = 10;
 
 // One straight part of a shot's path: bounce `bounce` (0 = the shot itself).
-// `victim` = the player (this PC's numbering) it ends on, or -1 (it ends on a
-// wall, or nowhere).
+// `victim` = the player (this PC's numbering) it ends on, or -1; `wall_end` =
+// it ends on a wall whose normal is `normal` (else in the air or on a player).
 struct Segment {
   Vec from, to;
-  int bounce;
+  int bounce = 0;
   int victim = -1;
+  bool wall_end = false;
+  Vec normal{};
 };
 
 // ---- Hitting players ------------------------------------------------------------------
@@ -218,6 +220,43 @@ constexpr uint32_t kBeamDist = 40;     // f32: how far its head has gone
 constexpr int kPoolBeams = 64;
 constexpr int8_t kBeamStream = -2;
 
+// What each pool beam is (kept on our side, by pool index). A pulse's bounce hits
+// a player when its STREAK reaches the player, not when it is fired (the user's
+// test: a third bounce arrives ~0.25 s after the shot, so a player walking into
+// it was visibly hit but had not been there at the shot). Each frame the part of
+// the bounce the streak newly covered is tested against the players where they
+// are then; a hit ends the streak there and drops the shot's later bounces.
+// The streak reaching a wall makes sparks there, as the shot's own hit does.
+struct BeamInfo {
+  bool active = false;
+  uint32_t shot = 0;        // which shot it belongs to (its later bounces share it)
+  uint32_t shooter = 0;     // the shooter's player struct
+  int bounce = 0;
+  bool stream = false;
+  uint8_t function = 0;
+  Vec from{}, dir{};        // the bounce: from, unit direction, length
+  float length = 0.0f;
+  float tested = 0.0f;      // how far along it players have been tested
+  bool wall_end = false;    // it ends on a wall (normal), not in the air
+  Vec normal{};
+  bool sparked = false;
+};
+inline BeamInfo g_info[kPoolBeams];
+inline uint32_t g_next_shot = 1;
+
+// Hand fields: hands[2] at player+1632, 1956 bytes each; +1372 = where the hand's
+// last shot hit (bgun_set_hit_pos sub_821776F0: player+3004 right, +4960 left;
+// the hand's beam ends there, and the game's sparks are made there).
+constexpr uint32_t kHandHitPos = 1372;
+
+// sparks_create (sub_8215CD58: room, prop, position, direction, normal, type) with
+// the game's default type, as shot_calculate_hits calls it for a wall hit.
+constexpr uint32_t kSparkTypeDefault = 0;
+
+// Where a shot's first bounce starts is probed this far either side of the
+// game's hit point along the shot.
+constexpr float kProbe = 30.0f;
+
 inline uint32_t g_pool = 0;  // guest address of the pool (kPoolBeams beams, then a scratch beam)
 inline uint32_t PoolBeam(int i) { return g_pool + uint32_t(i) * kBeamSize; }
 inline uint32_t ScratchBeam() { return PoolBeam(kPoolBeams); }
@@ -236,5 +275,11 @@ inline int g_debug_filled_player = -1;
 inline int g_debug_bounces = 0;  // bounce segments made
 inline int g_debug_pool_full = 0;  // bounce beams not drawn: no free beam in the pool
 inline double g_debug_shot_us = 0;  // time spent in the shot hook (microseconds)
+inline int g_debug_probe_hits = 0;   // first bounces found at the game's hit point
+inline int g_debug_eye_hits = 0;     // ... found only by the line from the eye
+inline int g_debug_no_wall = 0;      // shots that ended on no wall (no bounce)
+
+// The beams' width in percent of the Laser's (pd_rico_beam_width, default 200).
+inline int g_beam_width = 200;
 
 }  // namespace pd::ricochet

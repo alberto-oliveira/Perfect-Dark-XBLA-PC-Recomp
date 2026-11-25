@@ -1,0 +1,235 @@
+# Scenario "ricochet-tex" (Ricochet Laser, round 2): 2 copies. Runs after
+# lobby-host.txt. (1) Screenshots of the vanilla Laser's Stream and of the
+# Ricochet Laser's (red, pd_rico_beam_width wide) fired at the floor, whose
+# bounce rises with sparks at the bounce point. (2) A sweep of pulses at many
+# angles; the [rico] last-second lines count the first walls found at the
+# game's hit point, from the eye, or none (the user's check: some walls and
+# ceilings gave no bounce).
+
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start
+waitmenu none 60
+wait 5000
+give 29
+give 0x52
+equip 29
+wait 2500
+btn rb
+wait 800
+signal host-armed
+waitsignal placed 1 60
+face Zqclient -50
+wait 300
+trig 0 255 900
+wait 600
+shot tex-vanilla
+wait 800
+equip 0x52
+wait 2500
+btn rb
+wait 800
+face Zqclient -50
+wait 300
+trig 0 255 900
+wait 600
+shot tex-stream
+wait 800
+btn rb
+wait 800
+log ricochet-tex: sweepface Zqclient -60 0
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient -60 45
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient -60 90
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient -60 135
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient -60 180
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient -60 225
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient -60 270
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient -60 315
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient -30 0
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient -30 45
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient -30 90
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient -30 135
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient -30 180
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient -30 225
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient -30 270
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient -30 315
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient -10 0
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient -10 45
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient -10 90
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient -10 135
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient -10 180
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient -10 225
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient -10 270
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient -10 315
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient 10 0
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient 10 45
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient 10 90
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient 10 135
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient 10 180
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient 10 225
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient 10 270
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient 10 315
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient 30 0
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient 30 45
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient 30 90
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient 30 135
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient 30 180
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient 30 225
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient 30 270
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient 30 315
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient 60 0
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient 60 45
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient 60 90
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient 60 135
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient 60 180
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient 60 225
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient 60 270
+wait 200
+trig 0 255 150
+wait 500
+face Zqclient 60 315
+wait 200
+trig 0 255 150
+wait 500
+wait 1500
+signal host-done
+log ricochet-tex: host done

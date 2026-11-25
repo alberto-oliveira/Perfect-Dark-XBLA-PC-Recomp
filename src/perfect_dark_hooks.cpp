@@ -674,12 +674,17 @@ void PdHookRicoBeamCreate(PPCRegister& r3) {
 // r25 = the address of the beam's colour (RGBA) in the display list, r29 = the
 // beam. A Ricochet Laser beam gets its own colour; its alpha is kept (the Stream
 // flickers through it).
-void PdHookRicoBeamColour(PPCRegister& r25, PPCRegister& r29) {
+// f29 = the beam's width (50 for a pulse, 10 for the Stream): widened by
+// pd_rico_beam_width percent, since a red beam keeps only the Laser texture's
+// bright core (its glow is blue, which the red takes out) and looks thin (the
+// user's check; the game's other beam textures were thinner still).
+void PdHookRicoBeamColour(PPCRegister& r25, PPCRegister& r29, PPCRegister& f29) {
   namespace rico = pd::ricochet;
   if (!rico::IsRicochetBeam(r29.u32)) return;
   ++rico::g_debug_drawn;  // TEMP_RICO
-  if (rico::g_beam_tint == pd::custom::kNoTint) return;
   uint8_t* base = HookBase();
+  f29.f64 = f29.f64 * double(rico::g_beam_width) / 100.0;
+  if (rico::g_beam_tint == pd::custom::kNoTint) return;
   base[r25.u32] = uint8_t(rico::g_beam_tint >> 16);
   base[r25.u32 + 1] = uint8_t(rico::g_beam_tint >> 8);
   base[r25.u32 + 2] = uint8_t(rico::g_beam_tint);

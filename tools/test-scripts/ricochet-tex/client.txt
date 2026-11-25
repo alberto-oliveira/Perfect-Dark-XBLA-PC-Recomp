@@ -1,0 +1,12 @@
+# Scenario "ricochet-tex", client: stands 400 units in front of the host. Runs after lobby-client.txt.
+
+pick 825FA2F8                # Ready
+signal ready-{copy}
+waitmenu none 120
+wait 3000
+waitsignal host-armed 1 60
+tp near Zqhost 400
+face Zqhost
+signal placed
+waitsignal host-done 1 300
+log ricochet-tex: client done

@@ -1354,6 +1354,8 @@ REXCVAR_DEFINE_INT32(pd_rico_damage_growth, 50, "PerfectDark",
 REXCVAR_DEFINE_INT32(pd_rico_kill_bounce, 3, "PerfectDark",
                      "Ricochet Laser: a pulse that hits a player after this many bounces kills (0 = never; "
                      "not the Stream). Online, the host's counts");
+REXCVAR_DEFINE_INT32(pd_rico_beam_width, 200, "PerfectDark",
+                     "The Ricochet Laser's beam width, in percent of the Laser's (a red beam looks thinner)");
 REXCVAR_DEFINE_INT32(pd_rico_beam_speed, 100, "PerfectDark",
                      "TEMP_RICO: how fast the Ricochet Laser's bounce beams move, in percent (to see them in "
                      "screenshots)");
@@ -1370,11 +1372,14 @@ void PdRicoDebugFrame() {
   rico_debug_frames = 0;
   if (REXCVAR_GET(pd_rico_debug) && (rico::g_debug_filled || rico::g_debug_drawn || rico::g_debug_bounces)) {
     REXLOG_INFO("[rico] last second: {} beams filled (last by player {}), {} drawn; {} beams noted; {} bounce "
-                "beams made, {} not (pool full); shot hook {:.0f} us",
+                "beams made, {} not (pool full); shot hook {:.0f} us; first walls: {} at the game's hit, {} from "
+                "the eye, {} none",
                 rico::g_debug_filled, rico::g_debug_filled_player, rico::g_debug_drawn, rico::g_beams.size(),
-                rico::g_debug_bounces, rico::g_debug_pool_full, rico::g_debug_shot_us);
+                rico::g_debug_bounces, rico::g_debug_pool_full, rico::g_debug_shot_us, rico::g_debug_probe_hits,
+                rico::g_debug_eye_hits, rico::g_debug_no_wall);
   }
   rico::g_debug_shot_us = 0;
+  rico::g_debug_probe_hits = rico::g_debug_eye_hits = rico::g_debug_no_wall = 0;
   rico::g_debug_filled = 0;
   rico::g_debug_drawn = 0;
   rico::g_debug_bounces = 0;
@@ -1464,6 +1469,7 @@ void PdRicoFrame(uint8_t* base) {
   rico::g_beam_tint = pd::custom::ParseTint(REXCVAR_GET(pd_rico_beam_tint));
   PdRicoRulesFrame();
   rico::g_debug_beam_speed = std::clamp(REXCVAR_GET(pd_rico_beam_speed), 1, 1000);  // TEMP_RICO
+  rico::g_beam_width = std::clamp(REXCVAR_GET(pd_rico_beam_width), 10, 1000);
   PdRicoDebugFrame();  // TEMP_RICO
 }
 
@@ -1573,18 +1579,40 @@ int RicoFirstPlayer(const uint8_t* base, rico::Vec from, rico::Vec to, float* al
   return best;
 }
 
-// The path of a shot fired from `pos` along `dir` (unit): the bounce segments
-// after the shot's own one (which ends on the first wall), at most `bounces`.
-// The Stream's whole path is kStreamRange long; a pulse's each segment kPulseRange.
+// The wall a shot fired from `pos` along `dir` (unit) ended on: its point and
+// normal. First probed around the game's own hit point `hitpos` (where the
+// shot's beam ends and the game made its sparks: the user's test showed the
+// line from the eye missed ~35% of the walls the game hit); else along the line
+// from the eye, from the shooter's rooms. False if neither finds a wall.
+bool RicoFirstWall(PPCContext& ctx, uint8_t* base, const RicoScratch& s, uint32_t shooter_prop, rico::Vec pos,
+                   rico::Vec dir, rico::Vec hitpos, float range, rico::Vec* at, rico::Vec* n) {
+  const rico::Vec a = hitpos - dir * rico::kProbe, b = hitpos + dir * rico::kProbe;
+  if (RicoFindWall(ctx, base, s, a, b, RicoRoomsAt(ctx, base, s, a), at, n)) {
+    ++rico::g_debug_probe_hits;
+    return true;
+  }
+  if (RicoFindWall(ctx, base, s, pos, pos + dir * range, shooter_prop + pd::player::kPropRooms, at, n)) {
+    ++rico::g_debug_eye_hits;
+    return true;
+  }
+  ++rico::g_debug_no_wall;
+  return false;
+}
+
+// The path of a shot fired from `pos` along `dir` (unit) whose own segment ended
+// at the game's hit point `hitpos`: the bounce segments after it, at most
+// `bounces`. The Stream's whole path is kStreamRange long; each segment of a
+// pulse kPulseRange. With `test_players` (the Stream) a player before the wall
+// ends the shot there at once; a pulse's players are tested as its streak
+// travels (PdRicoTick).
 std::vector<rico::Segment> RicoBounces(PPCContext& ctx, uint8_t* base, uint32_t shooter_prop, rico::Vec pos,
-                                       rico::Vec dir, bool stream, int bounces) {
+                                       rico::Vec dir, rico::Vec hitpos, bool stream, int bounces,
+                                       bool test_players) {
   std::vector<rico::Segment> path;
   const RicoScratch s(ctx);
   float left = stream ? rico::kStreamRange : rico::kPulseRange;
   rico::Vec at, n;
-  // The shot's own segment, from the shooter's rooms.
-  const float first = stream ? left : rico::kPulseRange;
-  if (!RicoFindWall(ctx, base, s, pos, pos + dir * first, shooter_prop + pd::player::kPropRooms, &at, &n)) return path;
+  if (!RicoFirstWall(ctx, base, s, shooter_prop, pos, dir, hitpos, left, &at, &n)) return path;
   if (stream) left -= rico::Length(at - pos);
   for (int k = 1; k <= bounces && left > 1.0f; ++k) {
     dir = rico::Reflect(dir, n);
@@ -1593,17 +1621,26 @@ std::vector<rico::Segment> RicoBounces(PPCContext& ctx, uint8_t* base, uint32_t 
     const rico::Vec reach_end = start + dir * reach;
     const uint32_t rooms = RicoRoomsAt(ctx, base, s, start);
     const bool wall = RicoFindWall(ctx, base, s, start, reach_end, rooms, &at, &n);
-    const rico::Vec end = wall ? at : reach_end;
-    // A player before the wall ends the shot there.
-    float along = 0.0f;
-    const int victim = RicoFirstPlayer(base, start, end, &along);
-    if (victim >= 0) {
-      path.push_back({start, start + (end - start) * along, k, victim});
-      break;
+    rico::Segment seg;
+    seg.from = start;
+    seg.to = wall ? at : reach_end;
+    seg.bounce = k;
+    seg.wall_end = wall;
+    seg.normal = n;
+    if (test_players) {  // a player before the wall ends the shot there
+      float along = 0.0f;
+      const int victim = RicoFirstPlayer(base, seg.from, seg.to, &along);
+      if (victim >= 0) {
+        seg.to = seg.from + (seg.to - seg.from) * along;
+        seg.victim = victim;
+        seg.wall_end = false;
+        path.push_back(seg);
+        break;
+      }
     }
-    path.push_back({start, end, k});
+    path.push_back(seg);
     if (!wall) break;
-    if (stream) left -= rico::Length(end - start);
+    if (stream) left -= rico::Length(seg.to - seg.from);
   }
   return path;
 }
@@ -1629,50 +1666,39 @@ float RicoCrossFrames(const uint8_t* base, uint32_t beam) {
   return speed > 0.001f ? pl::LoadF32(base, beam + rico::kBeamMaxDist) / speed : 0.0f;
 }
 
-// Draws the bounce segments of a shot fired from `pos` as beams from the pool.
-void RicoDrawBounces(PPCContext& ctx, uint8_t* base, rico::Vec pos, const std::vector<rico::Segment>& path,
-                     bool stream) {
+// Sparks where a bounce meets a wall, as the game makes them where a shot hits
+// one: sparks_create(room, no prop, position, the shot's direction, the wall's
+// normal, the default type).
+void RicoSparks(PPCContext& ctx, uint8_t* base, rico::Vec at, rico::Vec dir, rico::Vec normal) {
   namespace pl = pd::player;
-  if (!rico::g_pool || path.empty()) return;
-  const int8_t weapon = stream ? rico::kBeamStream : int8_t(rico::kWeaponLaser);
-  // A pulse: the frames until each streak starts (the shot's own one crosses first).
-  float delay = 0.0f;
-  if (!stream) {
-    RicoBeamCreate(ctx, base, rico::ScratchBeam(), weapon, pos, path[0].from);
-    delay = RicoCrossFrames(base, rico::ScratchBeam());
-  }
-  const float speed_scale = float(rico::g_debug_beam_speed) / 100.0f;  // TEMP_RICO
-  int next = 0;
-  for (const rico::Segment& seg : path) {
-    while (next < rico::kPoolBeams && int8_t(base[rico::PoolBeam(next) + rico::kBeamAge]) >= 0) ++next;
-    if (next >= rico::kPoolBeams) {
-      ++rico::g_debug_pool_full;
-      return;
-    }
-    const uint32_t beam = rico::PoolBeam(next);
-    RicoBeamCreate(ctx, base, beam, weapon, seg.from, seg.to);
-    if (!stream) {
-      pl::StoreF32(base, beam + rico::kBeamSpeed, pl::LoadF32(base, beam + rico::kBeamSpeed) * speed_scale);
-      const float cross = RicoCrossFrames(base, beam);
-      const float speed = pl::LoadF32(base, beam + rico::kBeamSpeed);
-      // Start below 0 by the frames the streaks before it take to cross theirs
-      // (the shot's own at the game's speed, the bounces at ours).
-      pl::StoreF32(base, beam + rico::kBeamDist, pl::LoadF32(base, beam + rico::kBeamDist) - delay * speed);
-      delay += cross;
-    }
-    ++rico::g_debug_bounces;
-  }
+  const RicoScratch s(ctx);
+  const uint32_t rooms = RicoRoomsAt(ctx, base, s, at + normal * rico::kOffWall);
+  const int16_t room = pl::LoadS16(base, rooms);
+  if (room < 0) return;
+  const uint32_t pos = s.from + 192, d = pos + 16, nrm = pos + 32;  // past what RicoRoomsAt uses
+  RicoStoreVec(base, pos, at);
+  RicoStoreVec(base, d, dir);
+  RicoStoreVec(base, nrm, normal);
+  PPCContext call = ctx;
+  call.r1.u64 = s.Stack();
+  call.r3.u64 = uint32_t(int32_t(room));
+  call.r4.u64 = 0;
+  call.r5.u64 = pos;
+  call.r6.u64 = d;
+  call.r7.u64 = nrm;
+  call.r8.u64 = rico::kSparkTypeDefault;
+  sub_8215CD58(call, base);  // sparks_create
 }
 
-// A bounce `seg` of `shooter`'s shot hit player seg.victim: its damage through
+// A bounce hit player `victim` (this PC's numbering): its damage through
 // chr_damage_by_laser (sub_8212DDE0: r3 chr, f1 damage, r5 direction, r6 gset,
 // r7 the attacker's prop; the shield takes hits as the Laser's), which gives the
 // shooter the frag and reaches the victim's PC (research T3). A kill is two hits:
 // the first takes a shield, the second kills (pd_ricochet.h, Damage).
-void RicoDamage(PPCContext& ctx, uint8_t* base, uint32_t shooter, const rico::Segment& seg, bool stream,
-                uint8_t function) {
+void RicoDamage(PPCContext& ctx, uint8_t* base, uint32_t shooter, int victim, int bounce, rico::Vec dir,
+                bool stream, uint8_t function) {
   namespace pl = pd::player;
-  const uint32_t victim_prop = pl::PropOf(base, pl::Player(base, seg.victim));
+  const uint32_t victim_prop = pl::PropOf(base, pl::Player(base, victim));
   const uint32_t chr = victim_prop ? pl::LoadU32(base, victim_prop + 4) : 0;
   if (!chr) return;
   // The function's own damage: its definition's +0x1C (N64 funcdef_shoot.damage).
@@ -1680,11 +1706,8 @@ void RicoDamage(PPCContext& ctx, uint8_t* base, uint32_t shooter, const rico::Se
   const uint32_t def = pl::LoadU32(base, pd::custom::kWeapons + uint32_t(rico::kWeaponRicochet) * 4);
   const uint32_t func = def ? pl::LoadU32(base, def + 0x14 + uint32_t(function & 1) * 4) : 0;
   if (func) base_damage = pl::LoadF32(base, func + 0x1C);
-  const bool kill = rico::BounceKills(seg.bounce, stream);
-  const float damage = kill ? rico::kKillDamage : rico::BounceDamage(base_damage, seg.bounce);
-  rico::Vec dir = seg.to - seg.from;
-  const float len = rico::Length(dir);
-  dir = len > 0.001f ? dir * (1.0f / len) : rico::Vec{0, 0, 1};
+  const bool kill = rico::BounceKills(bounce, stream);
+  const float damage = kill ? rico::kKillDamage : rico::BounceDamage(base_damage, bounce);
   // TEMP_RICO: the victim's shield before the hit (N64 chrdata +0x180 cshield).
   const float before_shield = pl::LoadF32(base, chr + 0x180);
   const RicoScratch s(ctx);
@@ -1704,9 +1727,62 @@ void RicoDamage(PPCContext& ctx, uint8_t* base, uint32_t shooter, const rico::Se
     // (A player's health is kept in its player struct and applied on its own PC,
     // so only the shield is logged.)
     REXLOG_INFO("[rico] hit: player {} ({}) after {} bounce(s), {} damage {:.2f}{}; shield here {:.2f} -> {:.2f}",
-                seg.victim, seg.victim == 0 ? "the shooter" : pd::crossbow::PlayerName(base, seg.victim), seg.bounce,
+                victim, victim == 0 ? "the shooter" : pd::crossbow::PlayerName(base, victim), bounce,
                 stream ? "Stream" : "pulse", damage, kill ? " (kill: two hits)" : "", before_shield,
                 pl::LoadF32(base, chr + 0x180));
+  }
+}
+
+// Puts the bounce segments of a shot fired from `pos` into beams from the pool.
+// A pulse's streaks are timed one after the other; the Stream's beams are whole
+// and get their sparks at once.
+void RicoDrawBounces(PPCContext& ctx, uint8_t* base, uint32_t shooter, rico::Vec pos,
+                     const std::vector<rico::Segment>& path, bool stream, uint8_t function) {
+  namespace pl = pd::player;
+  if (!rico::g_pool || path.empty()) return;
+  const int8_t weapon = stream ? rico::kBeamStream : int8_t(rico::kWeaponLaser);
+  const uint32_t shot = rico::g_next_shot++;
+  // A pulse: the frames until each streak starts (the shot's own one crosses first).
+  float delay = 0.0f;
+  if (!stream) {
+    RicoBeamCreate(ctx, base, rico::ScratchBeam(), weapon, pos, path[0].from);
+    delay = RicoCrossFrames(base, rico::ScratchBeam());
+  }
+  const float speed_scale = float(rico::g_debug_beam_speed) / 100.0f;  // TEMP_RICO
+  int next = 0;
+  for (const rico::Segment& seg : path) {
+    while (next < rico::kPoolBeams && int8_t(base[rico::PoolBeam(next) + rico::kBeamAge]) >= 0) ++next;
+    if (next >= rico::kPoolBeams) {
+      ++rico::g_debug_pool_full;
+      return;
+    }
+    const uint32_t beam = rico::PoolBeam(next);
+    RicoBeamCreate(ctx, base, beam, weapon, seg.from, seg.to);
+    rico::BeamInfo& info = rico::g_info[next];
+    info = rico::BeamInfo{};
+    info.active = true;
+    info.shot = shot;
+    info.shooter = shooter;
+    info.bounce = seg.bounce;
+    info.stream = stream;
+    info.function = function;
+    info.from = seg.from;
+    info.length = rico::Length(seg.to - seg.from);
+    info.dir = info.length > 0.001f ? (seg.to - seg.from) * (1.0f / info.length) : rico::Vec{0, 0, 1};
+    info.wall_end = seg.wall_end;
+    info.normal = seg.normal;
+    if (stream) {
+      if (seg.wall_end) RicoSparks(ctx, base, seg.to, info.dir, seg.normal);
+    } else {
+      pl::StoreF32(base, beam + rico::kBeamSpeed, pl::LoadF32(base, beam + rico::kBeamSpeed) * speed_scale);
+      const float cross = RicoCrossFrames(base, beam);
+      const float speed = pl::LoadF32(base, beam + rico::kBeamSpeed);
+      // Start below 0 by the frames the streaks before it take to cross theirs
+      // (the shot's own at the game's speed, the bounces at ours).
+      pl::StoreF32(base, beam + rico::kBeamDist, pl::LoadF32(base, beam + rico::kBeamDist) - delay * speed);
+      delay += cross;
+    }
+    ++rico::g_debug_bounces;
   }
 }
 }  // namespace
@@ -1716,6 +1792,7 @@ void RicoDamage(PPCContext& ctx, uint8_t* base, uint32_t shooter, const rico::Se
 // number, r1 = shot_create's frame (the shot's start at 144(r1), its direction at
 // 112(r1)); g_Vars.currentplayer = the player who fired, on every PC.
 void PdRicoShotImpl(PPCContext& ctx, uint8_t* base);
+void PdRicoTick(PPCContext& ctx, uint8_t* base);
 void PdRicoShot(PPCContext& ctx, uint8_t* base) {
   // TEMP_RICO: the time the bounces take, for the once-a-second log line.
   const auto start = std::chrono::steady_clock::now();
@@ -1729,7 +1806,8 @@ void PdRicoShotImpl(PPCContext& ctx, uint8_t* base) {
   const uint32_t player = pl::LoadU32(base, pl::kGVars + 1188);
   if (!player) return;
   const uint32_t hand = player + pd::custom::kPlayerHands + ctx.r31.u32 * pd::custom::kHandSize;
-  const bool stream = base[hand + 3] == 1;  // the hand's gset: +3 = the function (1 = the Stream)
+  const uint8_t function = base[hand + 3];  // the hand's gset: +3 = the function (1 = the Stream)
+  const bool stream = function == 1;
   {  // TEMP_RICO: which function each player's Laser shots have on this PC (logged when it changes)
     static uint32_t last[8] = {};
     const int8_t weapon = int8_t(base[player + rico::kPlayerWeapon]);
@@ -1738,7 +1816,7 @@ void PdRicoShotImpl(PPCContext& ctx, uint8_t* base) {
     if ((weapon == 29 || weapon == int8_t(rico::kWeaponRicochet)) && last[number] != key) {
       last[number] = key;
       REXLOG_INFO("[rico] player {} fires weapon {} function {} (hand {}, hand gset weapon {})", number, weapon,
-                  base[hand + 3], ctx.r31.u32, int8_t(base[hand]));
+                  function, ctx.r31.u32, int8_t(base[hand]));
     }
   }
   if (int8_t(base[player + rico::kPlayerWeapon]) != int8_t(rico::kWeaponRicochet)) return;
@@ -1748,28 +1826,92 @@ void PdRicoShotImpl(PPCContext& ctx, uint8_t* base) {
   const float len = rico::Length(dir);
   if (len < 0.001f) return;
   dir = dir * (1.0f / len);
+  const rico::Vec hitpos = RicoLoadVec(base, hand + rico::kHandHitPos);
   const std::vector<rico::Segment> path =
-      RicoBounces(ctx, base, pl::PropOf(base, player), pos, dir, stream, rico::g_bounces);
-  RicoDrawBounces(ctx, base, pos, path, stream);
-  // The damage, on the shooter's own PC only (its player is players[0] there).
-  if (!path.empty() && path.back().victim >= 0 && player == pl::Player(base, 0)) {
-    RicoDamage(ctx, base, player, path.back(), stream, base[hand + 3]);
+      RicoBounces(ctx, base, pl::PropOf(base, player), pos, dir, hitpos, stream, rico::g_bounces, stream);
+  RicoDrawBounces(ctx, base, player, pos, path, stream, function);
+  // The Stream's hit, at once, on the shooter's own PC only (its player is
+  // players[0] there). A pulse's hits come as its streaks travel (PdRicoTick).
+  if (stream && !path.empty() && path.back().victim >= 0 && player == pl::Player(base, 0)) {
+    const rico::Segment& seg = path.back();
+    const rico::Vec d = seg.to - seg.from;
+    const float l = rico::Length(d);
+    RicoDamage(ctx, base, player, seg.victim, seg.bounce, l > 0.001f ? d * (1.0f / l) : dir, true, function);
   }
   if (REXCVAR_GET(pd_rico_debug) && !stream) {  // TEMP_RICO (the Stream would log every frame)
     std::string text;
     for (const rico::Segment& seg : path) {
-      text += fmt::format(" | {}: {:.0f} {:.0f} {:.0f} -> {:.0f} {:.0f} {:.0f}", seg.bounce, seg.from.x, seg.from.y,
-                          seg.from.z, seg.to.x, seg.to.y, seg.to.z);
+      text += fmt::format(" | {}: {:.0f} {:.0f} {:.0f} -> {:.0f} {:.0f} {:.0f}{}", seg.bounce, seg.from.x, seg.from.y,
+                          seg.from.z, seg.to.x, seg.to.y, seg.to.z, seg.wall_end ? "" : " (air)");
     }
-    REXLOG_INFO("[rico] pulse by player {} (frame {}) from {:.0f} {:.0f} {:.0f} dir {:.2f} {:.2f} {:.2f}: {} bounces{}",
+    REXLOG_INFO("[rico] pulse by player {} (frame {}) from {:.0f} {:.0f} {:.0f} dir {:.2f} {:.2f} {:.2f}, game hit "
+                "{:.0f} {:.0f} {:.0f}: {} bounces{}",
                 int32_t(pl::LoadU32(base, pl::kGVars + 1196)), pl::LoadU32(base, pl::kLevelFrames), pos.x, pos.y,
-                pos.z, dir.x, dir.y, dir.z, path.size(), text);
+                pos.z, dir.x, dir.y, dir.z, hitpos.x, hitpos.y, hitpos.z, path.size(), text);
+  }
+}
+
+// Once a level frame, from the player input step (game logic, before the
+// render): the bounce beams move on (beam_tick). A pulse's streak is tested
+// against the players over the stretch it newly covered; a hit damages (on the
+// shooter's PC), ends the streak there and drops the shot's later bounces. A
+// streak reaching its wall makes the sparks there.
+void PdRicoTick(PPCContext& ctx, uint8_t* base) {
+  namespace pl = pd::player;
+  if (!rico::g_pool) return;
+  static uint32_t ticked_frame = 0;
+  const uint32_t frame = pl::LoadU32(base, pl::kLevelFrames);
+  if (frame == ticked_frame) return;
+  ticked_frame = frame;
+  for (int i = 0; i < rico::kPoolBeams; ++i) {
+    const uint32_t beam = rico::PoolBeam(i);
+    rico::BeamInfo& info = rico::g_info[i];
+    if (int8_t(base[beam + rico::kBeamAge]) < 0) {
+      info.active = false;
+      continue;
+    }
+    PPCContext call = ctx;
+    call.r1.u64 = ctx.r1.u32 - 0x600;
+    call.r3.u64 = beam;
+    sub_82183688(call, base);  // beam_tick
+    if (!info.active || info.stream) continue;
+    // The streak covers [dist, dist + mindist] along the beam.
+    const float lead = std::min(pl::LoadF32(base, beam + rico::kBeamDist) + pl::LoadF32(base, beam + rico::kBeamMinDist),
+                                info.length);
+    if (lead > info.tested) {
+      float along = 0.0f;
+      const int victim =
+          RicoFirstPlayer(base, info.from + info.dir * info.tested, info.from + info.dir * lead, &along);
+      if (victim >= 0) {
+        const float hit = info.tested + (lead - info.tested) * along;
+        if (info.shooter == pl::Player(base, 0)) {
+          RicoDamage(ctx, base, info.shooter, victim, info.bounce, info.dir, false, info.function);
+        }
+        // The streak ends at the player; the shot's later bounces never happen.
+        pl::StoreF32(base, beam + rico::kBeamMaxDist, hit);
+        info.length = hit;
+        info.wall_end = false;
+        for (int j = 0; j < rico::kPoolBeams; ++j) {
+          if (j != i && rico::g_info[j].active && rico::g_info[j].shot == info.shot &&
+              rico::g_info[j].bounce > info.bounce) {
+            base[rico::PoolBeam(j) + rico::kBeamAge] = 0xFF;
+            rico::g_info[j].active = false;
+          }
+        }
+      }
+      info.tested = lead;
+    }
+    if (info.wall_end && !info.sparked && lead >= info.length - 1.0f) {
+      RicoSparks(ctx, base, info.from + info.dir * info.length, info.dir, info.normal);
+      info.sparked = true;
+    }
+    if (int8_t(base[beam + rico::kBeamAge]) < 0) info.active = false;
   }
 }
 
 // The player's render (sub_820FC6E0) just after the crossbow bolt trails, before
-// the gun (0x820FC7A4; r3 = the display list): the bounce beams are moved on
-// (once a level frame) and drawn into it. Returns the display list.
+// the gun (0x820FC7A4; r3 = the display list): the bounce beams are drawn into
+// it. Returns the display list.
 uint32_t PdRicoRenderBeams(PPCContext& ctx, uint8_t* base, uint32_t gdl) {
   namespace pl = pd::player;
   if (!rico::g_pool) {
@@ -1777,20 +1919,9 @@ uint32_t PdRicoRenderBeams(PPCContext& ctx, uint8_t* base, uint32_t gdl) {
     if (!rico::g_pool) return gdl;
     for (int i = 0; i <= rico::kPoolBeams; ++i) base[rico::PoolBeam(i) + rico::kBeamAge] = 0xFF;  // free
   }
-  static uint32_t ticked_frame = 0;
-  const uint32_t frame = pl::LoadU32(base, pl::kLevelFrames);
-  const bool tick = frame != ticked_frame;
-  ticked_frame = frame;
   for (int i = 0; i < rico::kPoolBeams; ++i) {
     const uint32_t beam = rico::PoolBeam(i);
     if (int8_t(base[beam + rico::kBeamAge]) < 0) continue;
-    if (tick) {
-      PPCContext call = ctx;
-      call.r1.u64 = ctx.r1.u32 - 0x600;
-      call.r3.u64 = beam;
-      sub_82183688(call, base);  // beam_tick
-      if (int8_t(base[beam + rico::kBeamAge]) < 0) continue;  // done
-    }
     // A pulse's streak waiting for the ones before it: not drawn until its tail
     // has left the wall (beam_render would draw it backwards).
     if (int8_t(base[beam + rico::kBeamWeapon]) != rico::kBeamStream &&
@@ -2295,6 +2426,7 @@ void PdTestPlayerTick(PPCContext& ctx, uint8_t* base) {
   namespace pl = pd::player;
   const uint32_t player = pl::Player(base, 0);
   if (!player || pl::LoadU32(base, 0x82648BF8 + 1188) != player) return;  // not the local player's turn
+  PdRicoTick(ctx, base);  // the Ricochet Laser's bounce beams (once a level frame)
 
   if (pl::g_track_frames > 0) {
     const uint32_t frame = pl::LoadU32(base, pl::kLevelFrames);

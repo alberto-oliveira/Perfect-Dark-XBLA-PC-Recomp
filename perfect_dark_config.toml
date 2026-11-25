@@ -935,11 +935,12 @@ name = "PdHookRicoBeamCreate"
 registers = ["r3"]
 
 # beam_render sub_82182A30 where its colour branches join (r25 = the colour's
-# address, r29 = the beam): a Ricochet Laser beam gets its colour.
+# address, r29 = the beam, f29 = its width): a Ricochet Laser beam gets its
+# colour and width.
 [[midasm_hook]]
 address = 0x82182C90
 name = "PdHookRicoBeamColour"
-registers = ["r25", "r29"]
+registers = ["r25", "r29", "f29"]
 
 # shot_create sub_821FC8C0 right after its shot_calculate_hits call (r3 = the prop
 # hit, r31 = the hand number, r1 frame: start 144(r1), direction 112(r1)), on
