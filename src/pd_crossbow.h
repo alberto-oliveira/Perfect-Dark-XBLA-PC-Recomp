@@ -223,7 +223,7 @@ inline uint32_t g_firing_weapon = 0;
 
 // The Detonator bolts' colour (stage 5): laid over each tagged bolt when it is
 // drawn (the tint's overlay, pd_custom_weapons.h TintRgba), pulsing when g_bolt_blink
-// so the bolts blink. 0xRRGGBB, or 0xFFFFFF = none. Set every frame from
+// so the bolts blink. 0xRRGGBB, or pd::custom::kNoTint = none. Set every frame from
 // pd_xbow_bolt_tint / pd_xbow_bolt_blink (main.cpp).
 inline uint32_t g_bolt_tint = 0xFF3030;
 inline bool g_bolt_blink = true;

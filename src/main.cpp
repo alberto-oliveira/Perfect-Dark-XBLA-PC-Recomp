@@ -8,6 +8,7 @@
 #include "pd_stage_layouts.h"  // their hand-picked spawn and weapon pads
 #include "pd_crossbow.h"  // the detonator crossbow
 #include "pd_custom_weapons.h"  // new weapons under borrowed weapon numbers
+#include "pd_ricochet.h"        // the Ricochet Laser
 #include "pd_player.h"  // the local player, for test scripts
 
 #include <rex/chrono/clock.h>
@@ -1335,6 +1336,43 @@ void PdXbowNetFrame() {
   xbow::g_explosion = host;
 }
 
+// ---- The Ricochet Laser (pd_ricochet.h) --------------------------------------------
+// A custom weapon (pd_custom_weapons.h): the Laser drawn as a Mauler, whose shots
+// bounce off walls. Its colours are cosmetic: each PC uses its own settings.
+REXCVAR_DEFINE_STRING(pd_rico_tint, "white", "PerfectDark",
+                      "The Ricochet Laser's colour (it looks like a Mauler): white, red, orange, yellow, "
+                      "green, cyan, blue, purple, pink, #RRGGBB, or off");
+REXCVAR_DEFINE_STRING(pd_rico_beam_tint, "red", "PerfectDark",
+                      "The Ricochet Laser's beams' colour: red, orange, yellow, green, cyan, blue, purple, "
+                      "pink, white, #RRGGBB, or off (the Laser's own)");
+
+// TEMP_RICO: debug log for the Ricochet Laser's development, once a second while
+// something happened: its beams filled (and by which player, in this PC's
+// numbering) and drawn.
+REXCVAR_DEFINE_BOOL(pd_rico_debug, true, "PerfectDark", "TEMP_RICO: Ricochet Laser debug log lines ([rico])");
+namespace {
+int rico_debug_frames = 0;
+void PdRicoDebugFrame() {
+  namespace rico = pd::ricochet;
+  if (++rico_debug_frames < 60) return;
+  rico_debug_frames = 0;
+  if (REXCVAR_GET(pd_rico_debug) && (rico::g_debug_filled || rico::g_debug_drawn)) {
+    REXLOG_INFO("[rico] last second: {} beams filled (last by player {}), {} drawn; {} beams noted",
+                rico::g_debug_filled, rico::g_debug_filled_player, rico::g_debug_drawn, rico::g_beams.size());
+  }
+  rico::g_debug_filled = 0;
+  rico::g_debug_drawn = 0;
+}
+}  // namespace
+
+// Each frame (game thread): the settings.
+void PdRicoFrame() {
+  namespace rico = pd::ricochet;
+  pd::custom::g_tint[pd::custom::IndexOf(rico::kWeaponRicochet)] = pd::custom::ParseTint(REXCVAR_GET(pd_rico_tint));
+  rico::g_beam_tint = pd::custom::ParseTint(REXCVAR_GET(pd_rico_beam_tint));
+  PdRicoDebugFrame();  // TEMP_RICO
+}
+
 // A fire path just made a bolt (`obj`, 0 if it could not): it is a Detonator bolt
 // when the Detonator Crossbow fired it (its crossbow check saw that weapon).
 void PdXbowBoltCreated(uint8_t* base, uint32_t obj) {
@@ -1956,6 +1994,7 @@ void PdTestPlayerTick(PPCContext& ctx, uint8_t* base) {
 void PdNoteGameFrame(uint8_t* base) {
   PdCustomInstall(base);
   PdXbowNetFrame();
+  PdRicoFrame();
   PdMpMusicFrame(base);
   PdWeaponsFrame();
   PerfectDarkApp::NoteGameStage(

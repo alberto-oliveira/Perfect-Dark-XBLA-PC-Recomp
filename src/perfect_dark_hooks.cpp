@@ -17,6 +17,7 @@
 
 #include "pd_crossbow.h"        // the Detonator Crossbow
 #include "pd_custom_weapons.h"
+#include "pd_ricochet.h"        // the Ricochet Laser
 
 // main.cpp
 bool PdSkipArcadeLogo();
@@ -637,6 +638,51 @@ void PdHookCustomObjectColour(PPCRegister& r3, PPCRegister& r4) {
   for (uint32_t i = 0; i < 4; ++i) pd::custom::StoreU32(base, r4.u32 + i * 4, (rgba >> (24 - i * 8)) & 0xFF);
 }
 
+// ---- The Ricochet Laser (pd_ricochet.h) ---------------------------------------------
+
+// beam_create_for_hand (sub_821823A8) at 0x82182440, just before it fills the
+// hand's beam: r25 = the weapon number the beams get (the player's weapon, or -2
+// for the Laser's Stream), r28 = the player. For a Ricochet Laser the beams are
+// noted (PdHookRicoBeamCreate) and get the Laser's number, so beam_render draws
+// them as Laser beams.
+void PdHookRicoHandBeams(PPCRegister& r25, PPCRegister& r28) {
+  namespace rico = pd::ricochet;
+  uint8_t* base = HookBase();
+  rico::g_filling = int8_t(base[r28.u32 + rico::kPlayerWeapon]) == int8_t(rico::kWeaponRicochet);
+  if (r25.u32 == rico::kWeaponRicochet) r25.u64 = rico::kWeaponLaser;
+}
+
+// beam_create_for_hand's exit (loc_82182618): its beams are filled.
+void PdHookRicoHandBeamsDone() { pd::ricochet::g_filling = false; }
+
+// beam_create (sub_82182130) after its stack frame (r3 = the beam being filled):
+// noted as a Ricochet Laser beam, or no longer one.
+void PdHookRicoBeamCreate(PPCRegister& r3) {
+  namespace rico = pd::ricochet;
+  if (rico::g_filling) {
+    rico::g_beams.insert(r3.u32);
+    ++rico::g_debug_filled;  // TEMP_RICO
+    rico::g_debug_filled_player = int32_t(pd::custom::LoadU32(HookBase(), 0x82648BF8 + 1196));
+  } else {
+    rico::g_beams.erase(r3.u32);
+  }
+}
+
+// beam_render (sub_82182A30) where its colour branches join (0x82182C90):
+// r25 = the address of the beam's colour (RGBA) in the display list, r29 = the
+// beam. A Ricochet Laser beam gets its own colour; its alpha is kept (the Stream
+// flickers through it).
+void PdHookRicoBeamColour(PPCRegister& r25, PPCRegister& r29) {
+  namespace rico = pd::ricochet;
+  if (!rico::IsRicochetBeam(r29.u32)) return;
+  ++rico::g_debug_drawn;  // TEMP_RICO
+  if (rico::g_beam_tint == pd::custom::kNoTint) return;
+  uint8_t* base = HookBase();
+  base[r25.u32] = uint8_t(rico::g_beam_tint >> 16);
+  base[r25.u32 + 1] = uint8_t(rico::g_beam_tint >> 8);
+  base[r25.u32 + 2] = uint8_t(rico::g_beam_tint);
+}
+
 // ---- Test tools (pd_player.h) ------------------------------------------------------
 
 // The player input step sub_820F2988, after its stack frame is made: the test
@@ -662,6 +708,14 @@ bool PdHookCustomPass(PPCRegister& weapon) {
 void PdHookCustomAsBase(PPCRegister& weapon) {
   if (!pd::custom::IsCustom(weapon.u32)) return;
   weapon.u64 = pd::custom::AsBase(weapon.u32);
+}
+
+// A check that asks "which model is this weapon drawn with?" (the third-person
+// model, sub_821F4C68): a custom weapon's number becomes its look weapon's
+// (the Ricochet Laser is drawn as a Mauler), or its base weapon's.
+void PdHookCustomAsLook(PPCRegister& weapon) {
+  if (!pd::custom::IsCustom(weapon.u32)) return;
+  weapon.u64 = pd::custom::AsLook(weapon.u32);
 }
 
 // The primary/secondary bit of the current weapon, at `srawi rD,rS,3` where rS =

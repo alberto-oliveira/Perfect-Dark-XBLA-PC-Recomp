@@ -683,9 +683,11 @@ address = 0x82172498
 name = "PdHookCustomAsBase"
 registers = ["r11"]
 
+# The third-person model (sub_821F4C68 entry, r3) sees the LOOK weapon's number
+# instead (the Ricochet Laser is drawn as a Mauler), or the base weapon's.
 [[midasm_hook]]
 address = 0x821F4C68
-name = "PdHookCustomAsBase"
+name = "PdHookCustomAsLook"
 registers = ["r3"]
 
 [[midasm_hook]]
@@ -850,6 +852,90 @@ registers = ["r11"]
 address = 0x820F3DE8
 name = "PdHookCustomDetonateShortcut"
 registers = ["r10"]
+
+# ---- Ricochet Laser (src/pd_ricochet.h) -------------------------------------------------
+# The game's checks for the Laser (weapon 29, N64 WEAPON_LASER) see the base
+# weapon's number for a custom weapon (PdHookCustomAsBase; each register is not
+# used afterwards for anything else):
+#   bgun_create_fx sub_82174CC0 (`cmpwi r26,29`: the Laser makes a beam per shot),
+#   bgun_play_prop_hit_sound sub_82176B48 (`cmplwi r7,29`) and
+#   bgun_play_bg_hit_sound sub_821771C8 (`cmplwi r11,29`): the Laser's hit sounds,
+#   gset_populate sub_82186358 (`cmplwi r8,29`: the Laser's shot counter),
+#   shot_calculate_hits sub_821FBAA8 (`cmplwi r10,29`: the Stream's short range;
+#   `cmplwi r11,29`: no bullet holes on walls), obj_hit sub_822222B0 (`cmplwi r11,29`:
+#   no bullet holes on objects), weapon_play_pickup_sound sub_8220C5A8 (`cmpwi r4,29`).
+# Left alone: bgun_update_laser's call (0x82175810), which moves the Laser
+# model's own parts (the Ricochet Laser has the Mauler's model).
+[[midasm_hook]]
+address = 0x82174E70
+name = "PdHookCustomAsBase"
+registers = ["r26"]
+
+[[midasm_hook]]
+address = 0x82176C64
+name = "PdHookCustomAsBase"
+registers = ["r7"]
+
+[[midasm_hook]]
+address = 0x821772AC
+name = "PdHookCustomAsBase"
+registers = ["r11"]
+
+[[midasm_hook]]
+address = 0x821863D4
+name = "PdHookCustomAsBase"
+registers = ["r8"]
+
+[[midasm_hook]]
+address = 0x821FBC0C
+name = "PdHookCustomAsBase"
+registers = ["r10"]
+
+[[midasm_hook]]
+address = 0x821FC268
+name = "PdHookCustomAsBase"
+registers = ["r11"]
+
+[[midasm_hook]]
+address = 0x82222608
+name = "PdHookCustomAsBase"
+registers = ["r11"]
+
+[[midasm_hook]]
+address = 0x8220C614
+name = "PdHookCustomAsBase"
+registers = ["r4"]
+
+# beam_create_for_hand sub_821823A8: its Stream check (`cmplwi r11,29` at
+# 0x82182428, r11 = the hand's weapon) sees the base; at 0x82182440 (r25 = the
+# beams' weapon number, r28 = the player) a Ricochet Laser's beams are noted and
+# get the Laser's number; its exit loc_82182618 ends the noting.
+[[midasm_hook]]
+address = 0x82182428
+name = "PdHookCustomAsBase"
+registers = ["r11"]
+
+[[midasm_hook]]
+address = 0x82182440
+name = "PdHookRicoHandBeams"
+registers = ["r25", "r28"]
+
+[[midasm_hook]]
+address = 0x82182618
+name = "PdHookRicoHandBeamsDone"
+
+# beam_create sub_82182130 after its stack frame (r3 = the beam): noted or not.
+[[midasm_hook]]
+address = 0x82182148
+name = "PdHookRicoBeamCreate"
+registers = ["r3"]
+
+# beam_render sub_82182A30 where its colour branches join (r25 = the colour's
+# address, r29 = the beam): a Ricochet Laser beam gets its colour.
+[[midasm_hook]]
+address = 0x82182C90
+name = "PdHookRicoBeamColour"
+registers = ["r25", "r29"]
 
 # ---- Test tools ---------------------------------------------------------------------
 
