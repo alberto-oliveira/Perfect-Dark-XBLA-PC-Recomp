@@ -1,0 +1,38 @@
+# Scenario "research-tint" (custom weapons research): 2 copies. Runs after
+# lobby-host.txt. Screenshots of a green-tinted Laser: the Stream (continuous)
+# and a slow bounce tracer, from the host and from Zqclient beside it.
+
+cvar pd_probe_ricochet true
+cvar pd_probe_ricochet_tracer_speed 150    # very slow: the bounce tracer stays on screen
+cvar pd_probe_laser_tint 3211056           # 0x30FF30 green
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start
+waitmenu none 60
+wait 5000
+give 29
+equip 29
+wait 2500
+signal host-armed
+waitsignal placed 1 60
+wait 500
+face Zqclient -40            # the floor in front of the client
+wait 300
+log tint: pulse with a slow bounce tracer
+trig 0 255 150
+wait 150
+shot tint-host-pulse
+signal fired
+wait 1500
+log tint: stream tint
+cvar pd_probe_ricochet false
+btn rb
+wait 800
+look 0 -20
+trig 0 255 1500
+wait 600
+shot tint-host-stream
+wait 1500
+signal host-done
+log research-tint: host done

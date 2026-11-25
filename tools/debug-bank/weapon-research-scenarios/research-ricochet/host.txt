@@ -1,0 +1,59 @@
+# Scenario "research-ricochet" (custom weapons research, T2): 3 copies. Runs after
+# lobby-host.txt. The host disarms client 1, then (after client 1's speed and
+# boost tests) shoots the floor in front of it with the Laser while
+# pd_probe_ricochet bounces each shot once: the bounce should hit client 1.
+
+cvar pd_probe_hits true
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start
+waitmenu none 60
+wait 5000
+pos start
+give 29                      # Laser
+signal host-armed
+waitsignal victim-placed 1 60
+
+log T2: disarm
+equip 1                      # Unarmed
+wait 2000
+btn rb                       # secondary function: Disarm
+wait 800
+tp near 1 70
+face 1
+wait 300
+trig 0 255 150
+wait 2000
+pos after-disarm
+signal host-punch-done
+
+waitsignal victim-ready-ricochet 1 120
+equip 29
+wait 2500
+pos before-ricochet
+cvar pd_probe_ricochet true
+
+log T2: ricochet, floor at -45 degrees, damage x1
+face 1 -45
+wait 300
+shot t2-host-aim-45
+trig 0 255 150
+wait 2000
+log T2: ricochet, floor at -40 degrees, damage x1
+face 1 -40
+wait 300
+trig 0 255 150
+wait 2000
+pos after-ricochet-1
+log T2: ricochet, floor at -45 degrees, damage x100
+cvar pd_probe_ricochet_damage 100
+face 1 -45
+wait 300
+trig 0 255 150
+wait 1000
+shot t2-host-after-kill
+wait 2000
+pos after-ricochet-kill
+signal host-done
+log research-ricochet: host done

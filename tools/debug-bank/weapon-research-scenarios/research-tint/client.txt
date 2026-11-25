@@ -1,0 +1,18 @@
+# Scenario "research-tint", client. Runs after lobby-client.txt.
+
+cvar pd_probe_ricochet true
+cvar pd_probe_ricochet_tracer_speed 150    # very slow: the bounce tracer stays on screen
+cvar pd_probe_laser_tint 3211056           # 0x30FF30 green
+pick 825FA2F8                # Ready
+signal ready-{copy}
+waitmenu none 120
+wait 3000
+waitsignal host-armed 1 60
+tp near Zqhost 350
+face Zqhost -15
+signal placed
+waitsignal fired 1 60
+wait 100
+shot tint-client-bounce
+waitsignal host-done 1 60
+log research-tint: client done

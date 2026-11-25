@@ -1,0 +1,61 @@
+# Scenario "research-ricochet2" (custom weapons research, T3): 3 copies. Runs after
+# lobby-host.txt. Laser bounces with a tracer and a green tint on every PC; a
+# bounce through the game's hit test, one through our own test (direct mode),
+# then an off-screen direct hit with damage x100 (kill and frag credit).
+
+cvar pd_probe_hits true
+cvar pd_probe_ricochet true
+cvar pd_probe_laser_tint 3211056           # 0x30FF30 green: Laser beams and bounce tracers
+cvar pd_probe_ricochet_tracer_speed 1000   # slow, so screenshots catch it
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start
+waitmenu none 60
+wait 5000
+give 29                      # Laser
+equip 29
+wait 2500
+signal host-armed
+waitsignal victim-placed 1 60
+wait 500
+pos before-a
+
+log T3: bounce A, the game's hit test
+face 1 -45
+wait 300
+trig 0 255 150
+signal fired-a
+wait 120
+shot t3-host-bounce-a
+wait 2000
+pos after-a
+
+log T3: bounce B, direct mode
+cvar pd_probe_ricochet_direct true
+signal replace-victim
+waitsignal victim-replaced 1 30
+wait 500
+face 1 -45
+wait 300
+trig 0 255 150
+signal fired-b
+wait 120
+shot t3-host-bounce-b
+wait 2000
+pos after-b
+
+log T3: off-screen direct hit, damage x100
+signal replace-victim2
+waitsignal victim-replaced2 1 30
+wait 500
+face 1 80                    # look up: the victim is off the screen
+wait 300
+cvar pd_probe_ricochet_damage 100
+cvar pd_probe_hit_player 1
+wait 500
+shot t3-host-kill
+wait 2000
+pos after-kill
+signal host-done
+log research-ricochet2: host done

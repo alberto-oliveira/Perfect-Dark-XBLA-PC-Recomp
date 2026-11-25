@@ -73,6 +73,27 @@ Blank lines are skipped, and `#` starts a comment, either on its own line or aft
 | `peek <addr> <bytes> <tag>` / `poke <addr> <value>` | read / write guest memory (hex) |
 | `cvar <name> <value>` | change a setting for this run |
 
+**The local player, in a match** (`src/pd_player.h`; each command waits until the
+game has carried it out, at most 10 s). A `<player>` is a gamertag (`Zqhost`,
+`Zqclient`, `Zqclient2`) or a number. Numbers are this copy's own and follow the
+join order (the local player is always 0), so scripts are safer with names.
+
+| Command | |
+|---|---|
+| `give <weapon>` | give a weapon (number, e.g. `29` or `0x1D`) and fill every ammo type |
+| `equip <weapon>` | switch to a weapon the player has |
+| `look <theta> <verta>` | set the view angles (degrees; verta up from the horizon) |
+| `face <player> [verta]` | aim at that player's chest (or in its direction, at that vertical angle) |
+| `tp <x> <y> <z> [theta]` | move there (onto the floor below that point), facing theta |
+| `tp near <player> <distance>` | move to `distance` units in front of that player, facing them |
+| `pos [tag]` | log every player's position, room, view, weapon and knockback speed |
+| `track <frames>` / `track off` | log the local player like `pos` every N level frames |
+| `watchplayer <offset> <bytes>` | `watch` on the local player's struct (page-wide: noisy) |
+
+Weapon numbers (N64 order): 1 Unarmed, 2 Falcon 2, 6 Mauler, 14 Laptop Gun, 19 Shotgun,
+20 Reaper, 24 Rocket Launcher, 25 Slayer, 27 Crossbow, 28 Tranquilizer, 29 Laser,
+30 Grenade, 31 N-Bomb, 35 Combat Boost, 0x51 Detonator Crossbow.
+
 Every waiting command gives up after `[sec]` seconds (default 60). It then logs
 `[test] FAILED <command> (stage, menu)` and drops the rest of the script, so a
 stuck copy says where it stopped. Each finished command logs `[test] done: ...`.

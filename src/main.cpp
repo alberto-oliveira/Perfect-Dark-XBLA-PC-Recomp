@@ -8,6 +8,7 @@
 #include "pd_stage_layouts.h"  // their hand-picked spawn and weapon pads
 #include "pd_crossbow.h"  // the detonator crossbow
 #include "pd_custom_weapons.h"  // new weapons under borrowed weapon numbers
+#include "pd_player.h"  // the local player, for test scripts
 
 #include <rex/chrono/clock.h>
 #include <rex/diag_timing.h>
@@ -1676,6 +1677,281 @@ uint32_t PdCustomLoadGunModel(PPCContext& ctx, uint8_t* base, uint32_t id) {
   return modeldef;
 }
 // ---- end of the custom weapons' gun model loader ---------------------------------------
+
+// ---- Test tools: the local player (pd_player.h) ------------------------------------------
+//
+// Requests from the test pipe (give, equip, look, face, tp, pos) are carried out
+// here, on the game thread, at the start of the local player's input step, when
+// g_Vars.currentplayer is that player (PdHookTestPlayerTick).
+
+namespace {
+
+// Writes the view angles and the fields the game keeps beside them, as the mouse
+// look does (PerfectDarkApp::ApplyLookAngles): cos/sin, verta, verta360, the turn
+// speeds (zeroed, or the game keeps turning), the previous frame's theta, and the
+// bond2 theta vector the walking code uses.
+void TestSetLook(uint8_t* base, uint32_t player, float theta, float verta) {
+  namespace pl = pd::player;
+  const double rad = double(theta) * 3.14159265358979323846 / 180.0;
+  pl::StoreF32(base, player + pl::kTheta, theta);
+  pl::StoreF32(base, player + pl::kTheta + 4, 0.0f);  // speedtheta
+  pl::StoreF32(base, player + pl::kTheta + 8, float(std::cos(rad)));
+  pl::StoreF32(base, player + pl::kTheta + 12, float(std::sin(rad)));
+  pl::StoreF32(base, player + pl::kTheta + 16, verta);
+  pl::StoreF32(base, player + pl::kTheta + 20, verta < 0.0f ? verta + 360.0f : verta);
+  pl::StoreF32(base, player + pl::kTheta + 24, 0.0f);  // speedverta
+  pl::StoreF32(base, player + pl::kPrevTheta, theta);
+  pl::StoreVec(base, player + pl::kBondTheta, {float(-std::sin(rad)), 0.0f, float(std::cos(rad))});
+}
+
+// Moves the local player to `want` (its y only needs to be above the floor there),
+// the way the respawn places a player (bondstartnewlife sub_820FDA68,
+// 0x820FDBCC-0x820FDDD8): find the room and the ground, stand on it at eye
+// height, reset bond2 and the camera's copy, and put the prop in its new room.
+// False if no room there has a floor below `want`.
+//
+// `first_room` (if > 0) is tried first: room bounding boxes overlap, so a point
+// can be "in" several rooms and only some have the floor under it (test T0: the
+// first room found had no ground there and the player fell out of the level).
+bool TestTeleport(PPCContext& ctx, uint8_t* base, uint32_t player, pd::player::Vec want, float theta,
+                  int16_t first_room) {
+  namespace pl = pd::player;
+  const uint32_t prop = pl::PropOf(base, player);
+  if (!prop) return false;
+
+  // Scratch in guest memory below the game's stack (as XbowAlignScorch does).
+  const uint32_t pos = ctx.r1.u32 - 0x400;  // 3 floats
+  const uint32_t inrooms = pos + 16;        // 21 s16
+  const uint32_t aboverooms = pos + 64;     // 21 s16
+  const uint32_t best = pos + 112;          // s16
+  const uint32_t rooms = pos + 120;         // {room, -1}
+  pl::StoreVec(base, pos, want);
+
+  PPCContext call = ctx;
+  call.r1.u64 = pos - 0x200;
+  call.r3.u64 = pos;
+  call.r4.u64 = inrooms;
+  call.r5.u64 = aboverooms;
+  call.r6.u64 = 20;
+  call.r7.u64 = best;
+  sub_820D56C8(call, base);  // bg_find_rooms_by_pos(pos, inrooms, aboverooms, 20, &bestroom)
+
+  // The rooms to try, in order: first_room, the rooms the point is in, the rooms
+  // it is above, the closest room.
+  std::vector<int16_t> candidates;
+  if (first_room > 0) candidates.push_back(first_room);
+  for (const uint32_t list : {inrooms, aboverooms}) {
+    for (int i = 0; i < 20; ++i) {
+      const int16_t r = pl::LoadS16(base, list + uint32_t(i) * 2);
+      if (r < 0) break;
+      candidates.push_back(r);
+    }
+  }
+  candidates.push_back(pl::LoadS16(base, best));
+
+  // cd_find_ground_at_cyl_ctfril(pos, radius 30, rooms, &floorcol, &floortype,
+  // &floorflags, &floorroom, NULL, NULL): the radius is a float in f1 and takes
+  // r4's place; the last argument is on the stack at 84(r1), as the respawn passes it.
+  // With no floor below the point it returns about -4.29e9 (N64: -4294967296).
+  int16_t room = -1;
+  float ground = 0.0f;
+  for (const int16_t r : candidates) {
+    if (r <= 0) continue;
+    pl::StoreS16(base, rooms, r);
+    pl::StoreS16(base, rooms + 2, -1);
+    call = ctx;
+    call.r1.u64 = pos - 0x200;
+    pl::StoreU32(base, call.r1.u32 + 84, 0);
+    call.r3.u64 = pos;
+    call.f1.f64 = 30.0;
+    call.r5.u64 = rooms;
+    call.r6.u64 = player + pl::kFloorCol;
+    call.r7.u64 = player + pl::kFloorType;
+    call.r8.u64 = player + pl::kFloorFlags;
+    call.r9.u64 = player + pl::kFloorRoom;
+    call.r10.u64 = 0;
+    sub_820E7AF8(call, base);
+    const float g = float(call.f1.f64);
+    if (g > -100000.0f && g <= want.y + 1.0f) {  // a real floor, below the point
+      room = r;
+      ground = g;
+      break;
+    }
+  }
+  if (room <= 0) return false;
+  pl::StoreS16(base, rooms, room);
+  pl::StoreS16(base, rooms + 2, -1);
+
+  pl::Vec at = want;
+  at.y = ground + pl::LoadF32(base, player + pl::kEyeHeight);
+  pl::StoreF32(base, player + pl::kManGround, ground);
+  pl::StoreF32(base, player + pl::kGround, ground);
+  TestSetLook(base, player, theta, 0.0f);
+
+  // bond2 as player_reset_bond leaves it: radius 30, look (1,0,0), up (0,1,0).
+  pl::StoreF32(base, player + pl::kBondRadius, 30.0f);
+  pl::StoreVec(base, player + pl::kBondPos, at);
+  pl::StoreVec(base, player + pl::kBondLook, {1.0f, 0.0f, 0.0f});
+  pl::StoreVec(base, player + pl::kBondUp, {0.0f, 1.0f, 0.0f});
+
+  pl::StoreVec(base, prop + pl::kPropPos, at);
+  pl::StoreVec(base, player + pl::kPrevPos, at);
+  pl::StoreVec(base, player + pl::kShotSpeed, {});  // no knockback carried over
+
+  call = ctx;
+  call.r1.u64 = pos - 0x200;
+  call.r3.u64 = prop;
+  sub_821FA2F8(call, base);  // prop_deregister_rooms
+  pl::StoreS16(base, prop + pl::kPropRooms, room);
+  pl::StoreS16(base, prop + pl::kPropRooms + 2, -1);
+
+  // The camera's copy (player_set_cam_properties_in_bounds, inlined in the respawn).
+  pl::StoreVec(base, player + pl::kMemCamPos, at);
+  pl::StoreU32(base, player + pl::kMemCamRoom, uint32_t(int32_t(room)));
+  pl::StoreVec(base, player + pl::kCamPos, at);
+  pl::StoreVec(base, player + pl::kCamLook, pl::LoadVec(base, player + pl::kBondLook));
+  pl::StoreVec(base, player + pl::kCamUp, pl::LoadVec(base, player + pl::kBondUp));
+  pl::StoreU32(base, player + pl::kCamRoom, uint32_t(int32_t(room)));
+  return true;
+}
+
+}  // namespace
+
+void PdTestPlayerTick(PPCContext& ctx, uint8_t* base) {
+  namespace pl = pd::player;
+  const uint32_t player = pl::Player(base, 0);
+  if (!player || pl::LoadU32(base, 0x82648BF8 + 1188) != player) return;  // not the local player's turn
+
+  if (pl::g_track_frames > 0) {
+    const uint32_t frame = pl::LoadU32(base, pl::kLevelFrames);
+    static uint32_t last = 0;
+    if (frame < last || frame - last >= uint32_t(pl::g_track_frames)) {
+      last = frame;
+      REXLOG_INFO("[test] track frame {}: {}", frame, pl::Describe(base, 0));
+    }
+  }
+
+  pl::Request r;
+  if (!pl::Take(&r)) return;
+  if (!r.who.empty()) {
+    r.number = pl::PlayerByName(base, r.who);
+    if (r.number < 0) REXLOG_WARN("[test] no player named {}", r.who);
+  }
+  switch (r.action) {
+    case pl::Action::kGive: {
+      PPCContext call = ctx;
+      call.r3.u64 = uint32_t(r.number);
+      sub_82107108(call, base);  // inv_give_single_weapon
+      const uint32_t given = call.r3.u32;
+      call = ctx;
+      call.r3.u64 = 1;
+      sub_8217D6D8(call, base);  // bgun_give_max_ammo(force): every ammo type full
+      REXLOG_INFO("[test] give {}: inv_give_single_weapon returned {}", r.number, given);
+      break;
+    }
+    case pl::Action::kEquip: {
+      PPCContext call = ctx;
+      call.r3.u64 = uint32_t(r.number);
+      sub_82172258(call, base);  // bgun_equip_weapon: switches to it as a weapon change does
+      REXLOG_INFO("[test] equip {}", r.number);
+      break;
+    }
+    case pl::Action::kLook:
+      TestSetLook(base, player, r.a, r.b);
+      REXLOG_INFO("[test] look {:.1f} {:.1f}", r.a, r.b);
+      break;
+    case pl::Action::kFace: {
+      const uint32_t other = pl::PropOf(base, pl::Player(base, r.number));
+      if (!other) {
+        REXLOG_WARN("[test] face {}: no such player", r.number);
+        break;
+      }
+      pl::Vec target = pl::LoadVec(base, other + pl::kPropPos);
+      target.y -= 40.0f;  // the prop is at eye height: aim at the chest
+      float theta, verta;
+      pl::AnglesTowards(pl::LoadVec(base, pl::PropOf(base, player) + pl::kPropPos), target, &theta, &verta);
+      if (r.c != 0.0f) verta = r.b;  // face <player> <verta>: that player's direction, this vertical angle
+      TestSetLook(base, player, theta, verta);
+      REXLOG_INFO("[test] face player {}: theta {:.1f} verta {:.1f}", r.number, theta, verta);
+      break;
+    }
+    case pl::Action::kTeleport:
+    case pl::Action::kTeleportNear: {
+      pl::Vec want{r.a, r.b, r.c};
+      float theta = r.d;
+      int16_t first_room = -1;
+      if (r.action == pl::Action::kTeleportNear) {
+        // `distance` in front of the other player, facing it.
+        const uint32_t other_player = pl::Player(base, r.number);
+        const uint32_t other = pl::PropOf(base, other_player);
+        if (!other) {
+          REXLOG_WARN("[test] tp near {}: no such player", r.number);
+          break;
+        }
+        const pl::Vec at = pl::LoadVec(base, other + pl::kPropPos);
+        const float facing = pl::LoadF32(base, other_player + pl::kTheta);
+        // How far the other player can see along `theta` (up to r.a): the
+        // collision test (cd_test_los_oobok_findclosest_autoflags, 0 = hit) and
+        // where it hit (cd_get_obstacle_pos), as XbowAlignScorch uses them; 60
+        // units are kept from the wall.
+        auto clear = [&](float theta_deg) {
+          const double rad = double(theta_deg) * 3.14159265358979323846 / 180.0;
+          const float fx = float(-std::sin(rad)), fz = float(std::cos(rad));
+          const uint32_t from = ctx.r1.u32 - 0x400, to = from + 16, hit = from + 32;
+          pl::StoreVec(base, from, at);
+          pl::StoreVec(base, to, {at.x + fx * r.a, at.y, at.z + fz * r.a});
+          PPCContext call = ctx;
+          call.r1.u64 = from - 0x200;
+          call.r3.u64 = from;
+          call.r4.u64 = other + pl::kPropRooms;
+          call.r5.u64 = to;
+          call.r6.u64 = 0x20 | 0x02 | 0x10;  // background, doors, path blockers
+          sub_820E4E88(call, base);
+          if (call.r3.s32 != 0) return r.a;
+          call.r3.u64 = hit;
+          call.r4.u64 = 0;
+          call.r5.u64 = 0;
+          sub_820DDDC0(call, base);
+          const pl::Vec h = pl::LoadVec(base, hit);
+          return std::max(0.0f, std::sqrt((h.x - at.x) * (h.x - at.x) + (h.z - at.z) * (h.z - at.z)) - 60.0f);
+        };
+        // In front of the other player, else behind, left or right: the first
+        // direction clear for the whole distance, otherwise the clearest one.
+        float best_theta = facing, best_distance = -1.0f;
+        for (const float turn : {0.0f, 180.0f, 90.0f, 270.0f}) {
+          const float t = std::fmod(facing + turn, 360.0f);
+          const float d = clear(t);
+          if (d > best_distance) {
+            best_distance = d;
+            best_theta = t;
+          }
+          if (d >= r.a) break;
+        }
+        const double rad = double(best_theta) * 3.14159265358979323846 / 180.0;
+        want = {at.x + float(-std::sin(rad)) * best_distance, at.y, at.z + float(std::cos(rad)) * best_distance};
+        REXLOG_INFO("[test] tp near player {}: {:.0f} units at theta {:.0f} (it faces {:.0f})", r.number,
+                    best_distance, best_theta, facing);
+        float verta;
+        pl::AnglesTowards(want, at, &theta, &verta);
+        first_room = pl::LoadS16(base, other + pl::kPropRooms);  // most likely the same room
+      }
+      const bool moved = TestTeleport(ctx, base, player, want, theta, first_room);
+      REXLOG_INFO("[test] tp {:.1f} {:.1f} {:.1f}: {} - {}", want.x, want.y, want.z, moved ? "moved" : "NOT MOVED (no room there)",
+                  pl::Describe(base, 0));
+      break;
+    }
+    case pl::Action::kPos:
+      for (int n = 0; n < 8; ++n) {
+        if (pl::Player(base, n)) REXLOG_INFO("[test] pos {}: {}", r.tag, pl::Describe(base, n));
+      }
+      break;
+    case pl::Action::kNone:
+      break;
+  }
+  pl::Finish();
+}
+// ---- end of the test tools ---------------------------------------------------------------
+
 
 void PdNoteGameFrame(uint8_t* base) {
   PdCustomInstall(base);

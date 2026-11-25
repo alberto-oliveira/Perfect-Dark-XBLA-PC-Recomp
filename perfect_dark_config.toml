@@ -851,3 +851,12 @@ address = 0x820F3DE8
 name = "PdHookCustomDetonateShortcut"
 registers = ["r10"]
 
+# ---- Test tools ---------------------------------------------------------------------
+
+# The player input step sub_820F2988, just after its stack frame is made
+# (g_Vars.currentplayer = the player being ticked): carries out the test pipe's
+# player requests (give, equip, look, face, tp, pos) and the `track` log
+# (pd_player.h, PdTestPlayerTick in main.cpp).
+[[midasm_hook]]
+address = 0x820F29A4
+name = "PdHookTestPlayerTick"

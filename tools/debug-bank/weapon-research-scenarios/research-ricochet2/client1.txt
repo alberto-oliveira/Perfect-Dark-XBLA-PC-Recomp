@@ -1,0 +1,31 @@
+# Scenario "research-ricochet2", client 1: the victim. Runs after lobby-client.txt.
+
+cvar pd_probe_hits true
+cvar pd_probe_ricochet true
+cvar pd_probe_laser_tint 3211056           # 0x30FF30 green: Laser beams and bounce tracers
+cvar pd_probe_ricochet_tracer_speed 1000   # slow, so screenshots catch it
+pick 825FA2F8                # Ready
+signal ready-{copy}
+waitmenu none 120
+wait 3000
+waitsignal host-armed 1 60
+tp near 1 280
+face 1                       # looking at the host: the bounce comes towards us
+signal victim-placed
+waitsignal fired-a 1 60
+wait 100
+shot t3-victim-bounce-a
+waitsignal replace-victim 1 60
+tp near 1 280
+face 1
+signal victim-replaced
+waitsignal fired-b 1 60
+wait 100
+shot t3-victim-bounce-b
+waitsignal replace-victim2 1 60
+tp near 1 280
+signal victim-replaced2
+waitsignal host-done 1 60
+pos end
+shot t3-victim-end
+log research-ricochet2: client done

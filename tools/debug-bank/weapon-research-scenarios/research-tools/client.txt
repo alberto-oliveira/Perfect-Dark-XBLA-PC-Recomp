@@ -1,0 +1,18 @@
+# Scenario "research-tools": the client stands in front of the host and is shot.
+# Runs after lobby-client.txt.
+
+cvar pd_probe_hits true
+pick 825FA2F8                # Ready
+signal ready-{copy}
+waitmenu none 120
+wait 3000
+pos start
+waitsignal host-armed 1 60
+tp near 1 400                # player 1 here = the host: 400 units in front of it
+track 5
+signal client-placed-{copy}
+wait 9000
+track off
+pos end
+shot research-client{copy}-end
+log research-tools: client done

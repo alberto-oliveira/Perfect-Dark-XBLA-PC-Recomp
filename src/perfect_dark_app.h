@@ -54,6 +54,7 @@
 #include "pd_handicap.h"       // pd_handicaps: online handicaps by gamertag
 #include "pd_weapons.h"        // pd_mp_weapons: weapon slots 7-16, shuffled respawns
 #include "pd_custom_weapons.h"  // new weapons under borrowed weapon numbers
+#include "pd_player.h"         // test pipe: the local player (give, look, tp, ...)
 #include "pd_stages.h"         // pd_solo_stages: the solo mission stages as arenas
 #include <rex/input/sdl/sdl_input_driver.h>
 #include <rex/cvar.h>
@@ -6072,7 +6073,56 @@ class PerfectDarkApp : public rex::ReXApp {
           return TestStep::kDone;
       }
     }
-    return TestStep::kNotMine;
+
+    // The local player (pd_player.h): the request goes to the game thread, which
+    // carries it out at the player's next tick; the script waits for that (10 s).
+    if (c.verb == "track") {  // track <frames>|off: log player 0 every N level frames
+      pd::player::g_track_frames = arg(0) == "off" ? 0 : std::max(1, std::atoi(arg(0).c_str()));
+      return TestStep::kDone;
+    }
+    pd::player::Request request;
+    auto num = [&](size_t i) { return float(std::atof(arg(i).c_str())); };
+    // A player: a number (this PC's numbering) or a gamertag.
+    auto set_player = [&](const std::string& text) {
+      const bool numeric = !text.empty() && std::isdigit(static_cast<unsigned char>(text[0]));
+      request.number = numeric ? std::atoi(text.c_str()) : -1;
+      if (!numeric) request.who = text;
+    };
+    if (c.verb == "give" || c.verb == "equip") {  // give|equip <weapon number>
+      request.action = c.verb == "give" ? pd::player::Action::kGive : pd::player::Action::kEquip;
+      request.number = int(std::strtol(arg(0).c_str(), nullptr, 0));  // 27 or 0x1B
+    } else if (c.verb == "look") {  // look <theta> <verta> (degrees)
+      request.action = pd::player::Action::kLook;
+      request.a = num(0);
+      request.b = num(1);
+    } else if (c.verb == "face") {  // face <player number> [verta]: aim at that player's chest (or at verta)
+      request.action = pd::player::Action::kFace;
+      set_player(arg(0));
+      request.c = arg(1).empty() ? 0.0f : 1.0f;  // 1 = use verta b
+      request.b = num(1);
+    } else if (c.verb == "tp" && arg(0) == "near") {  // tp near <player> <distance>
+      request.action = pd::player::Action::kTeleportNear;
+      set_player(arg(1));
+      request.a = num(2);
+    } else if (c.verb == "tp") {  // tp <x> <y> <z> [theta]
+      request.action = pd::player::Action::kTeleport;
+      request.a = num(0);
+      request.b = num(1);
+      request.c = num(2);
+      request.d = num(3);
+    } else if (c.verb == "pos") {  // pos [tag]: log every player's position
+      request.action = pd::player::Action::kPos;
+      request.tag = arg(0);
+    } else {
+      return TestStep::kNotMine;
+    }
+    if (test_phase_ == 0) {
+      pd::player::Submit(request);
+      test_phase_ = 1;
+      return TestStep::kHold;
+    }
+    if (pd::player::Done()) return TestStep::kDone;
+    return test_wait_.Expired(now, 10) ? TestStep::kFailed : TestStep::kHold;
   }
 
   // Menu trace (test pipe on): logs each change of stage, of the menu on top
@@ -6245,6 +6295,11 @@ class PerfectDarkApp : public rex::ReXApp {
       } else if (c.verb == "watch") {  // watch <start> <end>: log guest writes there (hex), and who made them
         pd_watch::ArmMemoryWriteWatchRange(mem, uint32_t(std::strtoul(arg(0).c_str(), nullptr, 16)),
                                            uint32_t(std::strtoul(arg(1).c_str(), nullptr, 16)));
+      } else if (c.verb == "watchplayer") {  // watchplayer <offset> <bytes>: watch the local player's struct there
+        const uint32_t player = pd::player::Player(mem->virtual_membase(), 0);
+        const uint32_t start = player + uint32_t(std::strtoul(arg(0).c_str(), nullptr, 0));
+        if (player) pd_watch::ArmMemoryWriteWatchRange(mem, start, start + uint32_t(std::strtoul(arg(1).c_str(), nullptr, 0)));
+        REXLOG_INFO("[test] watchplayer: player 0x{:08X}, watching 0x{:08X} +{}", player, start, arg(1));
       } else if (c.verb == "watchfind") {  // watchfind <hex bytes> <span>: watch [match, match+span) for up to 4 matches
         WatchPattern(arg(0), uint32_t(std::strtoul(arg(1).c_str(), nullptr, 0)));
       } else if (c.verb == "unwatch") {  // stop, and list the writers

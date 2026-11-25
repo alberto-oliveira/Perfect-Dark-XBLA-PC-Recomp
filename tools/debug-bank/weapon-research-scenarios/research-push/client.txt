@@ -1,0 +1,51 @@
+# Scenario "research-push", client: Zqclient. Runs after lobby-client.txt.
+
+cvar pd_probe_hits true
+cvar pd_probe_turret true
+pick 825FA2F8                # Ready
+signal ready-{copy}
+waitmenu none 120
+wait 3000
+waitsignal host-armed 1 60
+tp near Zqhost 300
+track 3
+signal placed-1
+waitsignal shot-1 1 60
+cvar pd_probe_push_mult 4
+cvar pd_probe_push_cap 6
+tp near Zqhost 300
+signal placed-2
+waitsignal shot-2 1 60
+track off
+cvar pd_probe_push_mult 1
+cvar pd_probe_push_cap 0
+
+log T5: walk, clock 1
+track 3
+stick 0 32000 1000
+wait 1500
+log T5: walk, clock 0.5
+cvar pd_probe_slow_clock 0.5
+stick 0 32000 1000
+wait 1500
+track off
+cvar pd_probe_slow_clock 1
+give 20                      # Reaper
+equip 20
+wait 3000
+log T5: Reaper 1 s, clock 1
+look 0 80
+trig 0 255 1000
+wait 1500
+log T5: Reaper 1 s, clock 0.5
+cvar pd_probe_slow_clock 0.5
+trig 0 255 1000
+wait 1500
+cvar pd_probe_slow_clock 1
+equip 1
+wait 1000
+tp near Zqhost 300
+signal client-clock-done
+waitsignal host-done 1 120
+pos end
+log research-push: client done
