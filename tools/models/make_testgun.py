@@ -97,8 +97,10 @@ def prism(cx, cy, r, z0, z1, uv, sides=8):
         ua, ub = u0 + (u1 - u0) * i / sides, u0 + (u1 - u0) * (i + 1) / sides
         tris.append([((ax, ay, z0), n, (ua, v1)), ((bx, by, z0), n, (ub, v1)), ((bx, by, z1), n, (ub, v0))])
         tris.append([((ax, ay, z0), n, (ua, v1)), ((bx, by, z1), n, (ub, v0)), ((ax, ay, z1), n, (ua, v0))])
-        for z, nz in ((z0, -1.0), (z1, 1.0)):
-            tris.append([((cx, cy, z), (0, 0, nz), (u0, v0)), ((ax, ay, z), (0, 0, nz), (u0, v1)), ((bx, by, z), (0, 0, nz), (u1, v1))])
+        # The caps, counter-clockwise seen from outside (glTF's front): the far cap (+z)
+        # goes a -> b, the near cap (-z) b -> a.
+        tris.append([((cx, cy, z1), (0, 0, 1.0), (u0, v0)), ((ax, ay, z1), (0, 0, 1.0), (u0, v1)), ((bx, by, z1), (0, 0, 1.0), (u1, v1))])
+        tris.append([((cx, cy, z0), (0, 0, -1.0), (u0, v0)), ((bx, by, z0), (0, 0, -1.0), (u1, v1)), ((ax, ay, z0), (0, 0, -1.0), (u0, v1))])
     return tris
 
 

@@ -121,7 +121,10 @@ def to_glb(path, out, textures_dir):
                     joints += bytes(js); weights += struct.pack('<4f', *(w / total for w in ws))
                 attrs['JOINTS_0'] = accessor(bytes(joints), 5121, len(vs), 'VEC4')
                 attrs['WEIGHTS_0'] = accessor(bytes(weights), 5126, len(vs), 'VEC4')
-            idx = b''.join(struct.pack('<H', local[i]) for i in src)
+            # The game's triangles are clockwise seen from the front; glTF's (and Blender's)
+            # are counter-clockwise: each triangle's last two corners swap.
+            flipped = [src[t + j] for t in range(0, len(src), 3) for j in (0, 2, 1)]
+            idx = b''.join(struct.pack('<H', local[i]) for i in flipped)
             prims.append({'attributes': attrs, 'indices': accessor(idx, 5123, len(src), 'SCALAR'), 'material': material(s)})
         meshes.append({'name': f'g{g}_bone{bone}', 'primitives': prims})
         node = {'name': f'g{g}_bone{bone}', 'mesh': len(meshes) - 1}

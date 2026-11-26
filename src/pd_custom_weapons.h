@@ -338,10 +338,13 @@ inline uint32_t BuildPickupNames(uint8_t* base, Alloc alloc) {
   while (LoadU32(base, kPickupNames + rows * kPickupNameRowSize) != 0 && rows < 1000) ++rows;
   const uint32_t table = alloc((rows + uint32_t(kCount) + 1) * kPickupNameRowSize);
   if (!table) return 0;
-  std::memcpy(base + table, base + kPickupNames, rows * kPickupNameRowSize);
+  // The custom rows go FIRST: the game's lookup (sub_8220C0F0) takes the first row with
+  // the weapon's number, and a borrowed number may have a row of its own already (0x50,
+  // the necklace, whose text is the Detonator Crossbow's name).
+  std::memcpy(base + table + uint32_t(kCount) * kPickupNameRowSize, base + kPickupNames, rows * kPickupNameRowSize);
   for (int i = 0; i < kCount; ++i) {
     const Weapon& w = kList[i];
-    const uint32_t row = table + (rows + uint32_t(i)) * kPickupNameRowSize;
+    const uint32_t row = table + uint32_t(i) * kPickupNameRowSize;
     std::memset(base + row, 0, kPickupNameRowSize);
     for (uint32_t r = 0; r < rows; ++r) {
       if (LoadU32(base, kPickupNames + r * kPickupNameRowSize) == w.base) {
@@ -354,6 +357,16 @@ inline uint32_t BuildPickupNames(uint8_t* base, Alloc alloc) {
     pd::weapons::StoreU16(base, row + 6, 0);
   }
   std::memset(base + table + (rows + uint32_t(kCount)) * kPickupNameRowSize, 0, kPickupNameRowSize);  // the end row
+  // What the game's first-match lookup will find for each custom weapon (its own text).
+  for (int i = 0; i < kCount; ++i) {
+    for (uint32_t r = 0; r < rows + uint32_t(kCount); ++r) {
+      const uint32_t row = table + r * kPickupNameRowSize;
+      if (LoadU32(base, row) != kList[i].number) continue;
+      REXLOG_INFO("[custom] weapon 0x{:02X} ({}): pickup message text 0x{:04X}", kList[i].number, kList[i].name,
+                  (base[row + 4] << 8) | base[row + 5]);
+      break;
+    }
+  }
   return table;
 }
 

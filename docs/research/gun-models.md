@@ -230,3 +230,7 @@ Callers:
   - a floor pickup drawn with the gun's model and stripes;
   - the real Falcon 2 unchanged, in first and third person.
 - **Online:** each PC loads its own override files. The host sends a fingerprint (blob `GUNM`: count + FNV-1a), and a joined PC logs whether it matches ("the host has the same override files").
+
+## 12. After your first hands-on (2026-11-26)
+- **Triangle winding:** the game's meshes are **clockwise** seen from the front (Falcon 0x9E5: 1076 of 1076 triangles) and it culls the other side; glTF/Blender is counter-clockwise. The first tools copied the order through in both directions. A round trip of a game mesh stayed right, but a mesh made outside the game (the Test Gun) drew inside-out ("open" boxes). `xblamesh.py glb` and `glb2xbla.py` now swap each triangle's last two corners. After the fix the round trip is still identical, the Test Gun's meshes are all clockwise, and it draws as closed boxes.
+- **Pickup message:** a borrowed weapon number can already have its own row in the game's pickup-name table (0x50, the necklace, whose text 0x4CE6 is the Detonator Crossbow's name), and the game's lookup (`sub_8220C0F0`) takes the first match. The custom rows now come first; the log lists the text each custom weapon gets.

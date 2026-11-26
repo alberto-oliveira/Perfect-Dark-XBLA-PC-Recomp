@@ -171,7 +171,9 @@ def build(gltf, buffers, template_mesh):
                 else:
                     skin_data = ((rigid_bone,) * 3, (1.0, 0.0), 1)
                 verts.append((tuple(p), tuple(uv[i]), n, argb, skin_data))
-            tris = [tuple(verts[idx[k + j]] for j in range(3)) for k in range(0, len(idx) - 2, 3)]
+            # glTF triangles are counter-clockwise seen from the front, the game's clockwise
+            # (it culls the other side): each triangle's last two corners swap.
+            tris = [tuple(verts[idx[k + j]] for j in (0, 2, 1)) for k in range(0, len(idx) - 2, 3)]
             per_group[g].append((mat, tris))
     return per_group, warnings
 

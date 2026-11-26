@@ -14,7 +14,8 @@
 #                   u16 texture number (bit 15: likely the translucent pass)}
 #   vertices: skinned 48 bytes {f32 x,y,z; f32 u,v; f32 nx,ny,nz; u8 a,r,g,b; f32 w0, w1;
 #             u8 bone0, bone1, bone2, bone count}; unskinned 36 bytes (no weights/bones)
-#   indices: u16, three per triangle, to the end of the file
+#   indices: u16, three per triangle, to the end of the file; triangles are CLOCKWISE seen
+#            from the front (the game culls the other side; glTF is counter-clockwise)
 import struct
 
 
