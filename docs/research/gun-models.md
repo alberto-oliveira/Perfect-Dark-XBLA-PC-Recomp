@@ -166,3 +166,65 @@ Callers:
   - 1026 empty PackedSegFile entries (e.g. 0x271-0x276) can hold new files.
   - There are no free texture records, so a custom texture must take over a slot that matches don't use.
   - 0x5B is WEAPON_MPSHIELD and 0x5C WEAPON_DISABLED (not free). The proof weapon borrows the solo-only item number 0x50 (the necklace; its name text is already used by the Detonator Crossbow).
+
+## 6. Tools for the round trip (step 2)
+- `tools/models/xbla_format.py` reads and writes the mesh format. All 569 XBLA mesh files in the game re-write byte-identical.
+- **Vertices are truly skinned:** up to 3 bones and 2 stored weights (the third is 1 - w0 - w1); the order of a vertex's bones doesn't matter.
+  - The bone matrices are **inverse bind matrices**: Falcon 2 bone 33 = translation (-0.63, 10.8, -4.27), so its joint is at (0.63, -10.8, 4.27), inside the body.
+  - Positions are model space.
+- `xblamesh.py glb` writes what Blender imports as an armature:
+  - joints `bone_<n>` (one per N64 matrix), with the inverse bind matrices kept;
+  - one object per group, `g<group>_bone<b>`; vertices keep JOINTS_0/WEIGHTS_0 and COLOR_0;
+  - materials `tex_<XXXX>[_e<strength>_m<env map>][_xlu]`.
+- `glb2xbla.py` takes a glTF back, as Blender writes one:
+  - indexed or not, any index size, strided accessors, node transforms for rigid objects, `.001` suffixes;
+  - objects without a skin are rigid on the bone in their name;
+  - it writes the mesh and a copy of the template N64 file with its GUNDL links pointed at the new mesh id.
+- **R1 passed:**
+  - Offline: Falcon 2, Mauler and third-person Falcon meshes come back with the same triangles per sub-mesh. Exact duplicate vertices are merged (2242 -> 1358 on the Falcon).
+  - In game: the Falcon 2 drawn from the round-tripped meshes under the **new, previously empty ids 0x271/0x272** looks identical on both PCs. The override writes their sizes into the table (0 -> 73892).
+
+## 7. Reflection strength (R2)
+- Every sub-mesh with its strength byte at 0, then 255 (shipped: 60):
+  - 0 = flat matte grey;
+  - 255 = much brighter, almost white, with a bluish reflection on the edges.
+- Confirms the byte as the env-map strength. `glb2xbla` takes it from the material name (`_e60_m0` is the Falcon's metal).
+
+## 8. Mips and taking over a texture slot (R3, R4)
+- `texpack.py` writes full mip chains: 2x2-averaged levels, placed like the SDK's texture layout. The layout was checked against the original 0x14D1: levels 1-4 at 131072/163840/172032/180224, a packed tail from level 5 at 188416, total 196608.
+- **R3 passed:** a checkerboard on the third-person Falcon texture 0xF93.
+  - At 700 units both versions still show the base level.
+  - At 1500 units, with our mips the gun is pink; with only the base replaced it is grey (the old mips). The generated mips are the ones drawn far away.
+- **Slot takeover** (`tex_XXXX.hdr`: u32 size + a donor's 52-byte D3D header, written by `texpack.py --slot <donor>`):
+  - it is applied right after Textures.raw opens (`0x8224B84C`), only to streamed slots;
+  - **gotcha:** the loader passes the record's size field to XMemDecompress *by pointer*, which writes back the OLD inflated size. The serve hook therefore uses the slot's size and writes it back each time.
+- **R4 passed:** slot 0xD01 (a 32x48 8888 panel never loaded in an MP match) became a 256x256 DXT1 with mips (12288 -> 65536 bytes) and drew correctly.
+  - Slot choice: a TEMP log of every texture a match loads (874 on the test arena); 2010 streamed slots from 0xD00 up were never loaded there.
+  - Checking every arena is left for the mod.
+
+## 9. Third person and pickup (R5, inside R1/R7)
+- Third-person meshes are unskinned (36-byte vertices, 1 group, bone 0). The same writer handles them; the third-person template is 0x348 -> 0x842.
+- Mapping from the first-person mesh: `tp = (-(z - 7.9) * 8.5 + 11, -(x + 1.5) * 8.5 + 5, (y + 10.55) * 8.5 - 28.5)` (muzzle along -x, up +z, about 8.5x larger). That is good enough for a proof; a real gun should get a hand-placed third-person model.
+- **The pickup uses the same model** as the third person (MP table entry `+6`).
+
+## 10. Size limits (R6)
+- First-person test-gun meshes of 9072, 29808 and 65448 vertices (0.4/1.4/3.1 MB of vertex data, up to 32320 triangles) all registered and drew on both PCs, with equip, fire, reload and switch, and no crash.
+- **The only limit found is the format's: 65535 vertices per mesh (u16 indices).** The original guns use 1000-2300.
+
+## 11. The proof: a new weapon with its own model (R7)
+- `tools/models/make_testgun.py` scripts a gun of boxes and prisms on the Falcon 2's bones: frame/grip 33, hammer 37, slide 40 with a fin and a longer barrel, magazine 38 sticking out, reload magazine 41, silencer 33 in group 4. It has its own 256x256 texture (stripes, "TEST"), and a third-person version.
+- Pipeline:
+  - `glb2xbla` -> first-person N64 file 0x273 + mesh 0x274, third-person 0x275 + mesh 0x276 (all free archive ids);
+  - `texpack --slot 11` -> slot 0xD01.
+- **Registry** (`pd_custom_weapons.h`):
+  - new fields `model_hi/model_lo` (the definition's first-person files) and `model_number/model_file`;
+  - a borrowed model number for third person and pickup: 0xF6, MODEL_CHRLEEGUN1, a beta gun whose `g_ModelStates` file id becomes 0x275;
+  - the third-person hook (`sub_821F4C68`) returns that model number for the weapon;
+  - own models apply only when their files are loaded, otherwise the weapon looks like its look weapon.
+- The Test Gun: weapon 0x50 (the necklace's number), base and look Falcon 2, table index 49, name "Test Gun" on text 0x4CE2.
+- **R7 passed** (2 copies, scenario `testgun`):
+  - first person (HUD "TEST GUN"; idle, fire, reload with its own magazine in the hand, switch away and back);
+  - the other PC's view of the held gun;
+  - a floor pickup drawn with the gun's model and stripes;
+  - the real Falcon 2 unchanged, in first and third person.
+- **Online:** each PC loads its own override files. The host sends a fingerprint (blob `GUNM`: count + FNV-1a), and a joined PC logs whether it matches ("the host has the same override files").

@@ -105,6 +105,12 @@ void PdHookLogMeshRegister(PPCRegister& r4, PPCRegister& r5) {
   pd::fileoverride::LogMeshRegister(HookBase(), r4.u32, r5.u32);
 }
 
+// sub_8224B828 right after `bl sub_82262D60` opened Textures.raw: texture slots from
+// tex_XXXX.hdr files get their new size and D3D header.
+void PdHookTextureSlots() {
+  pd::fileoverride::PatchTextureSlots(HookBase());
+}
+
 // Right after the texture manager inflated a texture into GPU memory: streamed
 // textures (sub_82263470, r29 = texels) and resident ones at start-up (sub_82262D60,
 // r28 = texels); r30 = texture number * 52 in both. Loose texels go over it.
@@ -770,12 +776,19 @@ void PdHookCustomAsBase(PPCRegister& weapon) {
   weapon.u64 = pd::custom::AsBase(weapon.u32);
 }
 
-// A check that asks "which model is this weapon drawn with?" (the third-person
-// model, sub_821F4C68): a custom weapon's number becomes its look weapon's
-// (the Ricochet Laser is drawn as a Mauler), or its base weapon's.
-void PdHookCustomAsLook(PPCRegister& weapon) {
-  if (!pd::custom::IsCustom(weapon.u32)) return;
+// "Which model is this weapon drawn with?" (the third-person model, sub_821F4C68,
+// which returns a model number in r3): a custom weapon with a model of its own
+// answers with it at once (true: the function returns); any other custom weapon's
+// number becomes its look weapon's (the Ricochet Laser is drawn as a Mauler), or
+// its base weapon's, and the game's table answers.
+bool PdHookCustomAsLook(PPCRegister& weapon) {
+  if (!pd::custom::IsCustom(weapon.u32)) return false;
+  if (const uint32_t model = pd::custom::OwnModelNumber(weapon.u32)) {
+    weapon.u64 = model;
+    return true;
+  }
   weapon.u64 = pd::custom::AsLook(weapon.u32);
+  return false;
 }
 
 // The primary/secondary bit of the current weapon, at `srawi rD,rS,3` where rS =

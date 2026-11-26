@@ -1,0 +1,70 @@
+# Scenario "testgun" (custom gun models phase 2, test R7): 2 copies, started with
+# -ExtraArgs pd_file_override and the test gun's files in game\DataFiles\override
+# (tools/models/make_testgun.py -> glb2xbla.py / texpack.py). Runs after lobby-host.txt.
+# The host's extra weapon slots are all the Test Gun (custom weapon 0x50, table index
+# 49), so its pickups lie around the stage. The host holds the Test Gun (first person:
+# idle, firing, reloading, after a switch away and back); the client holds a real
+# Falcon 2 (which must look unchanged), and each looks at the other's gun.
+
+cvar pd_mp_weapons 49,49,49,49,49,49,49,49,49,49
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start
+waitmenu none 60
+wait 4000
+look 0 -20
+wait 200
+shot testgun-host-around-0     # pickups on the floor, if any are in view
+look 90 -20
+wait 200
+shot testgun-host-around-90
+look 180 -20
+wait 200
+shot testgun-host-around-180
+look 270 -20
+wait 200
+shot testgun-host-around-270
+give 0x50
+equip 0x50
+wait 2500
+look 0 0
+wait 300
+shot testgun-host-idle
+signal host-armed
+waitsignal placed 1 60
+wait 500
+face Zqclient
+wait 300
+shot testgun-host-sees-client  # the client's real Falcon 2, third person
+signal host-looked
+waitsignal client-looked 1 60
+look 0 -60
+wait 300
+trig 0 255 100
+wait 40
+shot testgun-host-fire
+wait 400
+trig 0 255 100
+wait 400
+trig 0 255 100
+wait 600
+btn x                          # reload
+wait 350
+shot testgun-host-reload
+wait 2000
+log testgun: switch away and back
+equip 2
+wait 2500
+look 0 0
+wait 300
+shot testgun-host-real-falcon  # the real Falcon 2 in first person: unchanged
+equip 0x50
+wait 2500
+look 0 0
+wait 300
+shot testgun-host-back
+face Zqclient
+signal host-done
+wait 3000
+log testgun: host done

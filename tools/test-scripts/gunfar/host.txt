@@ -1,0 +1,27 @@
+# Scenario "gunfar" (custom gun models phase 2, tests R3/R4): 2 copies, started with
+# -ExtraArgs pd_file_override. Runs after lobby-host.txt. The host holds a Falcon 2 and
+# faces the client, who takes screenshots of the host's third-person gun from 250, 700
+# and 1500 units: far views use the texture's smaller mip levels.
+
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start
+waitmenu none 60
+wait 5000
+give 2
+equip 2
+wait 2000
+signal host-armed
+waitsignal placed-250 1 60
+face Zqclient
+signal host-facing-1
+waitsignal placed-700 1 60
+face Zqclient
+signal host-facing-2
+waitsignal placed-1500 1 60
+face Zqclient
+signal host-facing-3
+waitsignal client-done 1 60
+shot far-host-end
+log gunfar: host done

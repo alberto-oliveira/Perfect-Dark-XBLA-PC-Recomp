@@ -15,6 +15,10 @@ Tools for getting gun models and textures out of the game's data files, and chan
 | `patch_model.py <in> <out> [--scale\|--offset PART x y z] [--n64-render] [--pad N]` | Edits an N64 model file in place (test edits; `--n64-render` drops the links to XBLA's meshes so the N64 display lists draw). |
 | `xblamesh.py info\|glb\|scale ...` | XBLA's remastered gun meshes (the ones the game actually draws): header and sub-meshes, `.glb` export with the HD texture, and a test edit (scale one bone's vertices). |
 | `texpack.py <Textures.raw> <number> <image.png\|--checker> -o tex_XXXX.bin` | A PNG at the texture's stored size -> replacement texels for `override\tex_XXXX.bin` (DXT1, DXT5, tiled 8888; base level only). |
+| `texpack.py ... --slot <donor>` | Takes over texture slot `<number>` with the donor's format and size (e.g. `--slot 11`, a 256x256 DXT1): also writes `tex_XXXX.hdr`. Mip levels are made unless `--no-mips`. |
+| `xbla_format.py` | Reads and writes XBLA mesh files (used by the tools below). |
+| `glb2xbla.py <gun.glb> --template-n64 <file> --template-mesh <file> --mesh-id <hex> --file-id <hex> -o <dir>` | A Blender export -> an XBLA mesh file plus a copy of the template N64 model file linked to it. |
+| `make_testgun.py <dir>` | The scripted proof gun (`testgun.glb`, `testgun_tp.glb`, `testgun.png`). |
 
 Notes on what Blender shows:
 - The model is in its rest pose. Part 42 is the magazine; part 43 is the reload magazine, which animations move with the hand (on the Mauler it sits beside the gun).
@@ -40,3 +44,13 @@ python -I tools\models\model2gltf.py C:\pd-unpack\files\file_0377.bin -o C:\pd-u
 ```
 
 Keep the extracted files outside the repository: they are the game's data.
+
+## Making a gun (the workflow proven by the proof gun)
+
+1. **Start from a gun:** `xblamesh.py glb file_09E5.bin -o falcon2.glb --textures <png dir>` (the Falcon 2's first-person mesh; `gunindex.py` and the GUNDL links of the N64 file name the others). In Blender this is an armature (`bone_<n>`) and one object per group (`g<group>_bone<b>`).
+2. **Model:** change or replace the objects. Keep the group number at the start of each object's name; a group is a part the game shows or hides (Falcon 2: g0 frame and slide, g1 magazine, g2 reload magazine held by the hand, g3 slide, g4 silencer). Either keep the armature weights, or use rigid objects named `g<group>_bone<n>`: each one moves with bone n. The first-person view is about 1/10 of the N64's units, with the muzzle along +z.
+3. **Texture:** name each material `tex_<XXXX>` (+ `_e<0-255>_m0` for shiny metal, the Falcon's is `_e60_m0`). Use a texture slot nobody needs: `texpack.py Textures.raw <slot> gun.png --slot <donor> -o tex_<slot>.bin`, with a donor of the size and format you want (`textures.json` lists them).
+4. **Export** glTF 2.0 (.glb) from Blender, then:
+   `glb2xbla.py gun.glb --template-n64 file_039C.bin --template-mesh file_09E5.bin --mesh-id 274 --file-id 273 -o out`
+   (free ids: any empty PackedSegFile entry, e.g. 0x271-0x276, below 0x1000). Do the same for the third-person mesh with the templates `file_0348.bin` / `file_0842.bin` (unskinned, one group, muzzle along -x, about 8.5x larger).
+5. **Serve:** copy `out\*` and the texture files into `game\DataFiles\override\` on every PC, run with `pd_file_override = true`, and give the custom weapon its files in `src/pd_custom_weapons.h` (`model_hi`, `model_lo`, `model_number`, `model_file`). A joined PC logs whether it has the host's files.

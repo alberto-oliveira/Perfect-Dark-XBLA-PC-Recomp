@@ -81,7 +81,11 @@ def header(raw_head, n, number):
     return {'number': number, 'width': (fc[2] & 0x1FFF) + 1, 'height': (fc[2] >> 13 & 0x1FFF) + 1,
             'n64_width': struct.unpack('>I', rec[12:16])[0], 'n64_height': struct.unpack('>I', rec[16:20])[0],
             'format': fc[1] & 0x3F, 'endian': fc[1] >> 6 & 3, 'tiled': fc[0] >> 31,
-            'pitch': (fc[0] >> 22 & 0x1FF) * 32, 'swizzle': fc[3] >> 1 & 0xFFF}
+            'pitch': (fc[0] >> 22 & 0x1FF) * 32, 'swizzle': fc[3] >> 1 & 0xFFF,
+            # mips: highest level (dword 4 bits 6-9), packed tail (dword 5 bit 11), and where
+            # the mips start, relative to the texture's data (dword 5 bits 12-31, 4 KB pages)
+            'mip_max': fc[4] >> 6 & 0xF, 'packed_mips': fc[5] >> 11 & 1, 'mip_offset': (fc[5] >> 12) << 12,
+            'size': struct.unpack('>I', rec[20:24])[0]}
 
 
 def decode(info, data):

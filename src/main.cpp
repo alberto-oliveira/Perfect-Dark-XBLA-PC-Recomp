@@ -1368,6 +1368,52 @@ void PdFileOverrideStartup() {
   pd::fileoverride::Load(folder, REXCVAR_GET(pd_file_override));
 }
 
+// Each frame (game thread): every PC in a match must have the same override files
+// (custom gun models are drawn from them on every PC). The host sends its files'
+// fingerprint (blob "GUNM": u32 count, u32 hash); a joined PC compares it twice a
+// second and logs once whenever the answer changes. Nothing is blocked: a PC with
+// other files just draws other models.
+namespace {
+bool gunm_hosting = false;
+int gunm_poll_frames = 0;
+int gunm_last_result = -1;  // -1 unknown, 0 same, 1 different, 2 host sent nothing
+constexpr uint32_t kGunmBlobKey = 0x47554E4D;  // "GUNM"
+}  // namespace
+
+void PdFileOverrideNetFrame() {
+  namespace netplay = rex::kernel::xam::netplay;
+  const auto& s = pd::fileoverride::Get();
+  if (!s.enabled) return;
+  const uint8_t mine[8] = {uint8_t(s.count >> 24), uint8_t(s.count >> 16), uint8_t(s.count >> 8), uint8_t(s.count),
+                           uint8_t(s.fingerprint >> 24), uint8_t(s.fingerprint >> 16), uint8_t(s.fingerprint >> 8),
+                           uint8_t(s.fingerprint)};
+  if (netplay::IsHostingSession()) {
+    if (!gunm_hosting) {
+      netplay::SetHostBlob(kGunmBlobKey, mine, sizeof(mine));
+      REXLOG_INFO("[gunmodel] hosting: override fingerprint {:08X} ({} files) sent", s.fingerprint, s.count);
+      gunm_hosting = true;
+    }
+    return;
+  }
+  gunm_hosting = false;
+  if (!netplay::IsJoinedSession() || ++gunm_poll_frames % 30 != 0) return;
+  netplay::HostBlob blob;
+  int result = 2;
+  if (netplay::LatestHostBlob(kGunmBlobKey, &blob) && blob.data.size() >= sizeof(mine)) {
+    result = std::memcmp(blob.data.data(), mine, sizeof(mine)) == 0 ? 0 : 1;
+  }
+  // The host's fingerprint can arrive a moment after joining: "nothing sent" only counts
+  // after 5 seconds of polls.
+  if (result == 2 && gunm_poll_frames < 300) return;
+  if (result != gunm_last_result) {
+    if (result == 0) REXLOG_INFO("[gunmodel] joined: the host has the same override files ({:08X})", s.fingerprint);
+    else if (result == 1) REXLOG_WARN("[gunmodel] joined: the host's override files DIFFER from this PC's: custom guns "
+                                      "may look different here");
+    else REXLOG_WARN("[gunmodel] joined: the host sent no override fingerprint (no override files there?)");
+    gunm_last_result = result;
+  }
+}
+
 REXCVAR_DEFINE_INT32(pd_rico_beam_width, 200, "PerfectDark",
                      "The Ricochet Laser's beam width, in percent of the Laser's (a red beam looks thinner)");
 
@@ -2557,6 +2603,7 @@ void PdNoteGameFrame(uint8_t* base) {
   PdCustomInstall(base);
   PdXbowNetFrame();
   PdRicoFrame();
+  PdFileOverrideNetFrame();
   PdMpMusicFrame(base);
   PdWeaponsFrame();
   PerfectDarkApp::NoteGameStage(

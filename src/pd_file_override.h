@@ -30,8 +30,16 @@
 namespace pd::fileoverride {
 
 inline constexpr uint32_t kTablePointer = 0x82652B24;  // u32: the archive's entry table
-// The texture manager (0x82655BE0): +2864 = its 4J records (52 bytes, +20 inflated size).
+// The texture manager (0x82655BE0): +2864 = its 4J records (52 bytes, +20 inflated size,
+// u16 +50 state: 1 resident, 2 requested, 3 loaded), +2872 = the D3D headers the GPU
+// uses (52 bytes), +2876 = their pristine copy (copied back before every load).
 inline constexpr uint32_t kTextureRecords = 0x82655BE0 + 2864;
+inline constexpr uint32_t kTextureHeaders = 0x82655BE0 + 2872;
+inline constexpr uint32_t kTextureHeadersPristine = 0x82655BE0 + 2876;
+// A texture slot file (tex_XXXX.hdr, tools/models/texpack.py --slot): u32 data size, then
+// a 52-byte D3D texture header (its base/mip addresses as offsets from the data, as in
+// Textures.raw). It turns texture XXXX into a different size or format.
+inline constexpr size_t kSlotHeaderSize = 4 + 52;
 
 // Textures work the same way: assets\DataFiles\override\tex_XXXX.bin (XXXX = texture
 // number) holds texel data in the texture's own Xenos layout (tools/models/texpack.py
@@ -44,7 +52,9 @@ struct State {
   bool enabled = false;
   std::map<uint32_t, std::vector<uint8_t>> files;     // file id -> contents
   std::map<uint32_t, std::vector<uint8_t>> textures;  // texture number -> texels
+  std::map<uint32_t, std::vector<uint8_t>> texture_slots;  // texture number -> new size + D3D header
   uint32_t patched_table = 0;                      // the table PatchTable last wrote to
+  uint32_t fingerprint = 0, count = 0;             // of the loaded files (online check)
   std::mutex mutex;                                // hooks run on loader threads too
 };
 
@@ -72,22 +82,44 @@ inline void Load(const std::filesystem::path& folder, bool enabled) {
   std::error_code ec;
   for (const auto& entry : std::filesystem::directory_iterator(folder, ec)) {
     const std::string name = entry.path().filename().string();
+    const std::string ext = entry.path().extension().string();
+    // sscanf stops matching after the number (it doesn't check what follows), so the
+    // extension is compared on its own.
     unsigned id = 0;
-    const bool is_file = std::sscanf(name.c_str(), "file_%x.bin", &id) == 1 && id != 0;
-    const bool is_texture = !is_file && std::sscanf(name.c_str(), "tex_%x.bin", &id) == 1;
-    if (!is_file && !is_texture) continue;
+    const bool is_file = ext == ".bin" && std::sscanf(name.c_str(), "file_%x", &id) == 1 && id != 0;
+    const bool is_texture = !is_file && ext == ".bin" && std::sscanf(name.c_str(), "tex_%x", &id) == 1;
+    const bool is_header = ext == ".hdr" && std::sscanf(name.c_str(), "tex_%x", &id) == 1;
+    if (!is_file && !is_texture && !is_header) continue;
     FILE* f = _wfopen(entry.path().c_str(), L"rb");
     if (!f) continue;
     std::vector<uint8_t> data(size_t(std::filesystem::file_size(entry.path(), ec)));
     const size_t got = std::fread(data.data(), 1, data.size(), f);
     std::fclose(f);
     if (got != data.size() || data.empty()) continue;
-    REXLOG_INFO("[gunmodel] override: {} 0x{:04X} from {} ({} bytes)", is_file ? "file" : "texture", id, name,
-                data.size());
+    REXLOG_INFO("[gunmodel] override: {} 0x{:04X} from {} ({} bytes)",
+                is_file ? "file" : is_texture ? "texture" : "texture slot", id, name, data.size());
+    if (is_header) {
+      if (data.size() == kSlotHeaderSize) s.texture_slots[id] = std::move(data);
+      continue;
+    }
     (is_file ? s.files : s.textures)[id] = std::move(data);
   }
-  REXLOG_INFO("[gunmodel] override: {} loose files and {} textures in {}", s.files.size(), s.textures.size(),
-              folder.string());
+  // A fingerprint of everything loaded (FNV-1a over each name and its bytes, in id order):
+  // every PC in a match needs the same files, and the host's is compared (main.cpp, "GUNM").
+  uint32_t hash = 2166136261u;
+  auto mix = [&](const uint8_t* p, size_t n) {
+    for (size_t i = 0; i < n; ++i) hash = (hash ^ p[i]) * 16777619u;
+  };
+  for (auto* group : {&s.files, &s.textures, &s.texture_slots}) {
+    for (const auto& [id, data] : *group) {
+      mix(reinterpret_cast<const uint8_t*>(&id), sizeof(id));
+      mix(data.data(), data.size());
+    }
+  }
+  s.fingerprint = hash;
+  s.count = uint32_t(s.files.size() + s.textures.size() + s.texture_slots.size());
+  REXLOG_INFO("[gunmodel] override: {} loose files, {} textures, {} texture slots in {} (fingerprint {:08X})",
+              s.files.size(), s.textures.size(), s.texture_slots.size(), folder.string(), s.fingerprint);
 }
 
 // Step 1: the loose files' sizes into the game's entry table (once per table).
@@ -133,17 +165,64 @@ inline void LogMeshRegister(uint8_t* base, uint32_t data, uint32_t file_id) {
               file_id & 0xFFF, verts, subs, bones, index_offset - LoadBE32(base, data + 4));
 }
 
+// Right after Textures.raw is opened (its records and headers are in memory, resident
+// textures already loaded): give each tex_XXXX.hdr slot its new size and D3D header, so
+// the streaming loader allocates the new size and the GPU reads the new format. Only
+// streamed slots (state 0) can change: a resident one was loaded at its old size.
+inline void PatchTextureSlots(uint8_t* base) {
+  State& s = Get();
+  if (!s.enabled || s.texture_slots.empty()) return;
+  std::lock_guard<std::mutex> lock(s.mutex);
+  const uint32_t records = LoadBE32(base, kTextureRecords);
+  const uint32_t headers = LoadBE32(base, kTextureHeaders), pristine = LoadBE32(base, kTextureHeadersPristine);
+  if (!records || !headers || !pristine) return;
+  for (const auto& [number, slot] : s.texture_slots) {
+    const uint32_t record = records + number * 52;
+    const uint16_t state = uint16_t(base[record + 50] << 8 | base[record + 51]);
+    if (state == 1) {
+      REXLOG_WARN("[gunmodel] texture slot 0x{:04X} is resident (loaded at start-up): not changed", number);
+      continue;
+    }
+    uint32_t size;
+    std::memcpy(&size, slot.data(), 4);
+    size = __builtin_bswap32(size);
+    const uint32_t old_size = LoadBE32(base, record + 20);
+    StoreBE32(base, record + 20, size);
+    std::memcpy(base + headers + number * 52, slot.data() + 4, 52);
+    std::memcpy(base + pristine + number * 52, slot.data() + 4, 52);
+    REXLOG_INFO("[gunmodel] texture slot 0x{:04X}: {} -> {} bytes, new header (record 0x{:08X})", number, old_size,
+                size, record);
+  }
+}
+
 // A texture was just inflated into GPU memory: copy the loose texels over its start.
 // `record_offset` = texture number * 52 (the loop's offset into the record arrays);
 // `inflated_size` = the record's size, so a too-big loose file can't overrun.
 inline void ServeTexture(uint8_t* base, uint32_t record_offset, uint32_t texels) {
   State& s = Get();
-  if (!s.enabled || s.textures.empty() || !texels) return;
+  if (!s.enabled || !texels) return;
   std::lock_guard<std::mutex> lock(s.mutex);
-  const uint32_t inflated_size = LoadBE32(base, LoadBE32(base, kTextureRecords) + record_offset + 20);
+  const uint32_t size_field = LoadBE32(base, kTextureRecords) + record_offset + 20;
+  uint32_t inflated_size = LoadBE32(base, size_field);
+  // A taken-over slot: the loader passes the record's size field to XMemDecompress BY
+  // POINTER (`addi r7,r11,20`), which writes back what it inflated: the OLD texture's
+  // size. The memory was allocated with the slot's size, so that is the real limit; the
+  // field gets it back too, so the next load (the texture is unloaded between stages)
+  // allocates enough again.
+  const auto slot = s.texture_slots.find(record_offset / 52);
+  if (slot != s.texture_slots.end()) {
+    uint32_t slot_size;
+    std::memcpy(&slot_size, slot->second.data(), 4);
+    inflated_size = __builtin_bswap32(slot_size);
+    StoreBE32(base, size_field, inflated_size);
+  }
   const uint32_t number = record_offset / 52;
   const auto it = s.textures.find(number);
-  if (it == s.textures.end()) return;
+  if (it == s.textures.end()) {
+    // TEMP_GUNMODEL: every texture the game loads (which slots a match never uses).
+    REXLOG_INFO("[gunmodel] texture 0x{:04X} loaded ({} bytes)", number, inflated_size);
+    return;
+  }
   const size_t n = std::min<size_t>(it->second.size(), inflated_size);
   std::memcpy(base + texels, it->second.data(), n);
   REXLOG_INFO("[gunmodel] served texture 0x{:04X} ({} of {} bytes) to 0x{:08X}", number, n, inflated_size, texels);

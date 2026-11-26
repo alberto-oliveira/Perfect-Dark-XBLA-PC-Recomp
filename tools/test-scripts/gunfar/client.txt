@@ -1,0 +1,31 @@
+# Scenario "gunfar", client: screenshots of the host's third-person Falcon 2 from three
+# distances. Runs after lobby-client.txt.
+
+pick 825FA2F8                # Ready
+signal ready-{copy}
+waitmenu none 120
+wait 3000
+waitsignal host-armed 1 60
+tp near Zqhost 250
+signal placed-250
+waitsignal host-facing-1 1 30
+wait 500
+face Zqhost -5
+wait 300
+shot far-client-250
+tp near Zqhost 700
+signal placed-700
+waitsignal host-facing-2 1 30
+wait 500
+face Zqhost -2
+wait 300
+shot far-client-700
+tp near Zqhost 1500
+signal placed-1500
+waitsignal host-facing-3 1 30
+wait 500
+face Zqhost -1
+wait 300
+shot far-client-1500
+signal client-done
+log gunfar: client done

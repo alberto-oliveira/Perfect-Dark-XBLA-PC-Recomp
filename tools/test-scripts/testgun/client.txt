@@ -1,0 +1,24 @@
+# Scenario "testgun", client: holds a real Falcon 2 and looks at the host's Test Gun.
+# Runs after lobby-client.txt.
+
+pick 825FA2F8                # Ready
+signal ready-{copy}
+waitmenu none 120
+wait 3000
+give 2
+equip 2
+wait 2500
+shot testgun-client-falcon     # the real Falcon 2 in first person
+waitsignal host-armed 1 60
+tp near Zqhost 160
+face Zqhost -10
+wait 400
+shot testgun-client-sees-host  # the host's Test Gun, third person
+signal placed
+waitsignal host-looked 1 60
+signal client-looked
+waitsignal host-done 1 90
+face Zqhost -10
+wait 500
+shot testgun-client-sees-host-end
+log testgun: client done
