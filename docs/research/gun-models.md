@@ -12,7 +12,7 @@ The question: can a gun's model and its textures be taken out of the game, opene
   - an edited XBLA mesh draws (test C);
   - an edited N64 display list draws when its node's XBLA link is dropped (test B);
   - a PNG made into the HD texture's format replaces it (T6).
-- **For custom guns:** model the gun in Blender, then write it into the XBLA mesh format. That format is a plain skinned vertex/index buffer with sub-meshes per texture, so any topology works; give it a texture of its own, and let the N64 file keep the skeleton, parts and animations. What is still missing:
+- **For custom guns:** model the gun in Blender, then write it into the XBLA mesh format. That format is a plain skinned vertex/index buffer with sub-meshes per texture, so any topology works; give it a texture of its own, and let the N64 file keep the skeleton, parts and animations. Phase 2 (sections 5-11 below) answered every item of this list, which is kept as it stood after phase 1, and proved the result with a new weapon that has its own model:
   - the Blender -> XBLA mesh writer: positions, UVs, normals, bone per vertex; sub-mesh flags still to be understood;
   - new file ids, or reusing a borrowed gun's ids, as the custom weapons registry already does for models;
   - mip levels for replaced textures;
