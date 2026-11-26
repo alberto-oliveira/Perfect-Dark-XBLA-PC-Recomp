@@ -12,6 +12,10 @@
 //   loaded"): which texture slots a match never uses (slot takeover, R4);
 // - a log line for every XBLA mesh registered (sub_8226A598): its vertex count and size
 //   (size limits, R6: up to 65448 vertices loaded fine).
+// Scenario tools/debug-bank/gun-models-scenarios/testgun-switch (screenshots every ~100 ms
+// through weapon switches): found that the "Unarmed" over a Falcon 2 the user saw came from
+// the testgun scenario equipping a Falcon 2 the player had not been given (the HUD name is
+// the inventory slot of the held weapon, slot 0 when it is not in the inventory).
 // Where it lived: src/pd_file_override.h (Serve, ServeTexture, LogMeshRegister),
 // src/perfect_dark_hooks.cpp (PdHookLogMeshRegister) and perfect_dark_config.toml (its
 // hook, before "Texture slots").

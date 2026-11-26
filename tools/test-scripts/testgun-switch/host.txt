@@ -1,0 +1,59 @@
+# TEMP_GUNMODEL scenario "testgun-switch": the HUD weapon name while switching to and
+# from custom weapons (the user saw "Unarmed" over a Falcon 2 being put away).
+
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8
+waitmenu none 60
+wait 4000
+give 2
+give 6
+give 0x52
+give 0x50
+equip 2
+wait 2500
+look 0 -10
+wait 300
+log switch falcon-to-mauler
+equip 6
+shot sw2-falcon-to-mauler-0
+wait 100
+shot sw2-falcon-to-mauler-1
+wait 100
+shot sw2-falcon-to-mauler-2
+wait 100
+wait 2500
+log switch mauler-to-testgun
+equip 0x50
+shot sw2-mauler-to-testgun-0
+wait 100
+shot sw2-mauler-to-testgun-1
+wait 100
+shot sw2-mauler-to-testgun-2
+wait 100
+wait 2500
+equip 2
+wait 3000
+log switch falcon-to-carom
+equip 0x52
+shot sw2-falcon-to-carom-0
+wait 100
+shot sw2-falcon-to-carom-1
+wait 100
+shot sw2-falcon-to-carom-2
+wait 100
+wait 2500
+equip 2
+wait 3000
+log switch falcon-to-testgun
+equip 0x50
+shot sw2-falcon-to-testgun-0
+wait 100
+shot sw2-falcon-to-testgun-1
+wait 100
+shot sw2-falcon-to-testgun-2
+wait 100
+wait 2500
+signal host-done
+log testgun-switch: host done

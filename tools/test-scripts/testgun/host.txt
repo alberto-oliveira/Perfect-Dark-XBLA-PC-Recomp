@@ -25,6 +25,8 @@ shot testgun-host-around-180
 look 270 -20
 wait 200
 shot testgun-host-around-270
+give 2                         # the real Falcon 2 too (switching to a weapon the player
+                               # does not have shows "Unarmed" on the HUD)
 give 0x50
 equip 0x50
 wait 2500
