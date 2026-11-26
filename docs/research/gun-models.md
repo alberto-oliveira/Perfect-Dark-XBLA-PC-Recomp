@@ -10,7 +10,7 @@ The question: can a gun's model and its textures be taken out of the game, opene
 - Layout: `u32 count` (2616), then `count` entries of 16 bytes `{offset, size, compressed size, 0xFFFFFFFF}`. File id N = entry N-1.
 - 1627 entries are compressed; **989 are stored as is** (compressed size 0).
 - Compressed entries use **XMemCompress "native" framing**: each chunk is `FF uu uu cc cc` + `cc` bytes (`uu` = inflated size of the chunk), or `cc cc` + `cc` bytes for a full 0x8000-byte chunk. The chunk payloads, joined together, form one LZX stream with a 128 KB window (17 bits).
-- **Offline unpack works.** libmspack's `lzxd.c` (already in `rexglue-sdk/thirdparty/libmspack`) decodes the joined chunks. The crossbow (0x38D), remote mine (0x393) and crossbow-bolt (0x4BA) files come out **byte-identical** to the runtime dumps. The old runtime dump of 0x360 (third-person crossbow) differs only because it was taken after the game had relocated it.
+- **Offline unpack works.** libmspack's `lzxd.c` (already in `rexglue-sdk/thirdparty/libmspack`) decodes the joined chunks. The crossbow (0x38D, and its low-detail 0x4BA) and remote mine (0x393) files come out **byte-identical** to the runtime dumps. The old runtime dump of 0x360 (third-person crossbow) differs only because it was taken after the game had relocated it.
 
 ### Every file load goes through one archive object
 The archive object is at `0x82652968`. Its entry table pointer is at `0x82652B24` (entry i at `table + i*16 - 16`), and its file handle is at `0x82652B2C`.
