@@ -220,7 +220,7 @@ Callers:
   - `texpack --slot 11` -> slot 0xD01.
 - **Registry** (`pd_custom_weapons.h`):
   - new fields `model_hi/model_lo` (the definition's first-person files) and `model_number/model_file`;
-  - a borrowed model number for third person and pickup: 0xF6, MODEL_CHRLEEGUN1, a beta gun whose `g_ModelStates` file id becomes 0x275;
+  - a borrowed model number for third person and pickup, whose `g_ModelStates` file id becomes 0x275: first 0xF6 (MODEL_CHRLEEGUN1), which turned out to be the **MagSec 4's** third-person and pickup model, then **0x111** (MODEL_CHRFLASHBANG, a cut weapon). A safe number is neither a weapon's third-person model (the jump table of `sub_821F4C68` at 0x821F4C88) nor an MP table pickup model (entry `+6`); unused gun-range ones are 0x111 (flashbang) and 0x116 (ECM mine, solo only), the others in that range being projectiles;
   - the third-person hook (`sub_821F4C68`) returns that model number for the weapon;
   - own models apply only when their files are loaded, otherwise the weapon looks like its look weapon.
 - The Test Gun: weapon 0x50 (the necklace's number), base and look Falcon 2, table index 49, name "Test Gun" on text 0x4CE2.

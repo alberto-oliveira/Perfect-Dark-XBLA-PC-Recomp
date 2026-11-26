@@ -82,8 +82,10 @@ struct Weapon {
   // override folder (pd_file_override.h); 0 = the look weapon's:
   //   model_hi / model_lo: the first-person N64 model files (definition +0/+2), copies of
   //   the look weapon's that link the gun's own XBLA mesh (tools/models/glb2xbla.py);
-  //   model_number: a model number multiplayer never shows, borrowed for the third-person
-  //   and pickup model; its g_ModelStates file id becomes model_file.
+  //   model_number: a model number nothing in multiplayer shows, borrowed for the
+  //   third-person and pickup model; its g_ModelStates file id becomes model_file. Check
+  //   it is neither a weapon's third-person model (sub_821F4C68's table) nor an MP table
+  //   pickup model: 0xF6 looked unused but is the MagSec 4's.
   uint16_t model_hi = 0;
   uint16_t model_lo = 0;
   uint16_t model_number = 0;
@@ -109,8 +111,9 @@ inline constexpr Weapon kList[] = {
     // puts its files in the override folder). Number: the necklace's (solo
     // only); name: the text of solo item 0x43 (0x4CE2). Files in the override folder:
     // first person 0x273 (links mesh 0x274), third person 0x275 (links mesh 0x276), shown
-    // with the borrowed model number 0xF6 (MODEL_CHRLEEGUN1, a beta gun).
-    {0x50, 2, 0x4CE2, "Test Gun", 0, 0, 0, 2, 0x273, 0x273, 0xF6, 0x275},
+    // with the borrowed model number 0x111 (MODEL_CHRFLASHBANG: a cut weapon; no weapon
+    // number's third-person model and no multiplayer pickup uses it).
+    {0x50, 2, 0x4CE2, "Test Gun", 0, 0, 0, 2, 0x273, 0x273, 0x111, 0x275},
 };
 constexpr int kCount = int(sizeof(kList) / sizeof(kList[0]));
 static_assert(kFirstSpareFuncBitWeapon + kCount - 1 <= kLastSpareFuncBitWeapon, "no spare function bits left");
