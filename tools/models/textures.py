@@ -145,4 +145,5 @@ def main():
     print(f'{len(index)} textures written to {out_dir}')
 
 
-main()
+if __name__ == '__main__':
+    main()

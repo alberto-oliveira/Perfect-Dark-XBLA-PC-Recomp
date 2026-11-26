@@ -100,6 +100,16 @@ bool PdHookFileOverrideServe(PPCRegister& r27, PPCRegister& r31) {
   return pd::fileoverride::Serve(HookBase(), r31.u32, r27.u32);
 }
 
+// Right after the texture manager inflated a texture into GPU memory: streamed
+// textures (sub_82263470, r29 = texels) and resident ones at start-up (sub_82262D60,
+// r28 = texels); r30 = texture number * 52 in both. Loose texels go over it.
+void PdHookTextureOverrideStreamed(PPCRegister& r29, PPCRegister& r30) {
+  pd::fileoverride::ServeTexture(HookBase(), r30.u32, r29.u32);
+}
+void PdHookTextureOverrideResident(PPCRegister& r28, PPCRegister& r30) {
+  pd::fileoverride::ServeTexture(HookBase(), r30.u32, r28.u32);
+}
+
 // ---- Start-up ---------------------------------------------------------------------
 
 bool PdHookSkipArcadeLogo() {

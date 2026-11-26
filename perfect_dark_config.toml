@@ -30,6 +30,19 @@ name = "PdHookFileOverrideServe"
 registers = ["r27", "r31"]
 jump_address_on_true = 0x82254BB4
 
+# Loose texture texels (tex_XXXX.bin), right after the texture manager inflated a
+# texture: streamed (sub_82263470, after `bl XMemDecompress`; r29 texels) and resident
+# at start-up (sub_82262D60; r28 texels); r30 = texture number * 52.
+[[midasm_hook]]
+address = 0x82263618
+name = "PdHookTextureOverrideStreamed"
+registers = ["r29", "r30"]
+
+[[midasm_hook]]
+address = 0x82262FF4
+name = "PdHookTextureOverrideResident"
+registers = ["r28", "r30"]
+
 # ---- Start-up -----------------------------------------------------------------------
 
 # No Xbox LIVE Arcade logo while the game loads (pd_skip_arcade_logo): its three draws

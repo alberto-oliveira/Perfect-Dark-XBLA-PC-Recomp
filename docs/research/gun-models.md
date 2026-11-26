@@ -1,8 +1,21 @@
 # Gun models: unpack, edit, repack (feasibility research)
 
-Status: step 1 (static research) done, 2026-11-25. Branch `gun-model-research`.
+Status: research done, 2026-11-25 (verdict below). Branch `gun-model-research`.
 
 The question: can a gun's model and its textures be taken out of the game, opened in Blender, changed, and put back so the game uses the changed version? This file collects the answers step by step and ends with a verdict.
+
+## Verdict: yes, with the remastered meshes as the target
+- **Unpack:** every model file and texture extracts offline (`pdunpack`), and converts to glTF/PNG for Blender: the N64 models (`model2gltf.py`), and XBLA's remastered meshes, which are what the game draws (`xblamesh.py glb`).
+- **Repack:** a changed file or texture placed in `game\DataFiles\override` is used instead of the packed one, on every PC (`pd_file_override`). Proven in game on 2 copies:
+  - an edited XBLA mesh draws (test C);
+  - an edited N64 display list draws when its node's XBLA link is dropped (test B);
+  - a PNG made into the HD texture's format replaces it (T6).
+- **For custom guns:** model the gun in Blender, then write it into the XBLA mesh format. That format is a plain skinned vertex/index buffer with sub-meshes per texture, so any topology works; give it a texture of its own, and let the N64 file keep the skeleton, parts and animations. What is still missing:
+  - the Blender -> XBLA mesh writer: positions, UVs, normals, bone per vertex; sub-mesh flags still to be understood;
+  - new file ids, or reusing a borrowed gun's ids, as the custom weapons registry already does for models;
+  - mip levels for replaced textures;
+  - the third-person mesh: unskinned, own texture;
+  - limits: vertex counts, buffer sizes.
 
 ## 1. Where the game's files come from
 
@@ -124,3 +137,14 @@ Callers:
   - Textures are XBLA HD ones (Falcon 2: 0x14D1, 512x512 DXT1).
   - The meaning of `flags`, the small table at `+0x1C`, and 36-byte unskinned vertices are not yet known.
 - **What this means for custom guns:** the remastered mesh is a plain vertex/index buffer, so any Blender mesh can be written into it: new topology and any vertex count, within limits still to be measured. The N64 file stays as the skeleton (joints, parts, matrices) and points to the new mesh.
+
+## 4. Texture replacement (step 6: done)
+- With `pd_file_override`, `override\tex_XXXX.bin` (raw texels in the texture's own Xenos layout) is copied over the texture right after the texture manager inflates it:
+  - streamed textures: `0x82263618`, r29 = texels, r30 = number*52;
+  - resident textures at start-up: `0x82262FF4`, r28;
+  - the size cap is read from the record at `*(0x82655BE0 + 2864) + r30 + 20`.
+- Only the base level is replaced; the smaller mips keep the old image (visible only at a distance).
+- `tools/models/texpack.py` makes the file from a PNG: DXT1/DXT5 with a simple encoder, or tiled 8888; the PNG reader handles all PNG filters. A PNG -> texpack -> textures.py round trip of the Falcon's atlas 0x14D1 matches closely.
+- **T6 passed** (2 copies, read from screenshots): a checkerboard on 0x14D1 shows on the first-person Falcon 2 on both PCs.
+  - The third-person Falcon is unchanged: it is a different mesh (0x842, unskinned 36-byte vertices) with its own texture 0xF93.
+  - Other HD gun textures: Mauler 0x15D7 (mesh 0xA2E), crossbow 0x148A (mesh 0x9D2).

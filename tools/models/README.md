@@ -14,6 +14,7 @@ Tools for getting gun models and textures out of the game's data files, and chan
 | `model2gltf.py <file_XXXX.bin> -o gun.glb [--textures <png dir>]` | Converts a gun model to glTF for Blender: one object per GUNDL node (named with its part number), one material per texture, and empties for the joints. Also writes `gun.json` with the parts, and the file offset of every exported vertex (for a later re-import). |
 | `patch_model.py <in> <out> [--scale\|--offset PART x y z] [--n64-render] [--pad N]` | Edits an N64 model file in place (test edits; `--n64-render` drops the links to XBLA's meshes so the N64 display lists draw). |
 | `xblamesh.py info\|glb\|scale ...` | XBLA's remastered gun meshes (the ones the game actually draws): header and sub-meshes, `.glb` export with the HD texture, and a test edit (scale one bone's vertices). |
+| `texpack.py <Textures.raw> <number> <image.png\|--checker> -o tex_XXXX.bin` | A PNG at the texture's stored size -> replacement texels for `override\tex_XXXX.bin` (DXT1, DXT5, tiled 8888; base level only). |
 
 Notes on what Blender shows:
 - The model is in its rest pose. Part 42 is the magazine; part 43 is the reload magazine, which animations move with the hand (on the Mauler it sits beside the gun).
