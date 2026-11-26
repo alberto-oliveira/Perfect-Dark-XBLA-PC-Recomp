@@ -79,3 +79,15 @@ Callers:
 - Step 4 (loose models) hooks the two archive functions, as planned.
 - Step 6 (texture replace) hooks after the inflate. A DXT texture needs a DXT encoder; an 8888 texture only needs tiling.
 - A second repack route exists, with no hooks: entries can be stored uncompressed, so a rebuilt PackedSegFile with stored entries would load as is. It is not pursued, because it would change the game's data file on every PC; a loose override folder is cleaner.
+
+## 2. Unpack and view (steps 2, 3 and 5: done)
+- `tools/models/pdunpack` extracts all 1590 non-empty packed files and all 5747 textures, in a few seconds. The 9 older runtime dumps match byte for byte.
+- `tools/models/gunindex.py` lists each gun's hi/lo first-person files (weapondef `+0`/`+2`) and their textures.
+- `tools/models/textures.py` writes PNGs (a Python port of the `pd_native_gpu.cpp` decoder). `tools/models/model2gltf.py` writes `.glb` + `.json`. **Test T2 passed** (2026-11-25, Falcon 2, Mauler, crossbow in Blender).
+- Display-list details found on the way:
+  - texture placeholders are `0xC0` with any of several w0 variants (`C0080002`, `C0080003`, `C0880002`, `C0A80002`, `C0580002`, `C0580004`) and w1 = texture number;
+  - a vertex's colour byte is a byte offset into the table the last `0x07` loaded. Lit entries are s8 normals (length ~127); unlit entries are RGBA;
+  - texgen (`0x40000`) surfaces are reflection-mapped;
+  - the opaque pass ignores texture alpha.
+- Parts: 42 magazine, 43 reload magazine (moved with the hand), 90 muzzle flash (4 quads), Falcon 2 45 scope / 47 silencer. All sit under TOGGLE nodes.
+- **Gun textures are N64-resolution in XBLA too** (e.g. 0x323 32x32). Only 1469 of the 5747 textures are stored larger than on N64 (e.g. 0x296: 256x256 for 54x54). Record `+40` links 19 textures to others (0xE93-...), so it is not an HD map.
