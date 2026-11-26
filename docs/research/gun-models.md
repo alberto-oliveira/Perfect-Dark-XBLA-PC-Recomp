@@ -1,6 +1,8 @@
 # Gun models: unpack, edit, repack (feasibility research)
 
-Status: research done, 2026-11-25 (verdict below). Branch `gun-model-research`.
+Status: phase 1 (feasibility) done 2026-11-25; phase 2 (the open questions, and a new weapon with its own model) done 2026-11-26. Branch `gun-model-research`.
+
+The in-game part is mod code: `src/pd_file_override.h` (loose files, texture slots, the host's fingerprint check) and the registry's own-model fields in `src/pd_custom_weapons.h`, with the Test Gun as the proof. The research logs are in `tools/debug-bank/gun-models.cpp`. The offline tools and the Blender workflow are in `tools/models/` (README).
 
 The question: can a gun's model and its textures be taken out of the game, opened in Blender, changed, and put back so the game uses the changed version? This file collects the answers step by step and ends with a verdict.
 
