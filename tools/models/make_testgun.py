@@ -2,6 +2,13 @@
 # export of it would look, so it goes through the same path as a real one (glb2xbla.py).
 #
 #   python -I make_testgun.py <out dir> [--texture D01]
+#   python -I make_testgun.py <out dir> --install <override folder> [--data <DataFiles folder>]
+#
+# --install also runs the whole pipeline and copies the game files into the override
+# folder (e.g. game\DataFiles\override): pdunpack extracts the Falcon 2's templates
+# (0x39C, 0x9E5, 0x348, 0x842) from PackedSegFile, glb2xbla.py writes the gun's files
+# 0x273-0x276, texpack.py takes over texture slot 0xD01. The files come from the game's
+# data, so they are made on each PC rather than shared.
 #
 # Writes <out dir>/testgun.glb (first person, on the Falcon 2's bones), testgun_tp.glb
 # (third person / pickup, one rigid group like the Falcon's 0x842) and testgun.png
@@ -15,7 +22,7 @@
 #   g1 bone 38 magazine          g2 bone 41 reload magazine (moved with the hand)
 #   g4 bone 33 silencer (a part shown only by the silenced Falcon)
 # Third-person mesh space (0x842): muzzle along -x, up +z, about 8.5x larger.
-import json, os, struct, sys, zlib
+import json, os, shutil, struct, subprocess, sys, zlib
 
 # ---- the texture -----------------------------------------------------------------------
 FONT = {'T': ['11111', '00100', '00100', '00100', '00100', '00100', '00100'],
@@ -171,6 +178,35 @@ def main():
     # Third person: everything but the reload magazine and the silencer, as one rigid group.
     tp = [t for name, (_, tris) in parts.items() if name not in ('g2_bone41', 'g4_bone33') for t in tris]
     write_glb(os.path.join(out, 'testgun_tp.glb'), {'g0_bone0': ('_e45_m0', to_third_person(tp))}, texture, png)
+    if '--install' in sys.argv:
+        install(out, sys.argv[sys.argv.index('--install') + 1], texture,
+                sys.argv[sys.argv.index('--data') + 1] if '--data' in sys.argv else None)
+
+
+def install(out, override, texture, data_dir):
+    """The full pipeline: templates out of PackedSegFile, the gun's files, the texture slot."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    data_dir = data_dir or os.path.join(here, '..', '..', 'game', 'DataFiles')
+    run = lambda *args: subprocess.run(list(args), check=True)
+    py = lambda script, *args: run(sys.executable, '-I', os.path.join(here, script), *args)
+    files = os.path.join(out, 'templates')
+    os.makedirs(files, exist_ok=True)
+    unpack = os.path.join(here, 'pdunpack', 'pdunpack.exe')
+    if not os.path.exists(unpack):
+        sys.exit(f'{unpack} is missing: run tools/models/pdunpack/build.bat first')
+    run(unpack, 'pack', os.path.join(data_dir, 'PackedSegFile'), '39C,9E5,348,842', files)
+    game = os.path.join(out, 'game')
+    t = lambda n: os.path.join(files, f'file_{n}.bin')
+    py('glb2xbla.py', os.path.join(out, 'testgun.glb'), '--template-n64', t('039C'), '--template-mesh', t('09E5'),
+       '--mesh-id', '274', '--file-id', '273', '-o', game)
+    py('glb2xbla.py', os.path.join(out, 'testgun_tp.glb'), '--template-n64', t('0348'), '--template-mesh', t('0842'),
+       '--mesh-id', '276', '--file-id', '275', '-o', game)
+    py('texpack.py', os.path.join(data_dir, 'Textures.raw'), texture, os.path.join(out, 'testgun.png'), '--slot', '11',
+       '-o', os.path.join(game, f'tex_{texture}.bin'))
+    os.makedirs(override, exist_ok=True)
+    for name in sorted(os.listdir(game)):
+        shutil.copy(os.path.join(game, name), os.path.join(override, name))
+        print('installed', os.path.join(override, name))
 
 
 main()

@@ -30,12 +30,6 @@ name = "PdHookFileOverrideServe"
 registers = ["r27", "r31"]
 jump_address_on_true = 0x82254BB4
 
-# TEMP_GUNMODEL: log each XBLA mesh as it is registered (sub_8226A598: r4 data, r5 id).
-[[midasm_hook]]
-address = 0x8226A598
-name = "PdHookLogMeshRegister"
-registers = ["r4", "r5"]
-
 # Texture slots (tex_XXXX.hdr: a new size and D3D header for texture XXXX), right after
 # sub_8224B828's `bl sub_82262D60` opened Textures.raw (records and headers in memory).
 [[midasm_hook]]

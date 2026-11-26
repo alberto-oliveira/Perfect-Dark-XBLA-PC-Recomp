@@ -100,11 +100,6 @@ bool PdHookFileOverrideServe(PPCRegister& r27, PPCRegister& r31) {
   return pd::fileoverride::Serve(HookBase(), r31.u32, r27.u32);
 }
 
-// TEMP_GUNMODEL: an XBLA mesh being registered (sub_8226A598: r4 data, r5 file id).
-void PdHookLogMeshRegister(PPCRegister& r4, PPCRegister& r5) {
-  pd::fileoverride::LogMeshRegister(HookBase(), r4.u32, r5.u32);
-}
-
 // sub_8224B828 right after `bl sub_82262D60` opened Textures.raw: texture slots from
 // tex_XXXX.hdr files get their new size and D3D header.
 void PdHookTextureSlots() {

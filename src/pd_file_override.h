@@ -145,24 +145,11 @@ inline bool Serve(uint8_t* base, uint32_t id, uint32_t dest) {
   std::lock_guard<std::mutex> lock(s.mutex);
   const auto it = s.files.find(id);
   if (it == s.files.end() || !dest) {
-    // TEMP_GUNMODEL: which packed files the game reads (e.g. to find a gun's third-person model).
-    REXLOG_INFO("[gunmodel] load file 0x{:04X} (packed) to 0x{:08X}", id, dest);
     return false;
   }
   std::memcpy(base + dest, it->second.data(), it->second.size());
   REXLOG_INFO("[gunmodel] served file 0x{:04X} ({} bytes) to 0x{:08X}", id, it->second.size(), dest);
   return true;
-}
-
-// TEMP_GUNMODEL: an XBLA mesh being registered (sub_8226A598's entry: r4 = the mesh
-// file's data, r5 = its file id): log its id and size, to see which meshes load and
-// how big they are (size limits, phase 2 step 6).
-inline void LogMeshRegister(uint8_t* base, uint32_t data, uint32_t file_id) {
-  if (!Get().enabled || !data) return;
-  const uint32_t verts = LoadBE32(base, data), subs = LoadBE32(base, data + 12), bones = LoadBE32(base, data + 20);
-  const uint32_t index_offset = LoadBE32(base, data + 8);
-  REXLOG_INFO("[gunmodel] mesh 0x{:04X} registered: {} vertices, {} sub-meshes, {} bones, vertex data {} bytes",
-              file_id & 0xFFF, verts, subs, bones, index_offset - LoadBE32(base, data + 4));
 }
 
 // Right after Textures.raw is opened (its records and headers are in memory, resident
@@ -218,11 +205,7 @@ inline void ServeTexture(uint8_t* base, uint32_t record_offset, uint32_t texels)
   }
   const uint32_t number = record_offset / 52;
   const auto it = s.textures.find(number);
-  if (it == s.textures.end()) {
-    // TEMP_GUNMODEL: every texture the game loads (which slots a match never uses).
-    REXLOG_INFO("[gunmodel] texture 0x{:04X} loaded ({} bytes)", number, inflated_size);
-    return;
-  }
+  if (it == s.textures.end()) return;
   const size_t n = std::min<size_t>(it->second.size(), inflated_size);
   std::memcpy(base + texels, it->second.data(), n);
   REXLOG_INFO("[gunmodel] served texture 0x{:04X} ({} of {} bytes) to 0x{:08X}", number, n, inflated_size, texels);
