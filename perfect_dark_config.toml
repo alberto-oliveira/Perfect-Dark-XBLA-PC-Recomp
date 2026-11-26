@@ -8,6 +8,28 @@
 # reference; `return`, `return_on_true` and `jump_address(_on_true)` end the guest
 # function or branch after the call. HANDOVER.md has the history of each change.
 
+# ---- TEMP_GUNMODEL: loose files over packed ones (pd_file_override) ----------------
+
+# The archive's size function (sub_822549A0) and load-to-new-buffer function
+# (sub_82254BE0) both read sizes from the entry table: the loose files' sizes go in
+# first.
+[[midasm_hook]]
+address = 0x822549A0
+name = "PdHookFileOverrideTable"
+
+[[midasm_hook]]
+address = 0x82254BE0
+name = "PdHookFileOverrideTable"
+
+# sub_822549C0 after its prefetch-cache lookup, at the read path (r31 = id, r27 =
+# destination, lock r28 held): a loose file is copied instead, then the function's
+# own "unlock, return 1" exit (0x82254BB4).
+[[midasm_hook]]
+address = 0x82254A64
+name = "PdHookFileOverrideServe"
+registers = ["r27", "r31"]
+jump_address_on_true = 0x82254BB4
+
 # ---- Start-up -----------------------------------------------------------------------
 
 # No Xbox LIVE Arcade logo while the game loads (pd_skip_arcade_logo): its three draws

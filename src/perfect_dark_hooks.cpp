@@ -18,6 +18,7 @@
 #include "pd_crossbow.h"        // the Detonator Crossbow
 #include "pd_custom_weapons.h"
 #include "pd_ricochet.h"        // the Ricochet Laser
+#include "pd_file_override.h"   // TEMP_GUNMODEL: loose files over packed ones
 
 // main.cpp
 bool PdSkipArcadeLogo();
@@ -82,6 +83,22 @@ void StoreU8(uint8_t* base, uint32_t address, uint8_t value) {
   base[address] = value;
 }
 }  // namespace
+
+// ---- TEMP_GUNMODEL: loose files over packed ones (pd_file_override.h) -------------
+
+// Entry of the archive's size function (sub_822549A0) and of its load-to-new-buffer
+// function (sub_82254BE0): before the game reads any size from the entry table, the
+// loose files' sizes are written into it.
+void PdHookFileOverrideTable() {
+  pd::fileoverride::PatchTable(HookBase());
+}
+
+// sub_822549C0's read path (0x82254A64; r31 = file id, r27 = destination; its lock is
+// held): true when the loose file was copied, and the guest jumps to the function's
+// "unlock, return 1" exit.
+bool PdHookFileOverrideServe(PPCRegister& r27, PPCRegister& r31) {
+  return pd::fileoverride::Serve(HookBase(), r31.u32, r27.u32);
+}
 
 // ---- Start-up ---------------------------------------------------------------------
 

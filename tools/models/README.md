@@ -1,6 +1,8 @@
 # tools/models
 
-Offline tools for getting gun models and textures out of the game's data files (and, later, back in). Background and addresses: `docs/research/gun-models.md`.
+Tools for getting gun models and textures out of the game's data files, and changed ones back in (with `pd_file_override`, see the research file).
+
+**Important:** on XBLA, the N64 model files hold the skeleton and parts, but the game draws a remastered mesh that each GUNDL node links to (`xblamesh.py`). Edit that mesh to change how a gun looks; edits to the N64 display lists show only with `patch_model.py --n64-render`. Background and addresses: `docs/research/gun-models.md`.
 
 | Tool | What it does |
 |---|---|
@@ -10,6 +12,8 @@ Offline tools for getting gun models and textures out of the game's data files (
 | `gunindex.py <image.bin> <files dir> [-o models.json]` | Lists every gun's high- and low-detail first-person files and their texture numbers. |
 | `textures.py <Textures.raw> <tex dir> <png dir> [ids\|all] [--opaque]` | Turns `tex_XXXX.bin` into `tex_XXXX.png` (largest mip only), plus `textures.json` with each texture's format and sizes. |
 | `model2gltf.py <file_XXXX.bin> -o gun.glb [--textures <png dir>]` | Converts a gun model to glTF for Blender: one object per GUNDL node (named with its part number), one material per texture, and empties for the joints. Also writes `gun.json` with the parts, and the file offset of every exported vertex (for a later re-import). |
+| `patch_model.py <in> <out> [--scale\|--offset PART x y z] [--n64-render] [--pad N]` | Edits an N64 model file in place (test edits; `--n64-render` drops the links to XBLA's meshes so the N64 display lists draw). |
+| `xblamesh.py info\|glb\|scale ...` | XBLA's remastered gun meshes (the ones the game actually draws): header and sub-meshes, `.glb` export with the HD texture, and a test edit (scale one bone's vertices). |
 
 Notes on what Blender shows:
 - The model is in its rest pose. Part 42 is the magazine; part 43 is the reload magazine, which animations move with the hand (on the Mauler it sits beside the gun).

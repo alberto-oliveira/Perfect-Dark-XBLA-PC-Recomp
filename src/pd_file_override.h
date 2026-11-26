@@ -1,0 +1,110 @@
+// TEMP_GUNMODEL: loose files that replace the game's packed ones (gun model research,
+// docs/research/gun-models.md). With pd_file_override = true, every
+// assets\DataFiles\override\file_XXXX.bin (XXXX = the file id in hex, as pdunpack
+// names them) is used instead of PackedSegFile's entry XXXX. The files are the
+// inflated N64 format, exactly what tools/models/pdunpack extracts.
+//
+// How the game reads a packed file (archive object 0x82652968):
+//   sub_822549A0(archive, id)            size = table entry +4
+//   sub_82254BE0(archive, id)            allocates `size` bytes itself, then loads
+//   sub_822549C0(archive, id, dest, 0)   load: a prefetch-cache copy, else read+inflate
+// Every one of them takes the size from the entry table (*(0x82652B24), entry for
+// id at table + id*16 - 16: {offset, size, compressed size, -1}). So:
+//   1. PatchTable writes each loose file's size into its entry: every buffer the game
+//      allocates for it is then big enough, whatever path asks.
+//   2. Serve copies the loose file into `dest` on the read path of sub_822549C0 (after
+//      its cache lookup, with its lock held), so the game never reads the packed copy.
+#pragma once
+
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <filesystem>
+#include <map>
+#include <mutex>
+#include <vector>
+
+#include <rex/logging.h>
+
+namespace pd::fileoverride {
+
+inline constexpr uint32_t kTablePointer = 0x82652B24;  // u32: the archive's entry table
+
+struct State {
+  bool enabled = false;
+  std::map<uint32_t, std::vector<uint8_t>> files;  // file id -> contents
+  uint32_t patched_table = 0;                      // the table PatchTable last wrote to
+  std::mutex mutex;                                // hooks run on loader threads too
+};
+
+inline State& Get() {
+  static State state;
+  return state;
+}
+
+inline uint32_t LoadBE32(const uint8_t* base, uint32_t address) {
+  uint32_t v;
+  std::memcpy(&v, base + address, 4);
+  return __builtin_bswap32(v);
+}
+inline void StoreBE32(uint8_t* base, uint32_t address, uint32_t value) {
+  value = __builtin_bswap32(value);
+  std::memcpy(base + address, &value, 4);
+}
+
+// Reads every file_XXXX.bin in `folder` (called once at start-up).
+inline void Load(const std::filesystem::path& folder, bool enabled) {
+  State& s = Get();
+  std::lock_guard<std::mutex> lock(s.mutex);
+  s.enabled = enabled;
+  if (!enabled) return;
+  std::error_code ec;
+  for (const auto& entry : std::filesystem::directory_iterator(folder, ec)) {
+    const std::string name = entry.path().filename().string();
+    unsigned id = 0;
+    if (std::sscanf(name.c_str(), "file_%x.bin", &id) != 1 || id == 0) continue;
+    FILE* f = _wfopen(entry.path().c_str(), L"rb");
+    if (!f) continue;
+    std::vector<uint8_t> data(size_t(std::filesystem::file_size(entry.path(), ec)));
+    const size_t got = std::fread(data.data(), 1, data.size(), f);
+    std::fclose(f);
+    if (got != data.size() || data.empty()) continue;
+    REXLOG_INFO("[gunmodel] override: file 0x{:04X} from {} ({} bytes)", id, name, data.size());
+    s.files[id] = std::move(data);
+  }
+  REXLOG_INFO("[gunmodel] override: {} loose files in {}", s.files.size(), folder.string());
+}
+
+// Step 1: the loose files' sizes into the game's entry table (once per table).
+inline void PatchTable(uint8_t* base) {
+  State& s = Get();
+  if (!s.enabled || s.files.empty()) return;
+  std::lock_guard<std::mutex> lock(s.mutex);
+  const uint32_t table = LoadBE32(base, kTablePointer);
+  if (!table || table == s.patched_table) return;
+  for (const auto& [id, data] : s.files) {
+    const uint32_t entry = table + id * 16 - 16;
+    const uint32_t packed = LoadBE32(base, entry + 4);
+    StoreBE32(base, entry + 4, uint32_t(data.size()));
+    REXLOG_INFO("[gunmodel] override: file 0x{:04X} size {} -> {}", id, packed, data.size());
+  }
+  s.patched_table = table;
+}
+
+// Step 2: the read path of sub_822549C0. True = `dest` now holds the loose file.
+inline bool Serve(uint8_t* base, uint32_t id, uint32_t dest) {
+  State& s = Get();
+  if (!s.enabled) return false;
+  std::lock_guard<std::mutex> lock(s.mutex);
+  const auto it = s.files.find(id);
+  if (it == s.files.end() || !dest) {
+    // Research log: which packed files the game reads (e.g. to find a gun's third-person model).
+    REXLOG_INFO("[gunmodel] load file 0x{:04X} (packed) to 0x{:08X}", id, dest);
+    return false;
+  }
+  std::memcpy(base + dest, it->second.data(), it->second.size());
+  REXLOG_INFO("[gunmodel] served file 0x{:04X} ({} bytes) to 0x{:08X}", id, it->second.size(), dest);
+  return true;
+}
+
+}  // namespace pd::fileoverride

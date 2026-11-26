@@ -79,6 +79,8 @@ REXCVAR_DECLARE(bool, pd_dev_hotkeys);
 void PdInstallCrashReport();
 // Keeps the game on a hybrid CPU's performance cores (main.cpp, HANDOVER 4ba).
 void PdPreferPerformanceCores();
+// TEMP_GUNMODEL: reads the loose override files (pd_file_override.h; main.cpp).
+void PdFileOverrideStartup();
 REXCVAR_DECLARE(bool, pd_story_complete);
 REXCVAR_DECLARE(bool, pd_frame_stats);
 REXCVAR_DECLARE(bool, pd_menu_mouse);
@@ -676,6 +678,7 @@ class PerfectDarkApp : public rex::ReXApp {
     REXLOG_INFO("Perfect Dark PC v{}", PD_VERSION);
     LogSystemInfo();
     MigrateSettings();
+    PdFileOverrideStartup();  // TEMP_GUNMODEL
     auto* kernel_state = REX_KERNEL_STATE();
     auto* profile = kernel_state ? kernel_state->user_profile() : nullptr;
     if (profile) {

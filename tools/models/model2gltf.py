@@ -317,4 +317,5 @@ def main():
     for w in sorted(set(warnings))[:10]: print('  warning:', w)
 
 
-main()
+if __name__ == '__main__':
+    main()

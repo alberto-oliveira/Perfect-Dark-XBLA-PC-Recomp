@@ -91,3 +91,36 @@ Callers:
   - the opaque pass ignores texture alpha.
 - Parts: 42 magazine, 43 reload magazine (moved with the hand), 90 muzzle flash (4 quads), Falcon 2 45 scope / 47 silencer. All sit under TOGGLE nodes.
 - **Gun textures are N64-resolution in XBLA too** (e.g. 0x323 32x32). Only 1469 of the 5747 textures are stored larger than on N64 (e.g. 0x296: 256x256 for 54x54). Record `+40` links 19 textures to others (0xE93-...), so it is not an HD map.
+
+## 3. Loose files in game, and XBLA's own gun meshes (step 4: done)
+- **Override (TEMP_GUNMODEL):**
+  - `pd_file_override = true` serves `assets\DataFiles\override\file_XXXX.bin` in place of packed file XXXX (`src/pd_file_override.h`). Every test copy's `assets` is a junction to `game\`, so all PCs share the folder.
+  - It writes each loose file's size into the archive's entry table, because `sub_82254BE0` allocates by the table size.
+  - It copies the file at `sub_822549C0`'s read path (`0x82254A64` -> exit `0x82254BB4`).
+  - Hooks: `0x822549A0`, `0x82254BE0` (table), `0x82254A64` (serve).
+  - `Run-TestCopies -ExtraArgs pd_file_override` passes the setting to the copies; scenario `gunmodel`.
+- **In a match the game uses each gun's LOW-detail first-person file** (weapondef `+2`; Falcon 2 0x39C). The high-detail one (0x377) was only loaded once, before the match.
+- **XBLA draws its own remastered meshes, not the N64 display lists.**
+  - In the N64 file, each GUNDL node's u16 at `+2` (padding on N64) holds `sub-mesh << 12 | XBLA file id`; `0xFFFF` = none, and `0x0000` was seen on one node, not traced.
+  - The model fix-up `sub_82195030` loads that file and registers it (`sub_8226A598`, 128 slots of 28 bytes).
+  - Falcon 2: 0x39C -> 0x9E5 (0x377 -> 0x9E4); Mauler 0x379/0x4CB -> 0xA2D/0xA2E; crossbow 0x38D -> 0x9D2; hands 0x4E5 -> 0x9D0.
+  - Third-person models do the same: Falcon 2 model 0xF5 = file 0x348 -> 0x842; Mauler model 0xF7 = file 0x34A.
+  - Muzzle flashes (part 90) have `0xFFFF`, so they are N64 display lists. That is why the Carom LX's flash colour could be patched in the N64 data.
+- **Tests (2 copies, run by Claude, read from logs and screenshots, 2026-11-25):**
+
+  | Test | What was served | Result |
+  |---|---|---|
+  | T3 | unchanged 0x377 | served, gun identical |
+  | A | 0x39C with N64 vertices edited | **no visible change** (the XBLA mesh draws) |
+  | B | 0x39C edited + `patch_model.py --n64-render` (node links set to 0xFFFF) | the edited **N64** low-poly Falcon draws in first person; firing, reloading and switching are stable; the third person is unchanged (other file) |
+  | C | the XBLA mesh 0x9E5 with bone 33 scaled 1.6 in z (`xblamesh.py scale`) | **the edited HD Falcon draws** |
+
+- **XBLA mesh format** (`tools/models/xblamesh.py`):
+  - header `{u32 vertex count, vertex offset, index offset, sub-mesh count, sub-mesh offset, bone count, f32 1000.0, u32 offset of a small table}`, then bone matrices (48 bytes, 3x4);
+  - sub-mesh `{first triangle, triangle count, texture number | flags << 16}`;
+  - skinned vertex, 48 bytes: `{xyz, uv, normal, ARGB, 2 weights, 3 bone indices + count}`;
+  - u16 indices.
+  - Positions are model space, at about 1/10 of N64 units.
+  - Textures are XBLA HD ones (Falcon 2: 0x14D1, 512x512 DXT1).
+  - The meaning of `flags`, the small table at `+0x1C`, and 36-byte unskinned vertices are not yet known.
+- **What this means for custom guns:** the remastered mesh is a plain vertex/index buffer, so any Blender mesh can be written into it: new topology and any vertex count, within limits still to be measured. The N64 file stays as the skeleton (joints, parts, matrices) and points to the new mesh.
