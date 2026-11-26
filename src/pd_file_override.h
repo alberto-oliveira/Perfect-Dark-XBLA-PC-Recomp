@@ -122,6 +122,17 @@ inline bool Serve(uint8_t* base, uint32_t id, uint32_t dest) {
   return true;
 }
 
+// TEMP_GUNMODEL: an XBLA mesh being registered (sub_8226A598's entry: r4 = the mesh
+// file's data, r5 = its file id): log its id and size, to see which meshes load and
+// how big they are (size limits, phase 2 step 6).
+inline void LogMeshRegister(uint8_t* base, uint32_t data, uint32_t file_id) {
+  if (!Get().enabled || !data) return;
+  const uint32_t verts = LoadBE32(base, data), subs = LoadBE32(base, data + 12), bones = LoadBE32(base, data + 20);
+  const uint32_t index_offset = LoadBE32(base, data + 8);
+  REXLOG_INFO("[gunmodel] mesh 0x{:04X} registered: {} vertices, {} sub-meshes, {} bones, vertex data {} bytes",
+              file_id & 0xFFF, verts, subs, bones, index_offset - LoadBE32(base, data + 4));
+}
+
 // A texture was just inflated into GPU memory: copy the loose texels over its start.
 // `record_offset` = texture number * 52 (the loop's offset into the record arrays);
 // `inflated_size` = the record's size, so a too-big loose file can't overrun.

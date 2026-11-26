@@ -30,6 +30,12 @@ name = "PdHookFileOverrideServe"
 registers = ["r27", "r31"]
 jump_address_on_true = 0x82254BB4
 
+# TEMP_GUNMODEL: log each XBLA mesh as it is registered (sub_8226A598: r4 data, r5 id).
+[[midasm_hook]]
+address = 0x8226A598
+name = "PdHookLogMeshRegister"
+registers = ["r4", "r5"]
+
 # Loose texture texels (tex_XXXX.bin), right after the texture manager inflated a
 # texture: streamed (sub_82263470, after `bl XMemDecompress`; r29 texels) and resident
 # at start-up (sub_82262D60; r28 texels); r30 = texture number * 52.

@@ -100,6 +100,11 @@ bool PdHookFileOverrideServe(PPCRegister& r27, PPCRegister& r31) {
   return pd::fileoverride::Serve(HookBase(), r31.u32, r27.u32);
 }
 
+// TEMP_GUNMODEL: an XBLA mesh being registered (sub_8226A598: r4 data, r5 file id).
+void PdHookLogMeshRegister(PPCRegister& r4, PPCRegister& r5) {
+  pd::fileoverride::LogMeshRegister(HookBase(), r4.u32, r5.u32);
+}
+
 // Right after the texture manager inflated a texture into GPU memory: streamed
 // textures (sub_82263470, r29 = texels) and resident ones at start-up (sub_82262D60,
 // r28 = texels); r30 = texture number * 52 in both. Loose texels go over it.
