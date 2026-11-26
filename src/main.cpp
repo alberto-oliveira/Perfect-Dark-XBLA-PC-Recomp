@@ -1346,6 +1346,9 @@ REXCVAR_DEFINE_STRING(pd_rico_tint, "white", "PerfectDark",
 REXCVAR_DEFINE_STRING(pd_rico_beam_tint, "red", "PerfectDark",
                       "The Ricochet Laser's beams' colour: red, orange, yellow, green, cyan, blue, purple, "
                       "pink, white, #RRGGBB, or off (the Laser's own)");
+REXCVAR_DEFINE_STRING(pd_rico_flash_tint, "red", "PerfectDark",
+                      "The Ricochet Laser's (Carom LX's) muzzle flash colour: red, orange, yellow, green, cyan, "
+                      "blue, purple, pink, white, #RRGGBB, or off (the gun's tint)");
 REXCVAR_DEFINE_INT32(pd_rico_bounces, 3, "PerfectDark",
                      "How many times a Ricochet Laser shot bounces off walls: 0-10. Online, the host's counts");
 REXCVAR_DEFINE_INT32(pd_rico_damage_growth, 50, "PerfectDark",
@@ -1461,12 +1464,19 @@ void PdRicoDebugShield(uint8_t* base) {
 }
 }  // namespace
 
+// TEMP_RICO: where a newly loaded gun file's flash colour entry was found.
+void PdRicoDebugFlash(uint8_t* base, uint32_t file, uint32_t at, uint32_t rgba) {
+  REXLOG_INFO("[rico] flash colour: gun file 0x{:08X}: entry {}, set to {:08X}", file,
+              at ? fmt::format("at +0x{:X}", at - file) : std::string("not found"), rgba);
+}
+
 // Each frame (game thread): the settings.
 void PdRicoFrame(uint8_t* base) {
   PdRicoDebugShield(base);  // TEMP_RICO
   namespace rico = pd::ricochet;
   pd::custom::g_tint[pd::custom::IndexOf(rico::kWeaponRicochet)] = pd::custom::ParseTint(REXCVAR_GET(pd_rico_tint));
-  rico::g_beam_tint = pd::custom::ParseTint(REXCVAR_GET(pd_rico_beam_tint));
+  pd::custom::g_flash[pd::custom::IndexOf(rico::kWeaponRicochet)].rgb =
+      pd::custom::ParseTint(REXCVAR_GET(pd_rico_flash_tint));  rico::g_beam_tint = pd::custom::ParseTint(REXCVAR_GET(pd_rico_beam_tint));
   PdRicoRulesFrame();
   rico::g_debug_beam_speed = std::clamp(REXCVAR_GET(pd_rico_beam_speed), 1, 1000);  // TEMP_RICO
   rico::g_beam_width = std::clamp(REXCVAR_GET(pd_rico_beam_width), 10, 1000);

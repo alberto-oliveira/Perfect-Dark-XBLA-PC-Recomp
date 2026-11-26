@@ -62,6 +62,7 @@ bool PdXbowBoltTick(PPCContext& ctx, uint8_t* base, uint32_t prop, uint32_t obj)
 
 void PdTestPlayerTick(PPCContext& ctx, uint8_t* base);
 void PdRicoShot(PPCContext& ctx, uint8_t* base);
+void PdRicoDebugFlash(uint8_t* base, uint32_t file, uint32_t at, uint32_t value);  // TEMP_RICO
 uint32_t PdRicoRenderBeams(PPCContext& ctx, uint8_t* base, uint32_t gdl);
 
 namespace {
@@ -568,6 +569,23 @@ void PdHookCustomGunColour(PPCRegister& r1, PPCRegister& r29) {
   pd::custom::StoreU32(base, at, pd::custom::TintRgba(pd::custom::LoadU32(base, at), tint));
 }
 
+// The gun loader (sub_82170488) right after it loaded the first-person gun file
+// into the player's gun memory (file_load_to_addr returned at 0x82170524; r30 =
+// the file, still as on disc; r31 = the player, +5544 the weapon being
+// equipped). For a custom weapon with a muzzle flash colour, the flash's vertex
+// colour in this copy becomes that colour, before the game prepares the model
+// for drawing (pd_custom_weapons.h, "Muzzle flash colour"). The copy is this
+// equip's own: a later equip of the real Mauler loads the file again.
+void PdHookCustomGunFileLoaded(PPCRegister& r30, PPCRegister& r31) {
+  namespace custom = pd::custom;
+  uint8_t* base = HookBase();
+  const uint32_t rgba = custom::FlashColourOf(base[r31.u32 + custom::kPlayerWeapon]);
+  if (!rgba) return;
+  const uint32_t entry = custom::FindFlashColour(base, r30.u32);
+  PdRicoDebugFlash(base, r30.u32, entry, rgba);  // TEMP_RICO
+  if (entry) custom::StoreU32(base, entry, rgba);
+}
+
 // A gun in a player's hand is not drawn by obj_render: chr_render_attached_object
 // (sub_8210A070; r31 = the attached prop) draws it with the player's render data
 // (model_render sub_82194778 at 0x8210A0AC; r3 = the render data, whose colour is
@@ -604,9 +622,9 @@ void PdHookCustomHeldGunBefore(PPCRegister& r3, PPCRegister& r31) {
   if (!prop || base[prop] != 4) return;  // prop type 4 = a weapon
   const uint32_t obj = pd::custom::LoadU32(base, prop + 4);
   if (!obj) return;
+  const uint32_t at = r3.u32 + 0x38;
   uint32_t tint, strength;
   if (!ObjectOverlay(base, obj, tint, strength)) return;
-  const uint32_t at = r3.u32 + 0x38;
   held_colour_saved = pd::custom::LoadU32(base, at);
   held_colour_changed = true;
   pd::custom::StoreU32(base, at, pd::custom::TintRgba(held_colour_saved, tint, strength));

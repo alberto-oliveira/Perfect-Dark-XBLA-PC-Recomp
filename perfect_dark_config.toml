@@ -733,6 +733,14 @@ address = 0x821E1900
 name = "PdHookCustomObjectColour"
 registers = ["r3", "r4"]
 
+# The gun loader sub_82170488 right after file_load_to_addr loaded the
+# first-person gun file (0x82170524; r30 = the file, r31 = the player): a custom
+# weapon's muzzle flash colour goes into this copy's flash vertex colour.
+[[midasm_hook]]
+address = 0x82170524
+name = "PdHookCustomGunFileLoaded"
+registers = ["r30", "r31"]
+
 # A gun in a player's hand: chr_render_attached_object sub_8210A070 around its
 # model_render call (`bl 0x82194778` at 0x8210A0AC; r3 = render data, r31 = the
 # attached prop; after it, r30 = render data): the colour (render data +0x38) is
