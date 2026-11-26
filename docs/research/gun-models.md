@@ -1,6 +1,6 @@
 # Gun models: unpack, edit, repack (feasibility research)
 
-Status: research done, 2026-11-25 (verdict below). Branch `gun-model-research`. The in-game override code (`pd_file_override`, tagged TEMP_GUNMODEL) and the `gunmodel` scenario are in `tools/debug-bank/` (`gun-models.cpp`, `gun-models-scenarios/`); the offline tools are in `tools/models/`.
+Status: research done, 2026-11-25 (verdict below). Branch `gun-model-research`.
 
 The question: can a gun's model and its textures be taken out of the game, opened in Blender, changed, and put back so the game uses the changed version? This file collects the answers step by step and ends with a verdict.
 

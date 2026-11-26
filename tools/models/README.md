@@ -1,6 +1,6 @@
 # tools/models
 
-Tools for getting gun models and textures out of the game's data files, and changed ones back in. Serving the changed files in game needs the `pd_file_override` code, which is in `tools/debug-bank/gun-models.cpp` since the research ended (see `docs/research/gun-models.md`).
+Tools for getting gun models and textures out of the game's data files, and changed ones back in (with `pd_file_override`, see the research file).
 
 **Important:** on XBLA, the N64 model files hold the skeleton and parts, but the game draws a remastered mesh that each GUNDL node links to (`xblamesh.py`). Edit that mesh to change how a gun looks; edits to the N64 display lists show only with `patch_model.py --n64-render`. Background and addresses: `docs/research/gun-models.md`.
 
