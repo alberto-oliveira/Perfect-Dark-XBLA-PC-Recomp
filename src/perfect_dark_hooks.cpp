@@ -62,7 +62,6 @@ bool PdXbowBoltTick(PPCContext& ctx, uint8_t* base, uint32_t prop, uint32_t obj)
 
 void PdTestPlayerTick(PPCContext& ctx, uint8_t* base);
 void PdRicoShot(PPCContext& ctx, uint8_t* base);
-void PdRicoDebugFlash(uint8_t* base, uint32_t file, uint32_t at, uint32_t value);  // TEMP_RICO
 uint32_t PdRicoRenderBeams(PPCContext& ctx, uint8_t* base, uint32_t gdl);
 
 namespace {
@@ -582,7 +581,6 @@ void PdHookCustomGunFileLoaded(PPCRegister& r30, PPCRegister& r31) {
   const uint32_t rgba = custom::FlashColourOf(base[r31.u32 + custom::kPlayerWeapon]);
   if (!rgba) return;
   const uint32_t entry = custom::FindFlashColour(base, r30.u32);
-  PdRicoDebugFlash(base, r30.u32, entry, rgba);  // TEMP_RICO
   if (entry) custom::StoreU32(base, entry, rgba);
 }
 
@@ -681,8 +679,6 @@ void PdHookRicoBeamCreate(PPCRegister& r3) {
   namespace rico = pd::ricochet;
   if (rico::g_filling) {
     rico::g_beams.insert(r3.u32);
-    ++rico::g_debug_filled;  // TEMP_RICO
-    rico::g_debug_filled_player = int32_t(pd::custom::LoadU32(HookBase(), 0x82648BF8 + 1196));
   } else {
     rico::g_beams.erase(r3.u32);
   }
@@ -699,7 +695,6 @@ void PdHookRicoBeamCreate(PPCRegister& r3) {
 void PdHookRicoBeamColour(PPCRegister& r25, PPCRegister& r29, PPCRegister& f29) {
   namespace rico = pd::ricochet;
   if (!rico::IsRicochetBeam(r29.u32)) return;
-  ++rico::g_debug_drawn;  // TEMP_RICO
   uint8_t* base = HookBase();
   f29.f64 = f29.f64 * double(rico::g_beam_width) / 100.0;
   if (rico::g_beam_tint == pd::custom::kNoTint) return;

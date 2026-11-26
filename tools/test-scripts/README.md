@@ -92,7 +92,8 @@ join order (the local player is always 0), so scripts are safer with names.
 
 Weapon numbers (N64 order): 1 Unarmed, 2 Falcon 2, 6 Mauler, 14 Laptop Gun, 19 Shotgun,
 20 Reaper, 24 Rocket Launcher, 25 Slayer, 27 Crossbow, 28 Tranquilizer, 29 Laser,
-30 Grenade, 31 N-Bomb, 35 Combat Boost, 0x51 Detonator Crossbow.
+30 Grenade, 31 N-Bomb, 35 Combat Boost, 0x51 Detonator Crossbow, 0x52 Carom LX (the
+Ricochet Laser).
 
 Every waiting command gives up after `[sec]` seconds (default 60). It then logs
 `[test] FAILED <command> (stage, menu)` and drops the rest of the script, so a
@@ -115,3 +116,14 @@ current menu, and the selected option of an open dropdown.
   everyone), and the host walks forward for 2 seconds.
 - `detonator`: as `basic`, with the host's weapon slots 7-16 all Detonator
   Crossbows (`pd_mp_weapons`), for playing the Detonator Crossbow by hand.
+- `ricochet-handson` (2 copies): both players get the Carom LX, the Laser and the
+  Mauler, then play by hand.
+- `ricochet-look` (2 copies): screenshots of the Carom LX (white Mauler, red
+  pulse and Stream) from the host and the client, and a switch away and back.
+- `ricochet-flash` (2 copies): the Carom LX's red muzzle flash, then a real
+  Mauler's green one.
+- `ricochet-func` (2 copies): the client's copy of the host's primary/secondary
+  bits (`peek`) after each toggle, for the Carom LX and the Laser.
+
+The Carom LX's development scenarios (bounces, hits, Stream, wall sweeps) need
+its debug code back: they are in `tools/debug-bank/ricochet-laser-scenarios/`.

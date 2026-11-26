@@ -111,7 +111,48 @@ vector, ...)` the vector is in r5, not r4 (verified).
 **Feasibility: high. Difficulty: ★★★☆☆** (lower than estimated: no network
 code is needed).
 
-### Implementation notes (branch ricochet-laser, 2026-11-25)
+### Implementation notes (branch ricochet-laser, 2026-11-25): the Carom LX
+
+The weapon is named the **Carom LX** (a carom: a shot that rebounds, in billiards).
+
+Findings from the user's hands-on checks, after the first build:
+
+- **Walls must be found as bullets find them.** The collision geometry (`cd_*`)
+  stops below high walls and ceilings nobody can reach: shots there made sparks
+  but no bounce (54 of ~200 pulses in one session). Bullets test each room's
+  VISIBLE triangles: `portal_find_rooms` sub_820DC1A8(from, to, fromrooms,
+  finalrooms, crossed, 30) for the rooms the line crosses, then
+  `bg_test_hit_in_room` sub_820D4DC8(from, to, room, &hitthing) (hitthing +0 the
+  point, +0x0C the surface normal). Each bounce now uses that test, starting in
+  the room of the wall it left; the collision test is only a fallback.
+  `RicoFindWallVisible` in main.cpp.
+- **The first bounce starts at the game's own hit point**, the hand's hit
+  position (hand +1372: player+3004 / +4960), where the beam ends and the sparks
+  are.
+- **Hits are tested as the streak travels, not when the shot is fired.** A third
+  bounce arrives ~0.25 s after the shot, so a player walking into it was visibly
+  hit for nothing. Each frame (from the player input step) the stretch a pulse's
+  streak newly covered is tested against the players where they are then; a hit
+  ends the streak there and drops the shot's later bounces. The Stream (whole
+  beams for 2 frames) is still tested at once.
+- **Sparks at each bounce**: `sparks_create` sub_8215CD58(room, prop 0, position,
+  direction, normal, type 0), when the streak reaches the wall.
+- **The red beam looked thin**: the Laser texture's glow is blue, which the red
+  takes out, leaving the core. The game's other beam textures were thinner
+  still. The beams are drawn wider instead (`pd_rico_beam_width`, default 200%;
+  f29 at 0x82182C90 is the width).
+- **The muzzle flash** is a part of the gun model drawn in the OPAQUE list as
+  texture x vertex colour (combine `FC121824 FF33FFFF`); XBLA's texture 0x0296 is
+  green. Neither the render colour, a translucent-pass split nor changing the
+  vertex colour at draw time reaches it (XBLA prepares the model when it loads).
+  What works: the gun loader hook 0x82170524 (right after file_load_to_addr; r30
+  = the file, r31 = the player) sets the flash's vertex colour in this equip's
+  own copy of the file, found by the pattern {0xFEFEFEFF, 0, 0x05xxxxxx} (the
+  loaded file's layout differs from the dump of 0x379). A real Mauler loads its
+  file again and stays green. Other players see the Carom's flash green (the
+  third-person model is shared with real Maulers).
+
+Earlier notes:
 
 Built as planned (`src/pd_ricochet.h`, toml section "Ricochet Laser"), with these
 findings on the way:
@@ -120,8 +161,9 @@ findings on the way:
   from the Mauler's the model files, equip animations, position and part visibility
   (+0x00..+0x13, +0x28..+0x43). The MP entry takes the Mauler's pickup model
   (+6..+9), and the third-person model hook sees 6 (verified).
-  Its function definitions are copies with `FUNCFLAG_NOMUZZLEFLASH` (0x2000 at
-  +0x10), because the Mauler model has a green flash.
+  (A first version dropped the Mauler model's green flash with copied function
+  definitions with `FUNCFLAG_NOMUZZLEFLASH`, 0x2000 at +0x10; it is now drawn
+  red instead, see above.)
 - **Laser checks mapped (verified):**
   - `bgun_create_fx` 0x82174E70 (r26);
   - hit sounds 0x82176C64 (r7) and 0x821772AC (r11);

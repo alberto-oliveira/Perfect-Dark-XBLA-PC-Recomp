@@ -262,22 +262,6 @@ inline uint32_t PoolBeam(int i) { return g_pool + uint32_t(i) * kBeamSize; }
 inline uint32_t ScratchBeam() { return PoolBeam(kPoolBeams); }
 inline bool InPool(uint32_t beam) { return g_pool && beam >= g_pool && beam < PoolBeam(kPoolBeams); }
 
-// TEMP_RICO: how fast the bounce beams move, in percent (pd_rico_beam_speed), so
-// screenshots can catch them.
-inline int g_debug_beam_speed = 100;
-
-// TEMP_RICO: counters for the debug log (pd_rico_debug, main.cpp): Ricochet Laser
-// beams filled and drawn since the last log line, and the current player number
-// (g_Vars+1196) when one was last filled (0 = this PC's player shot).
-inline int g_debug_filled = 0;
-inline int g_debug_drawn = 0;
-inline int g_debug_filled_player = -1;
-inline int g_debug_bounces = 0;  // bounce segments made
-inline int g_debug_pool_full = 0;  // bounce beams not drawn: no free beam in the pool
-inline double g_debug_shot_us = 0;  // time spent in the shot hook (microseconds)
-inline int g_debug_probe_hits = 0;   // first walls found by the bullets' test (visible geometry)
-inline int g_debug_eye_hits = 0;     // ... found only by the collision geometry
-inline int g_debug_no_wall = 0;      // shots that ended on no wall (no bounce)
 
 // The beams' width in percent of the Laser's (pd_rico_beam_width, default 200).
 inline int g_beam_width = 200;
