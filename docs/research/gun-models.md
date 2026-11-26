@@ -148,3 +148,21 @@ Callers:
 - **T6 passed** (2 copies, read from screenshots): a checkerboard on 0x14D1 shows on the first-person Falcon 2 on both PCs.
   - The third-person Falcon is unchanged: it is a different mesh (0x842, unskinned 36-byte vertices) with its own texture 0xF93.
   - Other HD gun textures: Mauler 0x15D7 (mesh 0xA2E), crossbow 0x148A (mesh 0x9D2).
+
+# Phase 2: towards a real custom gun (2026-11-26)
+
+## 5. Static answers (step 1)
+- **Group table** (header `+0x1C`, up to the sub-mesh table): `{u32 first sub-mesh, u32 sub-mesh count, u32 bone}` per group. A GUNDL node's link `group << 12 | file id` draws that group.
+  - Falcon 2 0x9E5: 5 groups (bones 33/38/41/40/33). Mauler 0xA2E: 3. Third-person 0x842: 1 group, bone 0, unskinned.
+  - The draw loop (`sub_82269470`) passes the group's bone to the shader as a float (constants at device `+1920`).
+- **Sub-mesh third word** = `{u8 env-map index, u8 env strength, u16 texture}`:
+  - `lhz +10` texture number; bit 15 (`0x8000`) is checked against the pass, probably translucent;
+  - `lbz +9` strength: when non-zero, a second texture is bound, number `0xE93 + (lbz +8)` (env/reflection maps 0xE93-...), with the strength as a shader value (`sub_82263850`, `sub_8232BB80`);
+  - so the "flags" 0x1E-0x3C are reflection strengths: shiny metal = 60 (Falcon 2), 40 (crossbow), 45 (third-person Falcon), 30 (hands), 0 = matte.
+- **Mesh memory** (`sub_8226A598`): 128 slots (28 bytes at manager `+124`); vertex buffer = count x stride (`sub_82333BB0`), plus an index buffer.
+  - The mesh FILE is temporary: in the gun loader (global `0x8263029C` set) it goes to `sub_82530EB0` memory via `file_load_to_addr`; otherwise (third person) it goes to the stage heap via `file_load_to_new`.
+- **Mips**: the Xenos storage rules are documented in the SDK (`rexglue-sdk/include/rex/graphics/pipeline/texture/util.h`, `GetPackedMipOffset`): base at `base_address`, mips from `mip_address`, 32-block alignment, linear rows aligned to 256 bytes, packed tail for levels <= 16 texels.
+- **Free numbers**:
+  - 1026 empty PackedSegFile entries (e.g. 0x271-0x276) can hold new files.
+  - There are no free texture records, so a custom texture must take over a slot that matches don't use.
+  - 0x5B is WEAPON_MPSHIELD and 0x5C WEAPON_DISABLED (not free). The proof weapon borrows the solo-only item number 0x50 (the necklace; its name text is already used by the Detonator Crossbow).
