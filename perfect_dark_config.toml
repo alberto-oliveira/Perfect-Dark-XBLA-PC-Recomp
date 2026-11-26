@@ -8,7 +8,7 @@
 # reference; `return`, `return_on_true` and `jump_address(_on_true)` end the guest
 # function or branch after the call. HANDOVER.md has the history of each change.
 
-# ---- TEMP_GUNMODEL: loose files over packed ones (pd_file_override) ----------------
+# ---- Custom gun models: loose files over packed ones (pd_file_override) ------------
 
 # The archive's size function (sub_822549A0) and load-to-new-buffer function
 # (sub_82254BE0) both read sizes from the entry table: the loose files' sizes go in

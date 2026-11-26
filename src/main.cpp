@@ -10,7 +10,7 @@
 #include "pd_custom_weapons.h"  // new weapons under borrowed weapon numbers
 #include "pd_ricochet.h"        // the Ricochet Laser
 #include "pd_player.h"  // the local player, for test scripts
-#include "pd_file_override.h"  // TEMP_GUNMODEL: loose files over packed ones
+#include "pd_file_override.h"  // custom gun models: loose files over packed ones
 
 #include <rex/chrono/clock.h>
 #include <rex/diag_timing.h>
@@ -1357,7 +1357,7 @@ REXCVAR_DEFINE_INT32(pd_rico_damage_growth, 50, "PerfectDark",
 REXCVAR_DEFINE_INT32(pd_rico_kill_bounce, 3, "PerfectDark",
                      "Ricochet Laser: a pulse that hits a player after this many bounces kills (0 = never; "
                      "not the Stream). Online, the host's counts");
-// TEMP_GUNMODEL (gun model research): loose files over packed ones (pd_file_override.h).
+// Custom gun models: loose files over packed ones (pd_file_override.h).
 REXCVAR_DEFINE_BOOL(pd_file_override, false, "PerfectDark",
                     "Research: use assets\\DataFiles\\override\\file_XXXX.bin instead of packed file XXXX");
 

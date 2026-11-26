@@ -1,4 +1,4 @@
-// TEMP_GUNMODEL: loose files that replace the game's packed ones (gun model research,
+// Custom gun models: loose files that replace the game's packed ones (gun model research,
 // docs/research/gun-models.md). With pd_file_override = true, every
 // assets\DataFiles\override\file_XXXX.bin (XXXX = the file id in hex, as pdunpack
 // names them) is used instead of PackedSegFile's entry XXXX. The files are the
@@ -113,7 +113,7 @@ inline bool Serve(uint8_t* base, uint32_t id, uint32_t dest) {
   std::lock_guard<std::mutex> lock(s.mutex);
   const auto it = s.files.find(id);
   if (it == s.files.end() || !dest) {
-    // Research log: which packed files the game reads (e.g. to find a gun's third-person model).
+    // TEMP_GUNMODEL: which packed files the game reads (e.g. to find a gun's third-person model).
     REXLOG_INFO("[gunmodel] load file 0x{:04X} (packed) to 0x{:08X}", id, dest);
     return false;
   }
