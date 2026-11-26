@@ -111,6 +111,94 @@ vector, ...)` the vector is in r5, not r4 (verified).
 **Feasibility: high. Difficulty: ★★★☆☆** (lower than estimated: no network
 code is needed).
 
+### Implementation notes (branch ricochet-laser, 2026-11-25): the Carom LX
+
+The weapon is named the **Carom LX** (a carom: a shot that rebounds, in billiards).
+
+Findings from the user's hands-on checks, after the first build:
+
+- **Walls must be found as bullets find them.** The collision geometry (`cd_*`)
+  stops below high walls and ceilings nobody can reach: shots there made sparks
+  but no bounce (54 of ~200 pulses in one session). Bullets test each room's
+  VISIBLE triangles: `portal_find_rooms` sub_820DC1A8(from, to, fromrooms,
+  finalrooms, crossed, 30) for the rooms the line crosses, then
+  `bg_test_hit_in_room` sub_820D4DC8(from, to, room, &hitthing) (hitthing +0 the
+  point, +0x0C the surface normal). Each bounce now uses that test, starting in
+  the room of the wall it left; the collision test is only a fallback.
+  `RicoFindWallVisible` in main.cpp.
+- **The first bounce starts at the game's own hit point**, the hand's hit
+  position (hand +1372: player+3004 / +4960), where the beam ends and the sparks
+  are.
+- **Hits are tested as the streak travels, not when the shot is fired.** A third
+  bounce arrives ~0.25 s after the shot, so a player walking into it was visibly
+  hit for nothing. Each frame (from the player input step) the stretch a pulse's
+  streak newly covered is tested against the players where they are then; a hit
+  ends the streak there and drops the shot's later bounces. The Stream (whole
+  beams for 2 frames) is still tested at once.
+- **Sparks at each bounce**: `sparks_create` sub_8215CD58(room, prop 0, position,
+  direction, normal, type 0), when the streak reaches the wall.
+- **The red beam looked thin**: the Laser texture's glow is blue, which the red
+  takes out, leaving the core. The game's other beam textures were thinner
+  still. The beams are drawn wider instead (`pd_rico_beam_width`, default 200%;
+  f29 at 0x82182C90 is the width).
+- **The muzzle flash** is a part of the gun model drawn in the OPAQUE list as
+  texture x vertex colour (combine `FC121824 FF33FFFF`); XBLA's texture 0x0296 is
+  green. Neither the render colour, a translucent-pass split nor changing the
+  vertex colour at draw time reaches it (XBLA prepares the model when it loads).
+  What works: the gun loader hook 0x82170524 (right after file_load_to_addr; r30
+  = the file, r31 = the player) sets the flash's vertex colour in this equip's
+  own copy of the file, found by the pattern {0xFEFEFEFF, 0, 0x05xxxxxx} (the
+  loaded file's layout differs from the dump of 0x379). A real Mauler loads its
+  file again and stays green. Other players see the Carom's flash green (the
+  third-person model is shared with real Maulers).
+
+Earlier notes:
+
+Built as planned (`src/pd_ricochet.h`, toml section "Ricochet Laser"), with these
+findings on the way:
+
+- **Look:** weapon 0x52 is a Laser that looks like the Mauler. Its definition takes
+  from the Mauler's the model files, equip animations, position and part visibility
+  (+0x00..+0x13, +0x28..+0x43). The MP entry takes the Mauler's pickup model
+  (+6..+9), and the third-person model hook sees 6 (verified).
+  (A first version dropped the Mauler model's green flash with copied function
+  definitions with `FUNCFLAG_NOMUZZLEFLASH`, 0x2000 at +0x10; it is now drawn
+  red instead, see above.)
+- **Laser checks mapped (verified):**
+  - `bgun_create_fx` 0x82174E70 (r26);
+  - hit sounds 0x82176C64 (r7) and 0x821772AC (r11);
+  - `gset_populate` 0x821863D4 (r8);
+  - `shot_calculate_hits` 0x821FBC0C (r10) and 0x821FC268 (r11);
+  - `obj_hit` 0x82222608 (r11);
+  - pickup sound 0x8220C614 (r4);
+  - `beam_create_for_hand` 0x82182428 (r11).
+
+  `bgun_update_laser` (0x82175810) is left out, because it moves the Laser model's
+  own parts.
+- **Beams:** a beam is 44 bytes. `beam_tick` = sub_82183688. `g_Fireslots` =
+  0x8262E560 (48 B; beam at +4; chr+380 = fireslot). The Laser's `beam_create`
+  values:
+  - length capped at 10000, minimum 500;
+  - speed 0.25 × length (4 frames to cross);
+  - streak 0.6 × length (at most 3000);
+  - `dist` starts negative.
+
+  Bounce beams come from a pool of our own, drawn after `boltbeams_render` in the
+  player render (0x820FC7A4, r3 = display list) with `beam_render(gdl, beam, 0, 0)`.
+  This works on every PC, from any angle (verified).
+- **Bug found and fixed, in all custom weapons:** four primary/secondary bit hooks
+  ran after the game had already computed the bit's mask (`clrlwi` before
+  `srawi`). As a result, a remote player's choice set the wrong bit on the other
+  PCs, so the Stream replayed as pulses. They now run on the `clrlwi`
+  (0x82107044, 0x82180BA0, 0x8217D2C0, 0x8217D49C). Remote PCs keep only the
+  current weapon's bit of a remote player (vanilla).
+- **Hits:** a player's health and shield are applied on that player's own PC. The
+  shooter's copy of a remote chr does not change. Two `chr_damage_by_laser` calls
+  kill through a shield (verified, test R3). Self-hits kill (verified).
+- **Cost:** about 15–25 µs per shot (verified, test R4).
+- **Arena note:** the stage 50 corridors have no ceiling collision, so floor
+  bounces fly to the sky.
+
 **Tests it will need:**
 
 - 2–3 copies: bounces visible on every PC, from any angle (the bolt-trail tracer failed this);

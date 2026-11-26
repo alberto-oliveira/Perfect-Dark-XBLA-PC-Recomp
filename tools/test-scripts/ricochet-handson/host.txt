@@ -1,0 +1,19 @@
+# Scenario "ricochet-handson" (Ricochet Laser, the user's check by eye): 2
+# copies left in the match. Runs after lobby-host.txt. Both players get the
+# Ricochet Laser (0x52), the vanilla Laser (29) and the Mauler (6) to compare,
+# with the default rules (3 bounces, +50% damage per bounce, a pulse kills
+# after the 3rd bounce). Check: the white Mauler look (in hand, on the other
+# player, as a pickup if it is in a weapon slot), the red beams, the bounces
+# from any angle on both PCs, and the feel of the rules.
+
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start
+waitmenu none 60
+wait 5000
+give 6                       # Mauler
+give 29                      # Laser
+give 0x52                    # Ricochet Laser
+equip 0x52
+log ricochet-handson: host ready, play by hand

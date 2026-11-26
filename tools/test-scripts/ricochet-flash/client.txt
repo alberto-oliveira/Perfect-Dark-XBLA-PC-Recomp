@@ -1,0 +1,11 @@
+# Scenario "ricochet-flash", client: stands 350 units in front of the host. Runs after lobby-client.txt.
+
+pick 825FA2F8                # Ready
+signal ready-{copy}
+waitmenu none 120
+waitsignal host-armed 1 60
+tp near Zqhost 350
+face Zqhost
+signal placed
+waitsignal host-done 1 180
+log ricochet-flash: client done

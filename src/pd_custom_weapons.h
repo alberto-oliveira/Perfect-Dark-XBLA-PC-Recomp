@@ -72,6 +72,11 @@ struct Weapon {
   // (0 = none) and the first-person model file it is drawn with.
   uint8_t left_weapon;
   uint16_t left_model_file;
+  // The weapon it LOOKS like (0 = its base): its first-person model, the hand's
+  // position, the equip animation and which model parts are hidden come from
+  // that weapon's definition, its third-person and pickup models from that
+  // weapon's too (Install, AsLook). How it works is still the base weapon's.
+  uint8_t look;
 };
 
 // The custom weapons. The order gives their virtual table indices (the first is
@@ -82,7 +87,12 @@ inline constexpr Weapon kList[] = {
     // (pd_crossbow.h); name: the Necklace's text (0x4CE6, solo-only)
     // left hand: the remote mine's detonator (weapon 34, which the game turns
     // into the detonator in a left hand) from the mine's model file 0x393
-    {0x51, 27, 0x4CE6, "Detonator Crossbow", kFuncMineDetonate, 34, 0x393},
+    {0x51, 27, 0x4CE6, "Detonator Crossbow", kFuncMineDetonate, 34, 0x393, 0},
+    // The Ricochet Laser, named the Carom LX (a carom: a shot that rebounds, in
+    // billiards). base: the Laser (its pulse and Stream, whose shots bounce off
+    // walls: pd_ricochet.h); looks like the Mauler (weapon 6), its muzzle flash
+    // drawn red (pd_rico_flash_tint); name: the text of solo item 0x4E (0x4CE5)
+    {0x52, 29, 0x4CE5, "Carom LX", 0, 0, 0, 6},
 };
 constexpr int kCount = int(sizeof(kList) / sizeof(kList[0]));
 static_assert(kFirstSpareFuncBitWeapon + kCount - 1 <= kLastSpareFuncBitWeapon, "no spare function bits left");
@@ -101,6 +111,14 @@ inline bool IsCustom(uint32_t number) { return IndexOf(number) >= 0; }
 inline uint32_t AsBase(uint32_t number) {
   const int i = IndexOf(number);
   return i >= 0 ? kList[i].base : number;
+}
+
+// The weapon number whose models a weapon is drawn with: the look weapon's for a
+// custom weapon that has one, else as AsBase.
+inline uint32_t AsLook(uint32_t number) {
+  const int i = IndexOf(number);
+  if (i < 0) return number;
+  return kList[i].look ? kList[i].look : kList[i].base;
 }
 
 // The custom weapon with weapon number `number`, or nullptr.
@@ -162,7 +180,9 @@ inline uint8_t TableIndex(int custom_index) { return uint8_t(pd::weapons::kWeapo
 // 0x40. A custom weapon's tint is added as such an overlay, at most kTintAlpha,
 // scaled by the tint strength (TintRgba), only for that weapon (hooks in
 // perfect_dark_hooks.cpp); no model or texture data changes.
-constexpr uint32_t kNoTint = 0xFFFFFF;  // RGB; white multiplies by 1
+// "No tint": a value no 0xRRGGBB colour can have, so that white (0xFFFFFF) can
+// be a tint of its own (the Ricochet Laser is tinted white).
+constexpr uint32_t kNoTint = 0xFFFFFFFF;
 
 // Each custom weapon's tint (0xRRGGBB), set from its setting every frame.
 inline uint32_t g_tint[kCount] = {};
@@ -172,7 +192,7 @@ inline uint32_t ParseTint(const std::string& text) {
   static const struct { const char* name; uint32_t rgb; } kNames[] = {
       {"red", 0xFF3030},  {"orange", 0xFF9020}, {"yellow", 0xFFE030}, {"green", 0x40FF40},
       {"cyan", 0x40FFFF}, {"blue", 0x5080FF},   {"purple", 0xB050FF}, {"pink", 0xFF70C0},
-      {"white", kNoTint}, {"off", kNoTint},     {"", kNoTint},
+      {"white", 0xFFFFFF}, {"off", kNoTint},    {"", kNoTint},
   };
   for (const auto& n : kNames) {
     if (text == n.name) return n.rgb;
@@ -185,10 +205,51 @@ inline uint32_t ParseTint(const std::string& text) {
   return kNoTint;
 }
 
+// ---- Muzzle flash colour ---------------------------------------------------------
+//
+// The Mauler's first-person flash is a part of its gun model (in the dump of
+// file 0x379: the GUNDL node at 0x1F8, in the OPAQUE list) drawn as texture x
+// vertex colour (combine FC121824 FF33FFFF). Its one vertex colour (a colour
+// table of one entry, 0xFEFEFEFF, followed by 0 and its display list's 0x05...
+// address) is near-white; the green is in the texture (0x0296). The render
+// colour does not reach it. A custom weapon's flash colour is put in that vertex
+// colour while its gun is drawn (hooks around the gun renderer's model_render)
+// and put back after, so the loaded file stays the Mauler's. The loaded file's
+// layout differs from the dump (the entry was 0x4A0 earlier), so the entry is
+// found by that pattern once per loaded model. Set every frame (0xRRGGBB, or
+// kNoTint = none).
+struct FlashTint {
+  uint32_t rgb = kNoTint;
+};
+inline FlashTint g_flash[kCount];
+constexpr uint32_t kMaulerFlashColourValue = 0xFEFEFEFF;
+constexpr uint32_t kFlashSearchSize = 0x4000;  // the Mauler's gun files are ~12 KB
+
+// Where the flash's colour entry is in the gun model loaded at `def`, or 0: the
+// first {0xFEFEFEFF, 0, 0x05xxxxxx} (the entry, an empty word, its display list).
+inline uint32_t FindFlashColour(const uint8_t* base, uint32_t def) {
+  using pd::weapons::LoadU32;
+  for (uint32_t a = def; a < def + kFlashSearchSize; a += 4) {
+    if (LoadU32(base, a) == kMaulerFlashColourValue && LoadU32(base, a + 4) == 0 &&
+        (LoadU32(base, a + 8) >> 24) == 0x05) {
+      return a;
+    }
+  }
+  return 0;
+}
+
 // The tint of weapon `number`, kNoTint if it is not a custom weapon.
 inline uint32_t TintOf(uint32_t number) {
   const int i = IndexOf(number);
   return i >= 0 ? g_tint[i] : kNoTint;
+}
+
+// The muzzle flash colour of weapon `number` as a vertex colour (RGBA), or 0 if
+// it has none of its own.
+inline uint32_t FlashColourOf(uint32_t number) {
+  const int i = IndexOf(number);
+  if (i < 0 || g_flash[i].rgb == kNoTint) return 0;
+  return (g_flash[i].rgb << 8) | 0xFF;
 }
 
 // How much of the tint colour shows at full strength (the Mauler's glow uses 0x7F).
@@ -278,6 +339,36 @@ inline uint32_t BuildPickupNames(uint8_t* base, Alloc alloc) {
   return table;
 }
 
+// ---- The look (a custom weapon drawn as another weapon) ---------------------------
+//
+// A weapon definition (N64 struct weapondef) mixes how a gun looks with how it
+// works. What belongs to the look, and is copied from the look weapon:
+//   +0x00 u16 hi model file, +0x02 u16 lo model file (first person);
+//   +0x04..+0x13 the equip, unequip, primary->secondary and secondary->primary
+//         animations (gun scripts that play the MODEL's animations, so they
+//         must match the model);
+//   +0x28 muzzle z, +0x2C/+0x30/+0x34 the gun's position in the view, +0x38 sway;
+//   +0x3C gunviscmds and +0x40 part visibility (which of the model's parts are
+//         hidden, e.g. the Mauler's spare magazine).
+// What stays the base weapon's: the functions (+0x14/+0x18; their fire
+// animations: the Laser has none), ammo (+0x1C/+0x20), aim settings (+0x24),
+// names and flags.
+constexpr uint32_t kDefLookModels = 0x00, kDefLookModelsSize = 0x14;
+constexpr uint32_t kDefLookPlace = 0x28, kDefLookPlaceSize = 0x1C;
+// A multiplayer table entry's pickup model (u16) and its scale (u16).
+constexpr uint32_t kEntryModel = 6, kEntryModelSize = 4;
+
+inline void CopyLook(uint8_t* base, uint32_t def, uint8_t look) {
+  if (!look) return;
+  const uint32_t look_def = LoadU32(base, kWeapons + uint32_t(look) * 4);
+  if (!look_def) return;
+  std::memcpy(base + def + kDefLookModels, base + look_def + kDefLookModels, kDefLookModelsSize);
+  std::memcpy(base + def + kDefLookPlace, base + look_def + kDefLookPlace, kDefLookPlaceSize);
+  REXLOG_INFO("[custom] definition 0x{:08X} looks like weapon {} (definition 0x{:08X}): model files 0x{:04X}/0x{:04X}",
+              def, look, look_def, (base[def] << 8) | base[def + 1], (base[def + 2] << 8) | base[def + 3]);
+}
+
+
 // Makes each custom weapon, once (game thread): a copy of its base weapon's
 // definition at g_Weapons[number], with the borrowed name; a copy of the base's
 // multiplayer table entry with the weapon number changed; and the pickup-name
@@ -297,6 +388,7 @@ inline void Install(uint8_t* base, Alloc alloc) {
       pd::weapons::StoreU16(base, def + kWeaponDefShortName, w.text_id);
       pd::weapons::StoreU16(base, def + kWeaponDefName, w.text_id);
       if (w.secondary) StoreU32(base, def + kWeaponDefSecondary, w.secondary);
+      CopyLook(base, def, w.look);
       StoreU32(base, kWeapons + uint32_t(w.number) * 4, def);
     }
     const int base_index = TableIndexOf(base, w.base);
@@ -306,6 +398,14 @@ inline void Install(uint8_t* base, Alloc alloc) {
                   base + pd::weapons::kWeaponTable + uint32_t(base_index) * pd::weapons::kWeaponEntrySize,
                   pd::weapons::kWeaponEntrySize);
       base[entry] = w.number;
+      // The pickup is drawn with the look weapon's model and scale.
+      const int look_index = w.look ? TableIndexOf(base, w.look) : -1;
+      if (look_index >= 0) {
+        std::memcpy(base + entry + kEntryModel,
+                    base + pd::weapons::kWeaponTable + uint32_t(look_index) * pd::weapons::kWeaponEntrySize +
+                        kEntryModel,
+                    kEntryModelSize);
+      }
     }
     REXLOG_INFO("[custom] weapon 0x{:02X} ({}) from weapon {}: definition 0x{:08X}, table index {} -> entry "
                 "0x{:08X}, name text 0x{:04X}, function bit of weapon {}",

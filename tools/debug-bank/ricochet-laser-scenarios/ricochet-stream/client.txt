@@ -1,0 +1,17 @@
+# Scenario "ricochet-stream", client (Zqclient): stands in the Stream's bounces. Runs after lobby-client.txt.
+
+pick 825FA2F8                # Ready
+signal ready-{copy}
+waitmenu none 120
+wait 3000
+waitsignal host-armed 1 60
+tp near Zqhost 180
+face Zqhost
+signal placed
+wait 1600
+shot stream-client-during
+waitsignal fired 1 60
+shot stream-client-after     # alive (hurt) or dead after 2 s of bounces?
+signal client-seen
+waitsignal host-done 1 60
+log ricochet-stream: client done

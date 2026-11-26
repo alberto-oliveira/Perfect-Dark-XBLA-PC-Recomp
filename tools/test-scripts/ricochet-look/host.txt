@@ -1,0 +1,47 @@
+# Scenario "ricochet-look" (Ricochet Laser, test R1): 2 copies. Runs after
+# lobby-host.txt. The host takes the Ricochet Laser (0x52): screenshots of the
+# white Mauler in hand and of its red pulse and Stream, fired at the floor in
+# front of Zqclient (who screenshots the host's third-person model and beams).
+# Then a switch away and back, to check the model loads again.
+
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start
+waitmenu none 60
+wait 5000
+give 0x52
+equip 0x52
+wait 2500
+pos armed
+shot look-host-idle
+signal host-armed
+waitsignal placed 1 60
+wait 500
+face Zqclient -40            # the floor in front of the client
+wait 300
+log ricochet-look: pulse
+trig 0 255 150
+wait 60
+shot look-host-pulse
+signal fired-pulse
+wait 1500
+log ricochet-look: stream
+btn rb
+wait 800
+face Zqclient -40
+trig 0 255 1500
+wait 600
+shot look-host-stream
+signal fired-stream
+wait 1500
+log ricochet-look: switch away and back
+btn b
+wait 1500
+pos away
+equip 0x52
+wait 2500
+pos back
+shot look-host-back
+signal host-done
+log ricochet-look: host done

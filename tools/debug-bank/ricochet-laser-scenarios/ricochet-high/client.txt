@@ -1,0 +1,7 @@
+# Scenario "ricochet-high", client: logs the host's shots as replayed here. Runs after lobby-client.txt.
+
+pick 825FA2F8                # Ready
+signal ready-{copy}
+waitmenu none 120
+waitsignal host-done 1 180
+log ricochet-high: client done

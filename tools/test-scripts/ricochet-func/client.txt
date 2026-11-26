@@ -1,0 +1,23 @@
+# Scenario "ricochet-func", client: peeks its copy of the host's choice bits. Runs after lobby-client.txt.
+
+pick 825FA2F8                # Ready
+signal ready-{copy}
+waitmenu none 120
+wait 3000
+waitsignal step-1 1 60
+peek 82641AEF 6 client-start
+signal seen-1
+waitsignal step-2 1 60
+wait 500
+peek 82641AEF 6 client-rico-stream
+signal seen-2
+waitsignal step-3 1 60
+wait 500
+peek 82641AEF 6 client-laser-stream
+signal seen-3
+waitsignal step-4 1 60
+wait 500
+peek 82641AEF 6 client-rico-again
+signal seen-4
+waitsignal host-done 1 60
+log ricochet-func: client done

@@ -1,0 +1,10 @@
+# Scenario "ricochet-hits", client 2 (Zqclient2): stays where it spawned (out of
+# the shots' way) and logs the rules it receives from the host. Runs after lobby-client.txt.
+
+pick 825FA2F8                # Ready
+signal ready-{copy}
+waitmenu none 120
+wait 3000
+waitsignal host-done 1 180
+pos end
+log ricochet-hits: client done
