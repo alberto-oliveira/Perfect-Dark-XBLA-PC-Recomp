@@ -54,6 +54,7 @@
 #include "pd_handicap.h"       // pd_handicaps: online handicaps by gamertag
 #include "pd_weapons.h"        // pd_mp_weapons: weapon slots 7-16, shuffled respawns
 #include "pd_custom_weapons.h"  // new weapons under borrowed weapon numbers
+#include "pd_turret.h"          // the Remote Turret (its function name)
 #include "pd_player.h"         // test pipe: the local player (give, look, tp, ...)
 #include "pd_stages.h"         // pd_solo_stages: the solo mission stages as arenas
 #include <rex/input/sdl/sdl_input_driver.h>
@@ -5261,6 +5262,10 @@ class PerfectDarkApp : public rex::ReXApp {
       REXLOG_INFO("[custom] weapon 0x{:02X}: name text 0x{:04X} = \"{}\"{}", w.number, w.text_id, w.name,
                   ok ? "" : " FAILED (text id not loaded)");
     }
+    // The Remote Turret's secondary function's name (pd_turret.h).
+    const std::string control = std::string(pd::turret::kControlName) + "\n";
+    REXLOG_INFO("[turret] function name text 0x{:04X} = \"{}\"{}", pd::turret::kTextControl, pd::turret::kControlName,
+                OverrideText(mem, pd::turret::kTextControl, control.c_str()) ? "" : " FAILED");
   }
 
   static void OverrideLobbyLabels(rex::memory::Memory* mem) {

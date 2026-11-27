@@ -1,0 +1,35 @@
+# Scenario "turret-throw" (Remote Turret, R1): 2 copies. Runs after lobby-host.txt.
+# The host throws a Remote Turret (weapon 0x42) towards the client, who stands in
+# front of it for 10 s: the turret must stay idle (no firing, the client unhurt) and
+# the gun must stay in the host's hand. Then a second throw replaces the first (the
+# old one explodes). The [turret] lines of both logs show each PC's copy.
+
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start
+waitmenu none 60
+wait 5000
+give 0x42
+equip 0x42
+wait 2500
+signal armed
+waitsignal placed 1 60
+wait 500
+face Zqclient -25            # aim at the floor in front of the client
+wait 500
+pos before-throw
+trig 0 255 300               # primary: throw
+wait 3000
+pos after-throw
+shot throw-host
+wait 10000                   # the client stands in front of the idle turret
+pos idle-end
+face Zqclient -25 20
+trig 0 255 300               # throw again: the first turret explodes
+wait 3000
+pos second-throw
+shot second-host
+signal host-done
+wait 2000
+log turret-throw: host done

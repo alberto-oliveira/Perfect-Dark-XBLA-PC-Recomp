@@ -1,0 +1,47 @@
+# Scenario "turret-control" (Remote Turret, R2): 2 copies. Runs after lobby-host.txt.
+# The host throws a Remote Turret near the client, switches to Control, takes control
+# (the view moves to the turret, the gun is hidden, walking does nothing), aims the
+# turret at the client and fires until the client dies, then toggles back to leave:
+# the turret explodes (type 13) and is gone on both PCs.
+
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start
+waitmenu none 60
+wait 5000
+give 0x42
+equip 0x42
+wait 2500
+signal armed
+waitsignal placed 1 60
+wait 500
+face Zqclient -25            # aim at the floor in front of the client
+wait 500
+trig 0 255 300               # primary: throw
+wait 3000
+btn rb                       # secondary: Control
+wait 1500
+trig 0 255 200               # take control
+wait 1500
+pos control-start
+shot control-view
+stick 0 32000 1500           # try to walk: the body must stay
+wait 500
+pos control-walked
+face Zqclient                # aim the turret at the client (from the turret)
+wait 1000
+shot control-aim
+signal firing
+trig 0 255 4000              # fire
+wait 500
+shot control-fired
+pos control-fired
+wait 1000
+btn rb                       # leave: the turret explodes
+wait 2500
+pos after-leave
+shot after-leave
+signal host-done
+wait 2000
+log turret-control: host done

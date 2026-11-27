@@ -1009,6 +1009,86 @@ address = 0x820FC7A4
 name = "PdHookRicoRenderBeams"
 registers = ["r3"]
 
+# ---- Remote Turret (src/pd_turret.h) ---------------------------------------------------
+# The thrown-projectile maker sub_821709E8 (local throws, remote throws' replay, bots):
+# its Laptop check `cmplwi r11,14` (0x82170B28) sees the base weapon's number and notes
+# the weapon; after laptop_deploy (`bl 0x8221e5c8`, result r3 at 0x82170B34) a Remote
+# Turret's sentry is remembered under its owner.
+[[midasm_hook]]
+address = 0x82170B28
+name = "PdHookTurretDeployCheck"
+registers = ["r11"]
+
+[[midasm_hook]]
+address = 0x82170B34
+name = "PdHookTurretDeployed"
+registers = ["r3"]
+
+# autogun_tick sub_82206E58 at loc_822078E8 (before apply_rotation; goal angles at
+# 84/88(r1), r31 = the object) and at loc_82207B08 (before the owner's PC sends the
+# aim and the firing flag): a Remote Turret aims where its controlling player looks,
+# fires on the trigger, and otherwise stays idle.
+[[midasm_hook]]
+address = 0x822078E8
+name = "PdHookTurretGoals"
+registers = ["r1", "r31"]
+
+[[midasm_hook]]
+address = 0x82207B08
+name = "PdHookTurretFiring"
+registers = ["r31"]
+
+# player_tick sub_820FF678, normal branch: the player_move_camera_from_pos_rooms call
+# (sub_820FE148 at 0x821005E0; r3 = the camera position on the stack, r6/r7 = the
+# position and rooms it is checked from): the camera at the controlled turret.
+[[midasm_hook]]
+address = 0x821005E0
+name = "PdHookTurretCamera"
+registers = ["r3", "r6", "r7"]
+
+# bmove_process_input sub_820F2988: the walk-mode call of bwalk_apply_move_data
+# (`addi r3,r1,144` at 0x820F4494, `bl 0x821044b8`): skipped while controlling.
+[[midasm_hook]]
+address = 0x820F4494
+name = "PdHookTurretFreeze"
+jump_address_on_true = 0x820F449C
+
+# bgun_tick_gameplay sub_821807A0 in a network match: a human player's trigger is the
+# value XBLA's input exchange (sub_822884a8) hands back, stored as playertriggeron
+# (`stw r10,5676(r26)` at 0x82180B60, r10 = the trigger): the gun does not see it while
+# its player controls a turret, nor right after leaving with the trigger held.
+[[midasm_hook]]
+address = 0x82180B60
+name = "PdHookTurretTriggerNet"
+registers = ["r10"]
+
+# bmove_process_input's call of bgun_tick_gameplay (`lwz r3,152(r1)` = the trigger, then
+# `bl 0x821807a0` at 0x820F4190): where the turret tick reads the trigger.
+[[midasm_hook]]
+address = 0x820F4190
+name = "PdHookTurretTrigger"
+registers = ["r3"]
+
+# The first-person gun renderer sub_821761F8 (called once a frame with &gdl): no gun
+# while the view is at the turret.
+[[midasm_hook]]
+address = 0x821761F8
+name = "PdHookTurretHideGun"
+return_on_true = true
+
+# sub_822211E8, a player using their own thrown Laptop sentry (r28 = the sentry):
+# right after each `li r3,14` (0x822214B0: inv_give_single_weapon; 0x822214C4: the
+# pickup message) a Remote Turret's gives back the Remote Turret.
+[[midasm_hook]]
+address = 0x822214B4
+name = "PdHookTurretPickup"
+registers = ["r3", "r28"]
+
+[[midasm_hook]]
+address = 0x822214C8
+name = "PdHookTurretPickup"
+registers = ["r3", "r28"]
+
 # ---- Test tools ---------------------------------------------------------------------
 
 # The player input step sub_820F2988, just after its stack frame is made

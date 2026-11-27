@@ -9,6 +9,7 @@
 #include "pd_crossbow.h"  // the detonator crossbow
 #include "pd_custom_weapons.h"  // new weapons under borrowed weapon numbers
 #include "pd_ricochet.h"        // the Ricochet Laser
+#include "pd_turret.h"          // the Remote Turret
 #include "pd_player.h"  // the local player, for test scripts
 #include "pd_file_override.h"  // custom gun models: loose files over packed ones
 
@@ -2204,6 +2205,7 @@ void PdCustomInstall(uint8_t* base) {
   if (pd::custom::g_installed) return;
   auto* memory = rex::system::kernel_state()->memory();
   pd::custom::Install(base, [memory](uint32_t size) { return memory->SystemHeapAlloc(size); });
+  pd::turret::Install(base, [memory](uint32_t size) { return memory->SystemHeapAlloc(size); });  // its functions
 }
 
 // ---- Custom weapons: a first-person gun model of our own (stage 4a) -------------------
@@ -2468,11 +2470,14 @@ bool TestTeleport(PPCContext& ctx, uint8_t* base, uint32_t player, pd::player::V
 
 }  // namespace
 
+void PdTurretTick(PPCContext& ctx, uint8_t* base);  // the Remote Turret (further down)
+
 void PdTestPlayerTick(PPCContext& ctx, uint8_t* base) {
   namespace pl = pd::player;
   const uint32_t player = pl::Player(base, 0);
   if (!player || pl::LoadU32(base, 0x82648BF8 + 1188) != player) return;  // not the local player's turn
   PdRicoTick(ctx, base);  // the Ricochet Laser's bounce beams (once a level frame)
+  PdTurretTick(ctx, base);  // the Remote Turret: taking and leaving control
 
   if (pl::g_track_frames > 0) {
     const uint32_t frame = pl::LoadU32(base, pl::kLevelFrames);
@@ -2521,11 +2526,16 @@ void PdTestPlayerTick(PPCContext& ctx, uint8_t* base) {
       pl::Vec target = pl::LoadVec(base, other + pl::kPropPos);
       target.y -= 40.0f;  // the prop is at eye height: aim at the chest
       float theta, verta;
-      pl::AnglesTowards(pl::LoadVec(base, pl::PropOf(base, player) + pl::kPropPos), target, &theta, &verta);
+      // From the eye: the player's, or the Remote Turret's while controlling one.
+      const bool at_turret = pd::turret::g_control.on && pd::turret::IsTurret(base, pd::turret::g_control.obj);
+      const pl::Vec eye = at_turret ? pd::turret::EyeOf(base, pd::turret::g_control.obj)
+                                    : pl::LoadVec(base, pl::PropOf(base, player) + pl::kPropPos);
+      pl::AnglesTowards(eye, target, &theta, &verta);
       if (r.c != 0.0f) verta = r.b;  // face <player> <verta>: that player's direction, this vertical angle
       theta = std::fmod(theta + r.d + 360.0f, 360.0f);  // face <player> <verta> <turn>: turned away from it
       TestSetLook(base, player, theta, verta);
-      REXLOG_INFO("[test] face player {}: theta {:.1f} verta {:.1f}", r.number, theta, verta);
+      REXLOG_INFO("[test] face player {}: theta {:.1f} verta {:.1f}{}", r.number, theta, verta,
+                  at_turret ? " (from the turret)" : "");
       break;
     }
     case pl::Action::kTeleport:
@@ -2606,10 +2616,13 @@ void PdTestPlayerTick(PPCContext& ctx, uint8_t* base) {
 // ---- end of the test tools ---------------------------------------------------------------
 
 
+void PdTurretFrame();  // the Remote Turret's settings (further down)
+
 void PdNoteGameFrame(uint8_t* base) {
   PdCustomInstall(base);
   PdXbowNetFrame();
   PdRicoFrame();
+  PdTurretFrame();
   PdFileOverrideNetFrame();
   PdMpMusicFrame(base);
   PdWeaponsFrame();
@@ -2744,6 +2757,278 @@ void PdNetLookApply(uint32_t pad) {
 
 uint32_t PdNetLocalInput(uint32_t input) {
   return PerfectDarkApp::NetLocalInput(input);
+}
+
+// ---- The Remote Turret (pd_turret.h) ---------------------------------------------
+// A custom weapon (pd_custom_weapons.h): the Laptop Gun, whose primary throws its
+// sentry and keeps the gun, and whose secondary ("Control") takes control of it.
+REXCVAR_DEFINE_INT32(pd_turret_turn_speed, 60, "PerfectDark",
+                     "The Remote Turret's turning speed while controlled, in hundredths of a radian per "
+                     "frame (the Laptop sentry's: 7). Online the host's");
+REXCVAR_DEFINE_INT32(pd_turret_explosion, 13, "PerfectDark",
+                     "The explosion when a player leaves their Remote Turret: an explosion type 1-25 "
+                     "(13 = a rocket's). Online the host's");
+REXCVAR_DEFINE_INT32(pd_turret_eye_offset, 25, "PerfectDark",
+                     "The Remote Turret's view: how far the camera sits out of the surface the turret "
+                     "is stuck to, in game units");
+
+namespace {
+bool turret_hosting = false;
+pd::turret::Rules turret_sent;
+int turret_poll_frames = 0;
+
+void TurretApply(const pd::turret::Rules& r) {
+  pd::turret::g_explosion = r.explosion;
+  pd::turret::g_turn_speed = float(r.turn_speed_percent) / 100.0f;
+}
+}  // namespace
+
+// Each frame (game thread): the settings. The rules (explosion, turning speed) are
+// the host's online, sent and polled as PdRicoRulesFrame does; the camera offset is
+// this PC's own.
+void PdTurretFrame() {
+  namespace netplay = rex::kernel::xam::netplay;
+  namespace tu = pd::turret;
+  tu::g_eye_offset = float(std::clamp(REXCVAR_GET(pd_turret_eye_offset), 0, 200));
+  tu::Rules own;
+  own.explosion = uint32_t(std::clamp(REXCVAR_GET(pd_turret_explosion), 1, 25));
+  own.turn_speed_percent = uint32_t(std::clamp(REXCVAR_GET(pd_turret_turn_speed), 1, 255));
+  if (netplay::IsHostingSession()) {
+    if (!turret_hosting || own != turret_sent) {
+      const std::vector<uint8_t> blob = tu::EncodeBlob(own);
+      netplay::SetHostBlob(tu::kBlobKey, blob.data(), blob.size());
+      REXLOG_INFO("[turret] hosting: rules sent to the joined PCs: explosion {}, turning speed {}", own.explosion,
+                  own.turn_speed_percent);
+      turret_hosting = true;
+      turret_sent = own;
+    }
+    TurretApply(own);
+    return;
+  }
+  turret_hosting = false;
+  if (!netplay::IsJoinedSession()) {
+    TurretApply(own);
+    return;
+  }
+  if (++turret_poll_frames % 30 != 0) return;
+  netplay::HostBlob blob;
+  tu::Rules host;  // the defaults until the host's are heard
+  const bool heard = netplay::LatestHostBlob(tu::kBlobKey, &blob) && tu::DecodeBlob(blob.data, &host);
+  const tu::Rules current{tu::g_explosion, uint32_t(tu::g_turn_speed * 100.0f + 0.5f)};
+  if (host != current) {
+    REXLOG_INFO("[turret] joined: {} rules: explosion {}, turning speed {}",
+                heard ? "the host's" : "default (nothing heard from the host yet)", host.explosion,
+                host.turn_speed_percent);
+  }
+  TurretApply(host);
+}
+
+// laptop_deploy made a sentry (the deploy hook at 0x82170B34, every PC, every
+// player's throw): a Remote Turret's is remembered under its owner.
+void PdTurretDeployed(uint8_t* base, uint32_t obj) {
+  namespace tu = pd::turret;
+  const uint32_t weapon = tu::g_deploying_weapon;
+  tu::g_deploying_weapon = 0;
+  if (!obj || weapon != tu::kWeaponTurret) return;
+  // The thrower: the current player (the local thrower, or the remote one whose throw
+  // is replayed), as a player number on this PC.
+  const int owner = int32_t(tu::LoadU32(base, pd::player::kGVars + 1196));
+  if (owner < 0 || owner > 7) return;
+  for (uint32_t& t : tu::g_turrets) {
+    if (t == obj) t = 0;  // the object is reused (one table slot per thrower)
+  }
+  tu::g_turrets[owner] = obj;
+  tu::StoreF32(base, obj + tu::kGunMaxSpeed, tu::g_turn_speed);
+  const uint32_t prop = tu::LoadU32(base, obj + tu::kObjProp);
+  if (prop) tu::StoreU32(base, prop + tu::kPropSyncId, tu::kSyncIdBase + (tu::LoadU32(base, obj + tu::kObjHidden) >> 28));
+  // TEMP_TURRET: who threw it, as seen on this PC.
+  REXLOG_INFO("[turret] TEMP_TURRET deployed frame {}: obj 0x{:08X} prop 0x{:08X} owner {} ({}{}), current "
+              "player {}, owner bits {}, ammo {}",
+              tu::LoadU32(base, pd::player::kLevelFrames), obj, tu::LoadU32(base, obj + tu::kObjProp), owner,
+              pd::crossbow::PlayerName(base, owner), pd::crossbow::IsLocalPlayer(base, owner) ? ", this PC" : "",
+              owner, tu::LoadU32(base, obj + tu::kObjHidden) >> 28, base[obj + tu::kGunAmmo]);
+}
+
+namespace {
+// A turret whose explosion found no free slot: tried again each frame, then just
+// deleted (the other PCs delete their copies only when the explosion arrives).
+uint32_t turret_pending_explode = 0;
+int turret_pending_tries = 0;
+constexpr int kTurretMaxTries = 300;  // ~5 s
+
+void TurretDelete(uint8_t* base, uint32_t obj) {
+  namespace tu = pd::turret;
+  tu::StoreU32(base, obj + tu::kObjHidden, tu::LoadU32(base, obj + tu::kObjHidden) | tu::kHiddenDeleting);
+}
+
+// Explodes the local player's turret `obj` (prop_explode, on the owner's PC only;
+// the explosion message deletes the other PCs' copies), then deletes our copy.
+// False if no explosion slot was free (it stays pending).
+bool TurretExplode(PPCContext& ctx, uint8_t* base, uint32_t obj) {
+  namespace tu = pd::turret;
+  const uint32_t prop = tu::LoadU32(base, obj + tu::kObjProp);
+  if (!prop) return true;
+  PPCContext call = ctx;
+  call.r3.u64 = prop;
+  call.r4.u64 = tu::g_explosion;
+  sub_82205A18(call, base);  // prop_explode: false if no explosion slot is free
+  const bool ok = call.r3.u32 != 0;
+  REXLOG_INFO("[turret] explode obj 0x{:08X} type {}: {}", obj, tu::g_explosion, ok ? "done" : "no free slot");
+  if (ok) TurretDelete(base, obj);
+  return ok;
+}
+}  // namespace
+
+// Each tick of the local player (the input step, PdTestPlayerTick; it runs every
+// frame, also while dead): taking and leaving control.
+void PdTurretTick(PPCContext& ctx, uint8_t* base) {
+  namespace tu = pd::turret;
+  namespace pl = pd::player;
+  const uint32_t frame = pl::LoadU32(base, pl::kLevelFrames);
+  static uint32_t last_frame = 0;
+  if (frame < last_frame) {  // a new stage
+    tu::Reset();
+    turret_pending_explode = 0;
+  }
+  const bool new_frame = frame != last_frame;
+  last_frame = frame;
+
+  if (turret_pending_explode) {
+    if (!tu::IsTurret(base, turret_pending_explode) || TurretExplode(ctx, base, turret_pending_explode) ||
+        ++turret_pending_tries > kTurretMaxTries) {
+      if (tu::IsTurret(base, turret_pending_explode)) TurretDelete(base, turret_pending_explode);
+      turret_pending_explode = 0;
+    }
+  }
+
+  // Another PC's turret that exploded there: the explosion message deactivated our copy
+  // (pd_turret.h, kSyncIdBase); it goes.
+  for (int n = 0; n < 8; ++n) {
+    const uint32_t t = tu::g_turrets[n];
+    if (tu::IsTurret(base, t) && !pd::crossbow::IsLocalPlayer(base, n) &&
+        (tu::LoadU32(base, t + tu::kObjFlags) & tu::kFlagDeactivated)) {
+      REXLOG_INFO("[turret] player {}'s turret exploded on its PC: our copy 0x{:08X} goes", n, t);
+      TurretDelete(base, t);
+    }
+  }
+
+  const uint32_t player = pl::Player(base, 0);
+  const uint32_t hand = player + tu::kRightHand;
+  const bool holding = int8_t(base[player + pl::kWeapon]) == int8_t(tu::kWeaponTurret);
+  const bool secondary = base[hand + tu::kHandFunc] == 1;
+  const bool trigger = tu::g_control.trigger;  // (PdHookTurretTrigger; the gun's own is held off while controlling)
+  const bool dead = tu::LoadU32(base, player + tu::kPlayerIsDead) != 0;
+  tu::Control& c = tu::g_control;
+  if (!trigger) c.need_release = false;
+
+  if (c.on) {
+    const char* why = nullptr;
+    bool explode = true;
+    if (!tu::IsTurret(base, c.obj)) {
+      why = "the turret is gone";
+      explode = false;
+    } else if (tu::LoadU32(base, c.obj + tu::kObjFlags) & tu::kFlagDeactivated) {
+      why = "the turret is destroyed";  // (shot to pieces: it no longer works)
+      explode = false;
+    } else if (dead) {
+      why = "died";
+    } else if (!holding) {
+      why = "switched weapons";
+    } else if (!secondary) {
+      why = "toggled the function";
+    }
+    if (why) {
+      REXLOG_INFO("[turret] control ends frame {}: {}", frame, why);
+      const uint32_t obj = c.obj;
+      c.on = false;
+      c.obj = 0;
+      c.fire = false;
+      if (explode && !TurretExplode(ctx, base, obj)) {
+        turret_pending_explode = obj;
+        turret_pending_tries = 0;
+      }
+    } else {
+      c.fire = trigger && !c.need_release;
+    }
+  } else if (holding && secondary && trigger && !c.need_release && !dead) {
+    c.need_release = true;  // one press, one try; and no firing until it is let go
+    if (const uint32_t t = tu::LocalTurret(base)) {
+      c.on = true;
+      c.obj = t;
+      c.fire = false;
+      REXLOG_INFO("[turret] control starts frame {}: obj 0x{:08X}, ammo {}", frame, t, base[t + tu::kGunAmmo]);
+    } else {
+      REXLOG_INFO("[turret] control: no turret out");
+    }
+  }
+
+  // TEMP_TURRET: every turret on this PC, twice a second, and the local player's
+  // damage (its chr +0x100, on its own PC) and death while any is out.
+  if (new_frame && frame % 30 == 0) {
+    bool any = false;
+    for (const uint32_t t : tu::g_turrets) any = any || tu::IsTurret(base, t);
+    const uint32_t chr = tu::LoadU32(base, pl::PropOf(base, player) + 4);
+    if (any && chr) {
+      REXLOG_INFO("[turret] TEMP_TURRET frame {}: local player damage {:.2f} dead {} at {}", frame,
+                  tu::LoadF32(base, chr + 0x100), dead ? 1 : 0, pl::Describe(base, 0));
+    }
+    for (int n = 0; n < 8; ++n) {
+      const uint32_t obj = tu::g_turrets[n];
+      if (!tu::IsTurret(base, obj)) continue;
+      const pl::Vec p = pl::LoadVec(base, tu::LoadU32(base, obj + tu::kObjProp) + pl::kPropPos);
+      REXLOG_INFO("[turret] TEMP_TURRET frame {}: owner {} obj 0x{:08X} at {:.0f} {:.0f} {:.0f} yrot {:.3f} xrot "
+                  "{:.3f} firing {} ammo {} damage {}/{} flags 0x{:08X} target 0x{:08X} control {}",
+                  frame, n, obj, p.x, p.y, p.z, tu::LoadF32(base, obj + tu::kGunYRot),
+                  tu::LoadF32(base, obj + tu::kGunXRot), int(int8_t(base[obj + tu::kGunFiring])),
+                  base[obj + tu::kGunAmmo], pl::LoadS16(base, obj + tu::kObjDamage),
+                  pl::LoadS16(base, obj + tu::kObjDamage + 2), tu::LoadU32(base, obj + 8),
+                  tu::LoadU32(base, obj + tu::kGunTarget), c.on && c.obj == obj ? "on" : "off");
+    }
+  }
+}
+
+// autogun_tick (sub_82206E58) before it turns the sentry (0x822078E8; goal angles
+// at 84/88(r1), r31 = the object), on every PC for every sentry: a Remote Turret
+// turns fast on every PC (so the copies keep up); on its owner's PC its goals are
+// the controlling player's view, or where it already points when nobody controls it.
+// The other PCs' copies get the owner's goals over the network.
+void PdTurretGoals(uint8_t* base, uint32_t r1, uint32_t obj) {
+  namespace tu = pd::turret;
+  if (!tu::IsTurret(base, obj)) return;
+  tu::StoreF32(base, obj + tu::kGunMaxSpeed, tu::g_turn_speed);
+  if (!pd::crossbow::IsLocalPlayer(base, tu::Owner(base, obj))) return;
+  float yrot = tu::LoadF32(base, obj + tu::kGunYRot);
+  float xrot = tu::LoadF32(base, obj + tu::kGunXRot);
+  const bool controlled = tu::g_control.on && tu::g_control.obj == obj;
+  // While its owner looks out of it, the turret is not drawn on the owner's PC (its
+  // body would fill the view; the other PCs still draw theirs).
+  const uint32_t flags2 = tu::LoadU32(base, obj + tu::kObjFlags2);
+  tu::StoreU32(base, obj + tu::kObjFlags2, controlled ? flags2 | tu::kFlags2Invisible : flags2 & ~tu::kFlags2Invisible);
+  if (controlled) {
+    const uint32_t player = pd::player::Player(base, 0);
+    tu::AnglesOf(pd::player::LoadVec(base, player + pd::player::kBondLook), &yrot, &xrot);
+    // The owner's own copy points there at once (its view is the turret's).
+    tu::StoreF32(base, obj + tu::kGunYRot, yrot);
+    tu::StoreF32(base, obj + tu::kGunXRot, xrot);
+    tu::StoreF32(base, obj + tu::kGunYSpeed, 0.0f);
+    tu::StoreF32(base, obj + tu::kGunXSpeed, 0.0f);
+  } else {
+    // Idle: it stays where it points (no drift past it).
+    tu::StoreF32(base, obj + tu::kGunYSpeed, 0.0f);
+    tu::StoreF32(base, obj + tu::kGunXSpeed, 0.0f);
+  }
+  tu::StoreF32(base, r1 + tu::kGoalYRot, yrot);
+  tu::StoreF32(base, r1 + tu::kGoalXRot, xrot);
+}
+
+// autogun_tick before the owner's PC sends the aim and the firing flag (0x82207B08,
+// r31 = the object): a Remote Turret fires only while its owner controls it, holds
+// the trigger and it has ammo.
+void PdTurretFiring(uint8_t* base, uint32_t obj) {
+  namespace tu = pd::turret;
+  if (!tu::IsTurret(base, obj) || !pd::crossbow::IsLocalPlayer(base, tu::Owner(base, obj))) return;
+  const bool fire = tu::g_control.on && tu::g_control.obj == obj && tu::g_control.fire && base[obj + tu::kGunAmmo] > 0;
+  base[obj + tu::kGunFiring] = fire ? 1 : 0;
 }
 
 REX_DEFINE_APP(perfect_dark, PerfectDarkApp::Create)

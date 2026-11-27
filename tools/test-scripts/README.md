@@ -135,6 +135,12 @@ current menu, and the selected option of an open dropdown.
   Carom LX's own model in first and third person, its flash, side views, and a real Mauler.
 - `ricochet-func` (2 copies): the client's copy of the host's primary/secondary
   bits (`peek`) after each toggle, for the Carom LX and the Laser.
+- `turret-throw` (2 copies): the host throws a Remote Turret (0x42) in front of the
+  client; it must stay idle for 10 s; a second throw replaces it.
+- `turret-control` (2 copies): the host throws a Remote Turret, takes control (Control
+  + trigger), tries to walk (the body stays), aims at the client with `face` (from the
+  turret while controlling), fires until the client dies, then toggles back: the turret
+  explodes and goes on both PCs.
 
 The Carom LX's development scenarios (bounces, hits, Stream, wall sweeps) need
 its debug code back: they are in `tools/debug-bank/ricochet-laser-scenarios/`.

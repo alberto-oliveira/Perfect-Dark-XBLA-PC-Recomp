@@ -118,6 +118,11 @@ inline constexpr Weapon kList[] = {
     // with the borrowed model number 0x111 (MODEL_CHRFLASHBANG: a cut weapon; no weapon
     // number's third-person model and no multiplayer pickup uses it).
     {0x50, 2, 0x4CE2, "Test Gun", 0, 0, 0, 2, 0x273, 0x273, 0x111, 0x275},
+    // The Remote Turret (pd_turret.h): the Laptop Gun, whose primary throws its sentry
+    // (keeping the gun) and whose secondary takes control of it. Number and name: solo
+    // item 0x42 (the flight plans) and its text 0x4CE1. Its two functions are set by
+    // pd::turret::Install.
+    {0x42, 14, 0x4CE1, "Remote Turret", 0, 0, 0, 0},
 };
 constexpr int kCount = int(sizeof(kList) / sizeof(kList[0]));
 static_assert(kFirstSpareFuncBitWeapon + kCount - 1 <= kLastSpareFuncBitWeapon, "no spare function bits left");
