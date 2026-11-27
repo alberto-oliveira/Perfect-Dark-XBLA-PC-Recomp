@@ -1,0 +1,21 @@
+# Scenario "turret-handson" (Remote Turret, the user's check): 2 copies left in the
+# match, start with -ExtraArgs pd_file_override (make_turretgun.py's files installed for
+# the model). Runs after lobby-host.txt. The host's extra weapon slots are all the Remote
+# Turret (table index 50), so pickups lie around; both players get it, plus the Laptop
+# Gun (14) to compare. Then play by hand:
+#   - primary (Deploy): throw a turret; the gun stays in the hand;
+#   - toggle to Control, pull the trigger: the view moves to the turret; mouse/stick aims,
+#     the trigger fires; the body stands still;
+#   - toggle back (or switch weapons, or die): the turret explodes.
+
+cvar pd_mp_weapons 50,50,50,50,50,50,50,50,50,50
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start
+waitmenu none 60
+wait 5000
+give 14                      # Laptop Gun
+give 0x42                    # Remote Turret
+equip 0x42
+log turret-handson: host ready, play by hand

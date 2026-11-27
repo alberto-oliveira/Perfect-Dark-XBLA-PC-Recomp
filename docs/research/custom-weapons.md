@@ -242,6 +242,66 @@ findings on the way:
 **Feasibility: medium-high** (was low-medium). The sync works with no network code
 of ours; the camera is the remaining unknown. **Difficulty: ★★★★☆.**
 
+### Implementation notes (branch remote-turret, 2026-11-27)
+
+Built as weapon 0x42 (`src/pd_turret.h`, toml section "Remote Turret"); placeholder
+name "Remote Turret". Findings on the way:
+
+- **Throwing without losing the gun.** The weapon's primary is a copy of the Laptop's
+  Deploy without `FUNCFLAG_DISCARDWEAPON`. Without that flag the throw goes through the
+  game's ordinary throw (`bgun_tick_inc_attacking_throw`), which takes one round from
+  `loadedammo[ammoindex]`: the Deploy's ammo index -1 would write outside the array, so
+  the copy uses 0. The thrown-projectile maker sub_821709E8 checks for the Laptop
+  (`cmplwi r11,14` at 0x82170B28) before calling `laptop_deploy`; the sentry comes back
+  in r3 at 0x82170B34. This runs on every PC (local throw, remote replay, bots).
+- **The sentry's owner bits are not a player number.** `laptop_deploy` puts the
+  thrower's thrown-laptop slot there, the same number on every PC (the host's turret had
+  owner bits 0 on the client too, where the host is player 1). The owner is the current
+  player at the deploy hook instead.
+- **Goal angles:** 84(r1) is the yrot goal and 88(r1) the xrot goal (`apply_rotation`
+  at 0x822078F4). The angles are world angles: the shot runs along
+  (cos x · sin y, sin x, cos x · cos y), so the goals come from the player's look
+  vector. The owner's PC also sets yrot/xrot directly, so its view is the turret's at
+  once; `maxspeed` (+128) is raised on every PC so the copies keep up. An idle turret's
+  goals are its own angles, and its firing flag is cleared.
+- **Second function "Control":** a special function (`INVENTORYFUNCTYPE_SPECIAL`) with
+  special number 20, which the hand's attack switch (1-12) ignores; it fires with no
+  ammo.
+- **The trigger:** `bmove_process_input` passes it to `bgun_tick_gameplay` at 0x820F4190
+  (r3). The mod reads it there, and holds it at 0 while the player controls a turret.
+  Otherwise the Control function's own attack is under way, and a toggle back to the
+  primary turns it into a throw. The hold also lasts after leaving, until the trigger
+  has been let go for 6 steps: the input step that toggles the function reads the
+  trigger as off for one step. The store at 0x82180B60 (XBLA's input exchange) is for
+  the other players only.
+- **Camera:** `player_tick`'s normal branch calls `player_move_camera_from_pos_rooms`
+  at 0x821005E0 (r3 = the position, a stack copy; r6/r7 = the position and rooms it is
+  checked from). The mod swaps in the turret's position, moved out of its surface along
+  its up axis (`pd_turret_eye_offset`), and its rooms. Look and up stay the player's,
+  so mouse look works as usual.
+- **Frozen body:** the walk-mode call of `bwalk_apply_move_data` (0x820F4494 ->
+  0x820F449C) is skipped and the speeds zeroed; turning is done outside it.
+- **Hidden gun and turret:** the gun renderer sub_821761F8 returns at once (it is called
+  once a frame with &gdl). The turret gets `OBJFLAG2_INVISIBLE` on the owner's PC only.
+- **Leaving:** `prop_explode(prop, 13)` on the owner's PC. The explosion message carries
+  the prop's sync id (+44), and the receivers handle the prop with that id
+  (sub_822AFA30 -> sub_821FA840; negative ids are skipped). A sentry has -1, so the
+  other PCs kept a copy that went on firing. Each Remote Turret's prop now gets
+  0x7FFF0000 + the owner bits on every PC. For a sentry the receiver sets
+  `OBJFLAG_DEACTIVATED` (flags |= 0x10000000) instead of deleting it, so each PC deletes
+  another PC's deactivated turret itself. A turret shot to pieces is deactivated too:
+  control ends without an explosion.
+- **Picking up one's own turret** (vanilla Laptop behaviour) gives the Remote Turret
+  back: sub_822211E8, after each `li r3,14` (0x822214B4, 0x822214C8).
+- **Turret kills** credit the owner. The rocket explosion is large: in one test it also
+  killed its owner.
+- **Model** (`tools/models/make_turretgun.py`): the Laptop Gun's first-person file
+  0x4C7 links mesh 0xA22 (texture 0x1591); the third-person file 0x358 (model 0x105)
+  links mesh 0x855 (texture 0x0FC4). The new parts are added in Python. Mesh
+  conventions: texture v runs up, and triangles are clockwise seen from the front.
+  Borrowed model 0x19F has scale 4096, so `pd::custom::Install` now copies the replaced
+  model's scale (409).
+
 **Tests it will need:**
 
 - the camera hook (by eye);

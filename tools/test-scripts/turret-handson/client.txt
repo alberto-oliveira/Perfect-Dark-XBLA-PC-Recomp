@@ -1,0 +1,10 @@
+# Scenario "turret-handson", client. Runs after lobby-client.txt.
+
+pick 825FA2F8                # Ready
+signal ready-{copy}
+waitmenu none 120
+wait 3000
+give 14
+give 0x42
+equip 0x42
+log turret-handson: client ready, play by hand
