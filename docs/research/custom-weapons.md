@@ -358,6 +358,20 @@ name "Remote Turret". Findings on the way:
 - **Turn limit:** at most `pd_turret_aim_cone` (70) degrees from the resting aim, as well as
   the surface limit: the model's barrel looks wrong turned further.
 
+**Third round (the user's third hands-on):**
+
+- **Cloak only while controlling.** It starts with control and ends on leaving, on a weapon
+  switch or death, or after `pd_turret_cloak_seconds`.
+- **The turret's own model cannot be posed cleanly** on a sloping surface (its gun turns about
+  the wrong axis, so the barrel came off its body), and its body filled the view. Now:
+  - the turret is hidden on its owner's PC while controlled, and the camera sits at its gun;
+  - the Remote Turret's own first-person gun is drawn centred and low. While controlling,
+    the weapondef view position (+0x2C/+0x30/+0x34, read every frame) is set centred and
+    put back after;
+  - the hands are left out (a jump at 0x821769A8 -> 0x821769EC in the gun renderer);
+  - the shots start at that gun's muzzle: `autogun_tick_shoot`'s start at 168(r1) is set
+    where its two paths join (0x82208058).
+
 **Tests it will need:**
 
 - the camera hook (by eye);

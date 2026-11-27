@@ -69,6 +69,7 @@ void PdTurretDeployed(uint8_t* base, uint32_t obj);
 void PdTurretGoals(uint8_t* base, uint32_t r1, uint32_t obj);
 void PdTurretFiring(uint8_t* base, uint32_t obj);
 uint32_t PdTurretCamera(PPCContext& ctx, uint8_t* base, uint32_t pos);
+void PdTurretShotStart(uint8_t* base, uint32_t r1, uint32_t obj);
 
 namespace {
 // The calling guest thread's full context and guest memory, for a hook that needs
@@ -854,13 +855,20 @@ void PdHookTurretTrigger(PPCRegister& r3) {
 bool PdHookTurretHideGun() {
   uint8_t* base = HookBase();
   namespace tu = pd::turret;
-  if (tu::CurrentPlayerControls(base)) return true;
+  if (tu::CurrentPlayerControls(base)) return false;  // drawn centred, as the turret's barrel
   // The gun was thrown: while the local player's turret exists, the Remote Turret is
   // drawn in no hand (it stays selected, for Control).
   const uint32_t player = pd::player::Player(base, 0);
   return player && tu::LoadU32(base, pd::player::kGVars + 1188) == player &&
          int8_t(base[player + pd::player::kWeapon]) == int8_t(tu::kWeaponTurret) && tu::LocalTurret(base) != 0;
 }
+
+// The gun renderer (sub_821761F8) before it draws the hands (0x821769A8; true jumps past
+// the hand model to 0x821769EC): no hands on the gun while it stands for the turret.
+bool PdHookTurretNoHands() { return pd::turret::CurrentPlayerControls(HookBase()); }
+
+// autogun_tick_shoot where the shot's start is known (0x82208058).
+void PdHookTurretShotStart(PPCRegister& r1, PPCRegister& r28) { PdTurretShotStart(HookBase(), r1.u32, r28.u32); }
 
 // TEMP_TURRET: autogun_tick_shoot calls for our turrets, logged once a second.
 void PdHookTurretShootProbe(PPCRegister& r28) {

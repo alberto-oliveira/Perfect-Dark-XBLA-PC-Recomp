@@ -1114,6 +1114,20 @@ name = "PdHookTurretPickupRounds"
 registers = ["r28"]
 jump_address_on_true = 0x822215D4
 
+# The gun renderer sub_821761F8 before the hands (`lwz r11,5564(r26)` at 0x821769A8):
+# while controlling a turret no hands are drawn (jumps past the hand model).
+[[midasm_hook]]
+address = 0x821769A8
+name = "PdHookTurretNoHands"
+jump_address_on_true = 0x821769EC
+
+# autogun_tick_shoot sub_82207DC0 where its shot start (168(r1)) is known on both paths
+# (loc_82208058; r28 = the object): a controlled turret shoots from the centred gun.
+[[midasm_hook]]
+address = 0x82208058
+name = "PdHookTurretShotStart"
+registers = ["r1", "r28"]
+
 # TEMP_TURRET: autogun_tick_shoot sub_82207DC0 after it loaded the object (r28).
 [[midasm_hook]]
 address = 0x82207DFC

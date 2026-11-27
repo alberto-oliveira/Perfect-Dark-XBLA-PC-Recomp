@@ -135,6 +135,8 @@ constexpr uint32_t kPlayerSpeedForwards = 376;    // f32
 // Objects (N64 struct defaultobj) and the autogun (struct autogunobj).
 constexpr uint32_t kObjType = 3;           // u8: 13 = OBJTYPE_AUTOGUN
 constexpr uint8_t kObjTypeAutogun = 13;
+constexpr uint32_t kObjFlags2 = 12;        // u32
+constexpr uint32_t kFlags2Invisible = 0x00080000;  // OBJFLAG2_INVISIBLE: not drawn
 constexpr uint32_t kObjProp = 20;          // struct prop *
 constexpr uint32_t kObjRealRot = 28;       // f32[3][3]; row 1 (+40) = the up axis
 constexpr uint32_t kObjHidden = 64;        // u32: owner player in bits 28-31, 4 = deleting
@@ -176,13 +178,23 @@ using pd::player::Vec;
 // ---- Settings (main.cpp sets them every frame; online the host's) --------------------
 inline float g_turn_speed = 0.6f;    // the turret's maxspeed while controlled
 inline uint32_t g_explosion = 13;    // explosion type when leaving (13 = a rocket's)
-inline uint32_t g_cloak_seconds = 30;  // the thrower's cloak after a throw (0 = none)
-// The view while controlling (pd_turret_eye_*): over the barrels. The gun's pivot is
-// g_eye_pivot units out of the surface; the camera g_eye_back behind it along the look
-// and g_eye_up above it.
+inline uint32_t g_cloak_seconds = 30;  // the longest cloak while controlling (0 = none)
+// The view while controlling: the turret is not drawn on its owner's PC (its model
+// cannot be posed cleanly on a sloping surface: its gun turns about the wrong axis); the
+// camera sits where its gun is, g_eye_pivot units out of its surface
+// (pd_turret_eye_pivot), and the Remote Turret's own first-person gun is drawn low in the
+// middle of the view, without hands, as the turret's "barrel": the shots start at its
+// muzzle, kMuzzleAhead along the view and kMuzzleBelow under it.
 inline float g_eye_pivot = 15.0f;
-inline float g_eye_back = 35.0f;
-inline float g_eye_up = 12.0f;
+constexpr float kMuzzleAhead = 30.0f;
+constexpr float kMuzzleBelow = 7.0f;
+// The gun's place in the view while controlling (weapondef +0x2C posx, +0x30 posy,
+// +0x34 posz, read every frame by the gun's tick): centred and low. The weapon's own
+// values are kept in g_view_saved and put back after.
+constexpr uint32_t kDefViewPos = 0x2C;
+inline const float kControlViewPos[3] = {0.0f, -14.0f, -16.0f};
+inline float g_view_saved[3] = {};
+inline bool g_view_centred = false;
 // How far below the surface the turret may aim, in degrees (pd_turret_aim_below), and
 // how far from the direction it rests in (pd_turret_aim_cone): its model looks wrong
 // turned further.
@@ -303,11 +315,10 @@ inline Vec PivotOf(const uint8_t* base, uint32_t obj) {
   return Add(pd::player::LoadVec(base, prop + pd::player::kPropPos), Scale(SurfaceNormal(base, obj), g_eye_pivot));
 }
 
-// Where the camera wants to be while controlling (look = the view direction): just
-// behind and above the turret's barrels, so they show low in the middle of the view and
-// the shots visibly leave them. main.cpp pulls it in if a wall is closer.
-inline Vec WantedEye(const uint8_t* base, uint32_t obj, Vec look) {
-  return Add(Add(PivotOf(base, obj), Scale(Normalised(look, {0, 0, 1}), -g_eye_back)), {0.0f, g_eye_up, 0.0f});
+// Where the turret's shots start while its owner controls it: at the muzzle of the gun
+// drawn in the middle of the view (look and up = the view's directions).
+inline Vec MuzzleOf(Vec eye, Vec look, Vec up) {
+  return Add(Add(eye, Scale(Normalised(look, {0, 0, 1}), kMuzzleAhead)), Scale(Normalised(up, {0, 1, 0}), -kMuzzleBelow));
 }
 
 // The aim limit: a direction may point at most g_aim_below degrees into the surface
@@ -371,8 +382,9 @@ inline void AnglesOf(const Vec& look, float* yrot, float* xrot) {
 inline Vec g_thrower_dir[8] = {};
 inline int32_t g_throw_clip = -1;
 inline int32_t g_throw_reserve = -1;
-// The level frame at which this PC's player's turret cloak ends (0 = none running): the
-// cloaking device is switched off then, whatever cloak ammo is left.
+// The level frame at which this PC's player's turret cloak ends (0 = none running): it
+// runs while the player controls the turret, at most g_cloak_seconds; the cloaking
+// device is switched off at the end, whatever cloak ammo is left.
 inline uint32_t g_cloak_until = 0;
 
 // Both limits for turret `obj` (owner `owner`): the cone around its resting aim, then the
@@ -421,6 +433,8 @@ inline void Install(uint8_t* base, Alloc alloc) {
 
   StoreU32(base, def + kDefFunctions, primary);
   StoreU32(base, def + kDefFunctions + 4, special);
+  for (int i = 0; i < 3; ++i) g_view_saved[i] = LoadF32(base, def + kDefViewPos + uint32_t(i) * 4);
+  REXLOG_INFO("[turret] view position {:.1f} {:.1f} {:.1f}", g_view_saved[0], g_view_saved[1], g_view_saved[2]);
 
   // Its own ammo: definition, the type's capacity (the reserve), the crate quantity.
   const uint32_t laptop_ammo = LoadU32(base, laptop + kDefAmmo);

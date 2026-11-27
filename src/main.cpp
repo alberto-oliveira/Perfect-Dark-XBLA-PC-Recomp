@@ -2781,13 +2781,8 @@ REXCVAR_DEFINE_INT32(pd_turret_explosion, 13, "PerfectDark",
                      "The explosion when a player leaves their Remote Turret: an explosion type 1-25 "
                      "(13 = a rocket's). Online the host's");
 REXCVAR_DEFINE_INT32(pd_turret_cloak_seconds, 30, "PerfectDark",
-                     "How long a player who throws a Remote Turret is cloaked, in seconds (0 = not at all; "
-                     "firing their own gun shows them for a moment, as with the cloaking device). Online "
-                     "the host's");
-REXCVAR_DEFINE_INT32(pd_turret_eye_back, 35, "PerfectDark",
-                     "The Remote Turret's view: how far behind its barrels the camera sits, in game units");
-REXCVAR_DEFINE_INT32(pd_turret_eye_up, 12, "PerfectDark",
-                     "The Remote Turret's view: how far above its barrels the camera sits, in game units");
+                     "A player controlling their Remote Turret is cloaked, for at most this many seconds "
+                     "(0 = not at all); leaving the turret or switching weapons ends it. Online the host's");
 REXCVAR_DEFINE_INT32(pd_turret_eye_pivot, 15, "PerfectDark",
                      "The Remote Turret's view: how far out of its surface the turret's gun is, in game units");
 REXCVAR_DEFINE_BOOL(pd_turret_monitor_view, true, "PerfectDark",
@@ -2815,8 +2810,6 @@ void TurretApply(const pd::turret::Rules& r) {
 void PdTurretFrame() {
   namespace netplay = rex::kernel::xam::netplay;
   namespace tu = pd::turret;
-  tu::g_eye_back = float(std::clamp(REXCVAR_GET(pd_turret_eye_back), 0, 200));
-  tu::g_eye_up = float(std::clamp(REXCVAR_GET(pd_turret_eye_up), -100, 100));
   tu::g_eye_pivot = float(std::clamp(REXCVAR_GET(pd_turret_eye_pivot), 0, 100));
   tu::g_aim_below = float(std::clamp(REXCVAR_GET(pd_turret_aim_below), 0, 90));
   tu::g_aim_cone = float(std::clamp(REXCVAR_GET(pd_turret_aim_cone), 10, 180));
@@ -2893,15 +2886,6 @@ void PdTurretDeployed(uint8_t* base, uint32_t obj) {
       if (reserve_before >= 0) tu::StoreU32(base, thrower + tu::kPlayerAmmoHeld + tu::kAmmoType * 4, uint32_t(reserve_before));
     }
     tu::g_throw_clip = -1;
-    // The cloak: the cloaking device's own state, with at least that many seconds of its
-    // ammo; PdTurretTick switches it off when the time is up.
-    if (tu::g_cloak_seconds > 0) {
-      const uint32_t held = thrower + tu::kPlayerAmmoHeld + tu::kAmmoTypeCloak * 4;
-      const int32_t want = std::min<int32_t>(int32_t(tu::g_cloak_seconds) * 60, tu::kCloakAmmoMax);
-      if (int32_t(tu::LoadU32(base, held)) < want) tu::StoreU32(base, held, uint32_t(want));
-      tu::StoreU32(base, thrower + tu::kPlayerDevices, tu::LoadU32(base, thrower + tu::kPlayerDevices) | tu::kDeviceCloak);
-      tu::g_cloak_until = tu::LoadU32(base, pd::player::kLevelFrames) + tu::g_cloak_seconds * 60;
-    }
   }
   // TEMP_TURRET: who threw it, as seen on this PC.
   REXLOG_INFO("[turret] TEMP_TURRET deployed frame {}: obj 0x{:08X} prop 0x{:08X} owner {} ({}{}), current "
@@ -2977,8 +2961,10 @@ void PdTurretTick(PPCContext& ctx, uint8_t* base) {
   const uint32_t player = pl::Player(base, 0);
   const uint32_t hand = player + tu::kRightHand;
 
-  // The turret cloak's time is up (or the player died): the cloaking device goes off.
-  if (tu::g_cloak_until && (frame >= tu::g_cloak_until || tu::LoadU32(base, player + tu::kPlayerIsDead))) {
+  // The turret cloak's time is up, the player left the turret (or died): the cloaking
+  // device goes off.
+  if (tu::g_cloak_until &&
+      (frame >= tu::g_cloak_until || !tu::g_control.on || tu::LoadU32(base, player + tu::kPlayerIsDead))) {
     tu::StoreU32(base, player + tu::kPlayerDevices, tu::LoadU32(base, player + tu::kPlayerDevices) & ~tu::kDeviceCloak);
     tu::g_cloak_until = 0;
     REXLOG_INFO("[turret] cloak ends frame {}", frame);
@@ -3000,6 +2986,15 @@ void PdTurretTick(PPCContext& ctx, uint8_t* base) {
       last_clip = clip;
       last_reserve = reserve;
     }
+  }
+
+  // The gun drawn centred while controlling, in its own place otherwise.
+  if (c.on != tu::g_view_centred) {
+    const uint32_t def = tu::LoadU32(base, pd::custom::kWeapons + uint32_t(tu::kWeaponTurret) * 4);
+    for (int i = 0; def && i < 3; ++i) {
+      tu::StoreF32(base, def + tu::kDefViewPos + uint32_t(i) * 4, c.on ? tu::kControlViewPos[i] : tu::g_view_saved[i]);
+    }
+    tu::g_view_centred = c.on;
   }
 
   // The turret's reload: Reload pressed while controlling (PdHookTurretReload)
@@ -3077,6 +3072,15 @@ void PdTurretTick(PPCContext& ctx, uint8_t* base) {
       pd::player::AnglesTowards({0, 0, 0}, aim, &theta, &verta);
       TestSetLook(base, player, theta, verta);
       pd::player::StoreS16(base, player + tu::kPlayerVisionMode, int16_t(tu::kVisionStatic));
+      // The cloak: the cloaking device's own state, with at least that many seconds of its
+      // ammo; it ends with the control, or when the time is up (above).
+      if (tu::g_cloak_seconds > 0) {
+        const uint32_t held = player + tu::kPlayerAmmoHeld + tu::kAmmoTypeCloak * 4;
+        const int32_t want = std::min<int32_t>(int32_t(tu::g_cloak_seconds) * 60, tu::kCloakAmmoMax);
+        if (int32_t(tu::LoadU32(base, held)) < want) tu::StoreU32(base, held, uint32_t(want));
+        tu::StoreU32(base, player + tu::kPlayerDevices, tu::LoadU32(base, player + tu::kPlayerDevices) | tu::kDeviceCloak);
+        tu::g_cloak_until = frame + tu::g_cloak_seconds * 60;
+      }
       const pd::player::Vec n = tu::SurfaceNormal(base, t);
       REXLOG_INFO("[turret] control starts frame {}: obj 0x{:08X}, ammo {}, normal {:.2f} {:.2f} {:.2f}, view theta {:.1f} "
                   "verta {:.1f}", frame, t, base[t + tu::kGunAmmo], n.x, n.y, n.z, theta, verta);
@@ -3132,13 +3136,11 @@ void PdTurretTick(PPCContext& ctx, uint8_t* base) {
 }
 
 // player_tick's camera call (0x821005E0, after the input step turned the view) while
-// the local player controls a turret: the view may not point into the turret's surface
-// (ClampAim; the view angles are written back, so the mouse stops there), and the
-// camera goes just behind and above the turret's barrels (WantedEye), pulled in short
-// of any wall between the gun and that spot (the collision test that `tp near` uses:
-// sub_820E4E88, 0 = something in the way, then where: sub_820DDDC0). `pos` = the
-// camera position the call will use (a stack copy). Returns the turret's prop (the call
-// then checks its rooms from it), or 0 when the player is not controlling a turret.
+// the local player controls a turret: the view stays within the turret's limits
+// (ClampTurretAim; the view angles are written back, so the mouse stops there), and the
+// camera goes where the turret's gun is (PivotOf). `pos` = the camera position the call
+// will use (a stack copy). Returns the turret's prop (the call then checks its rooms
+// from it), or 0 when the player is not controlling a turret.
 uint32_t PdTurretCamera(PPCContext& ctx, uint8_t* base, uint32_t pos) {
   namespace tu = pd::turret;
   namespace pl = pd::player;
@@ -3155,31 +3157,8 @@ uint32_t PdTurretCamera(PPCContext& ctx, uint8_t* base, uint32_t pos) {
     pl::StoreVec(base, player + pl::kBondLook, look);
   }
 
-  const pl::Vec pivot = tu::PivotOf(base, obj);
-  pl::Vec eye = tu::WantedEye(base, obj, look);
-  const uint32_t from = ctx.r1.u32 - 0x400, to = from + 16, hit = from + 32;
-  pl::StoreVec(base, from, pivot);
-  pl::StoreVec(base, to, eye);
-  PPCContext call = ctx;
-  call.r1.u64 = from - 0x200;
-  call.r3.u64 = from;
-  call.r4.u64 = prop + pl::kPropRooms;
-  call.r5.u64 = to;
-  call.r6.u64 = 0x20 | 0x02;  // background, doors
-  sub_820E4E88(call, base);
-  if (call.r3.s32 == 0) {
-    call.r3.u64 = hit;
-    call.r4.u64 = 0;
-    call.r5.u64 = 0;
-    sub_820DDDC0(call, base);
-    const pl::Vec h = pl::LoadVec(base, hit);
-    const pl::Vec d{eye.x - pivot.x, eye.y - pivot.y, eye.z - pivot.z};
-    const float want = std::sqrt(tu::Dot(d, d));
-    const pl::Vec dh{h.x - pivot.x, h.y - pivot.y, h.z - pivot.z};
-    const float room = std::max(0.0f, std::sqrt(tu::Dot(dh, dh)) - 8.0f);  // 8 units short of the wall
-    if (want > 0.001f && room < want) eye = tu::Add(pivot, tu::Scale(d, room / want));
-  }
-  pl::StoreVec(base, pos, eye);
+  pl::StoreVec(base, pos, tu::PivotOf(base, obj));
+  (void)ctx;
   return prop;
 }
 
@@ -3196,6 +3175,9 @@ void PdTurretGoals(uint8_t* base, uint32_t r1, uint32_t obj) {
   float yrot = tu::LoadF32(base, obj + tu::kGunYRot);
   float xrot = tu::LoadF32(base, obj + tu::kGunXRot);
   const bool controlled = tu::g_control.on && tu::g_control.obj == obj;
+  // Not drawn on its owner's PC while controlled (the view is from inside it).
+  const uint32_t flags2 = tu::LoadU32(base, obj + tu::kObjFlags2);
+  tu::StoreU32(base, obj + tu::kObjFlags2, controlled ? flags2 | tu::kFlags2Invisible : flags2 & ~tu::kFlags2Invisible);
   if (controlled) {
     const uint32_t player = pd::player::Player(base, 0);
     tu::AnglesOf(pd::player::LoadVec(base, player + pd::player::kBondLook), &yrot, &xrot);
@@ -3212,6 +3194,18 @@ void PdTurretGoals(uint8_t* base, uint32_t r1, uint32_t obj) {
   }
   tu::StoreF32(base, r1 + tu::kGoalYRot, yrot);
   tu::StoreF32(base, r1 + tu::kGoalXRot, xrot);
+}
+
+// autogun_tick_shoot (sub_82207DC0) where its two ways of finding the shot's start join
+// (0x82208058; the start at 168(r1), r28 = the object): a turret its owner controls on
+// this PC shoots from the muzzle of the gun drawn in the middle of the view.
+void PdTurretShotStart(uint8_t* base, uint32_t r1, uint32_t obj) {
+  namespace tu = pd::turret;
+  namespace pl = pd::player;
+  if (!tu::g_control.on || tu::g_control.obj != obj || !tu::IsTurret(base, obj)) return;
+  const uint32_t player = pl::Player(base, 0);
+  pl::StoreVec(base, r1 + 168, tu::MuzzleOf(tu::PivotOf(base, obj), pl::LoadVec(base, player + pl::kBondLook),
+                                            pl::LoadVec(base, player + pl::kBondUp)));
 }
 
 // autogun_tick before the owner's PC sends the aim and the firing flag (0x82207B08,
