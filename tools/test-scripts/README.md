@@ -122,6 +122,15 @@ current menu, and the selected option of an open dropdown.
   pulse and Stream) from the host and the client, and a switch away and back.
 - `ricochet-flash` (2 copies): the Carom LX's red muzzle flash, then a real
   Mauler's green one.
+- `gunmodel` (2 copies, start with `-ExtraArgs pd_file_override`): both players hold the
+  Falcon 2; first-person screenshots (idle, firing, reloading, after a switch away and
+  back) and each player's view of the other. With files in `game\DataFiles\override`
+  (gun model research, `docs/research/gun-models.md`).
+- `gunfar` (2 copies, `-ExtraArgs pd_file_override`): the client screenshots the host's
+  third-person Falcon 2 from 250, 700 and 1500 units (texture mip levels).
+- `testgun` (2 copies, `-ExtraArgs pd_file_override`, the proof gun's files in the override
+  folder): the Test Gun (custom weapon 0x50, its own model) in first and third person and
+  as pickups, next to a real Falcon 2.
 - `ricochet-func` (2 copies): the client's copy of the host's primary/secondary
   bits (`peek`) after each toggle, for the Carom LX and the Laser.
 

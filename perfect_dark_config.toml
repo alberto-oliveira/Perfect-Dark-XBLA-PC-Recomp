@@ -8,6 +8,47 @@
 # reference; `return`, `return_on_true` and `jump_address(_on_true)` end the guest
 # function or branch after the call. HANDOVER.md has the history of each change.
 
+# ---- Custom gun models: loose files over packed ones (pd_file_override) ------------
+
+# The archive's size function (sub_822549A0) and load-to-new-buffer function
+# (sub_82254BE0) both read sizes from the entry table: the loose files' sizes go in
+# first.
+[[midasm_hook]]
+address = 0x822549A0
+name = "PdHookFileOverrideTable"
+
+[[midasm_hook]]
+address = 0x82254BE0
+name = "PdHookFileOverrideTable"
+
+# sub_822549C0 after its prefetch-cache lookup, at the read path (r31 = id, r27 =
+# destination, lock r28 held): a loose file is copied instead, then the function's
+# own "unlock, return 1" exit (0x82254BB4).
+[[midasm_hook]]
+address = 0x82254A64
+name = "PdHookFileOverrideServe"
+registers = ["r27", "r31"]
+jump_address_on_true = 0x82254BB4
+
+# Texture slots (tex_XXXX.hdr: a new size and D3D header for texture XXXX), right after
+# sub_8224B828's `bl sub_82262D60` opened Textures.raw (records and headers in memory).
+[[midasm_hook]]
+address = 0x8224B84C
+name = "PdHookTextureSlots"
+
+# Loose texture texels (tex_XXXX.bin), right after the texture manager inflated a
+# texture: streamed (sub_82263470, after `bl XMemDecompress`; r29 texels) and resident
+# at start-up (sub_82262D60; r28 texels); r30 = texture number * 52.
+[[midasm_hook]]
+address = 0x82263618
+name = "PdHookTextureOverrideStreamed"
+registers = ["r29", "r30"]
+
+[[midasm_hook]]
+address = 0x82262FF4
+name = "PdHookTextureOverrideResident"
+registers = ["r28", "r30"]
+
 # ---- Start-up -----------------------------------------------------------------------
 
 # No Xbox LIVE Arcade logo while the game loads (pd_skip_arcade_logo): its three draws
@@ -687,12 +728,15 @@ address = 0x82172498
 name = "PdHookCustomAsBase"
 registers = ["r11"]
 
-# The third-person model (sub_821F4C68 entry, r3) sees the LOOK weapon's number
-# instead (the Ricochet Laser is drawn as a Mauler), or the base weapon's.
+# The third-person model (sub_821F4C68 entry, r3 = weapon, returns a model number):
+# a custom weapon with a model of its own returns its model number at once
+# (return_on_true); others see the LOOK weapon's number instead (the Ricochet Laser
+# is drawn as a Mauler), or the base weapon's.
 [[midasm_hook]]
 address = 0x821F4C68
 name = "PdHookCustomAsLook"
 registers = ["r3"]
+return_on_true = true
 
 [[midasm_hook]]
 address = 0x8220C698

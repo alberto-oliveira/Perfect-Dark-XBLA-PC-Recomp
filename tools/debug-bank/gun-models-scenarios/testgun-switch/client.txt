@@ -1,0 +1,7 @@
+# Scenario "testgun-switch", client: just joins.
+
+pick 825FA2F8
+signal ready-{copy}
+waitmenu none 120
+waitsignal host-done 1 120
+log testgun-switch: client done

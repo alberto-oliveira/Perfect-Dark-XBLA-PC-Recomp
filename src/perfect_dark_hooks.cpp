@@ -18,6 +18,7 @@
 #include "pd_crossbow.h"        // the Detonator Crossbow
 #include "pd_custom_weapons.h"
 #include "pd_ricochet.h"        // the Ricochet Laser
+#include "pd_file_override.h"   // custom gun models: loose files over packed ones
 
 // main.cpp
 bool PdSkipArcadeLogo();
@@ -82,6 +83,38 @@ void StoreU8(uint8_t* base, uint32_t address, uint8_t value) {
   base[address] = value;
 }
 }  // namespace
+
+// ---- Custom gun models: loose files over packed ones (pd_file_override.h) ---------
+
+// Entry of the archive's size function (sub_822549A0) and of its load-to-new-buffer
+// function (sub_82254BE0): before the game reads any size from the entry table, the
+// loose files' sizes are written into it.
+void PdHookFileOverrideTable() {
+  pd::fileoverride::PatchTable(HookBase());
+}
+
+// sub_822549C0's read path (0x82254A64; r31 = file id, r27 = destination; its lock is
+// held): true when the loose file was copied, and the guest jumps to the function's
+// "unlock, return 1" exit.
+bool PdHookFileOverrideServe(PPCRegister& r27, PPCRegister& r31) {
+  return pd::fileoverride::Serve(HookBase(), r31.u32, r27.u32);
+}
+
+// sub_8224B828 right after `bl sub_82262D60` opened Textures.raw: texture slots from
+// tex_XXXX.hdr files get their new size and D3D header.
+void PdHookTextureSlots() {
+  pd::fileoverride::PatchTextureSlots(HookBase());
+}
+
+// Right after the texture manager inflated a texture into GPU memory: streamed
+// textures (sub_82263470, r29 = texels) and resident ones at start-up (sub_82262D60,
+// r28 = texels); r30 = texture number * 52 in both. Loose texels go over it.
+void PdHookTextureOverrideStreamed(PPCRegister& r29, PPCRegister& r30) {
+  pd::fileoverride::ServeTexture(HookBase(), r30.u32, r29.u32);
+}
+void PdHookTextureOverrideResident(PPCRegister& r28, PPCRegister& r30) {
+  pd::fileoverride::ServeTexture(HookBase(), r30.u32, r28.u32);
+}
 
 // ---- Start-up ---------------------------------------------------------------------
 
@@ -738,12 +771,19 @@ void PdHookCustomAsBase(PPCRegister& weapon) {
   weapon.u64 = pd::custom::AsBase(weapon.u32);
 }
 
-// A check that asks "which model is this weapon drawn with?" (the third-person
-// model, sub_821F4C68): a custom weapon's number becomes its look weapon's
-// (the Ricochet Laser is drawn as a Mauler), or its base weapon's.
-void PdHookCustomAsLook(PPCRegister& weapon) {
-  if (!pd::custom::IsCustom(weapon.u32)) return;
+// "Which model is this weapon drawn with?" (the third-person model, sub_821F4C68,
+// which returns a model number in r3): a custom weapon with a model of its own
+// answers with it at once (true: the function returns); any other custom weapon's
+// number becomes its look weapon's (the Ricochet Laser is drawn as a Mauler), or
+// its base weapon's, and the game's table answers.
+bool PdHookCustomAsLook(PPCRegister& weapon) {
+  if (!pd::custom::IsCustom(weapon.u32)) return false;
+  if (const uint32_t model = pd::custom::OwnModelNumber(weapon.u32)) {
+    weapon.u64 = model;
+    return true;
+  }
   weapon.u64 = pd::custom::AsLook(weapon.u32);
+  return false;
 }
 
 // The primary/secondary bit of the current weapon, at `srawi rD,rS,3` where rS =

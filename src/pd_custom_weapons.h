@@ -35,6 +35,7 @@
 #include <cstring>
 #include <string>
 
+#include "pd_file_override.h"  // a weapon's own model files
 #include "pd_weapons.h"
 
 namespace pd::custom {
@@ -77,6 +78,18 @@ struct Weapon {
   // that weapon's definition, its third-person and pickup models from that
   // weapon's too (Install, AsLook). How it works is still the base weapon's.
   uint8_t look;
+  // Its own model (custom gun models, docs/research/gun-models.md), served from the
+  // override folder (pd_file_override.h); 0 = the look weapon's:
+  //   model_hi / model_lo: the first-person N64 model files (definition +0/+2), copies of
+  //   the look weapon's that link the gun's own XBLA mesh (tools/models/glb2xbla.py);
+  //   model_number: a model number nothing in multiplayer shows, borrowed for the
+  //   third-person and pickup model; its g_ModelStates file id becomes model_file. Check
+  //   it is neither a weapon's third-person model (sub_821F4C68's table) nor an MP table
+  //   pickup model: 0xF6 looked unused but is the MagSec 4's.
+  uint16_t model_hi = 0;
+  uint16_t model_lo = 0;
+  uint16_t model_number = 0;
+  uint16_t model_file = 0;
 };
 
 // The custom weapons. The order gives their virtual table indices (the first is
@@ -93,6 +106,14 @@ inline constexpr Weapon kList[] = {
     // walls: pd_ricochet.h); looks like the Mauler (weapon 6), its muzzle flash
     // drawn red (pd_rico_flash_tint); name: the text of solo item 0x4E (0x4CE5)
     {0x52, 29, 0x4CE5, "Carom LX", 0, 0, 0, 6},
+    // The proof gun of custom gun models (phase 2, until real custom guns replace it): a
+    // Falcon 2 with a model of its own, made by tools/models/make_testgun.py (--install
+    // puts its files in the override folder). Number: the necklace's (solo
+    // only); name: the text of solo item 0x43 (0x4CE2). Files in the override folder:
+    // first person 0x273 (links mesh 0x274), third person 0x275 (links mesh 0x276), shown
+    // with the borrowed model number 0x111 (MODEL_CHRFLASHBANG: a cut weapon; no weapon
+    // number's third-person model and no multiplayer pickup uses it).
+    {0x50, 2, 0x4CE2, "Test Gun", 0, 0, 0, 2, 0x273, 0x273, 0x111, 0x275},
 };
 constexpr int kCount = int(sizeof(kList) / sizeof(kList[0]));
 static_assert(kFirstSpareFuncBitWeapon + kCount - 1 <= kLastSpareFuncBitWeapon, "no spare function bits left");
@@ -320,10 +341,13 @@ inline uint32_t BuildPickupNames(uint8_t* base, Alloc alloc) {
   while (LoadU32(base, kPickupNames + rows * kPickupNameRowSize) != 0 && rows < 1000) ++rows;
   const uint32_t table = alloc((rows + uint32_t(kCount) + 1) * kPickupNameRowSize);
   if (!table) return 0;
-  std::memcpy(base + table, base + kPickupNames, rows * kPickupNameRowSize);
+  // The custom rows go FIRST: the game's lookup (sub_8220C0F0) takes the first row with
+  // the weapon's number, and a borrowed number may have a row of its own already (0x50,
+  // the necklace, whose text is the Detonator Crossbow's name).
+  std::memcpy(base + table + uint32_t(kCount) * kPickupNameRowSize, base + kPickupNames, rows * kPickupNameRowSize);
   for (int i = 0; i < kCount; ++i) {
     const Weapon& w = kList[i];
-    const uint32_t row = table + (rows + uint32_t(i)) * kPickupNameRowSize;
+    const uint32_t row = table + uint32_t(i) * kPickupNameRowSize;
     std::memset(base + row, 0, kPickupNameRowSize);
     for (uint32_t r = 0; r < rows; ++r) {
       if (LoadU32(base, kPickupNames + r * kPickupNameRowSize) == w.base) {
@@ -336,6 +360,16 @@ inline uint32_t BuildPickupNames(uint8_t* base, Alloc alloc) {
     pd::weapons::StoreU16(base, row + 6, 0);
   }
   std::memset(base + table + (rows + uint32_t(kCount)) * kPickupNameRowSize, 0, kPickupNameRowSize);  // the end row
+  // What the game's first-match lookup will find for each custom weapon (its own text).
+  for (int i = 0; i < kCount; ++i) {
+    for (uint32_t r = 0; r < rows + uint32_t(kCount); ++r) {
+      const uint32_t row = table + r * kPickupNameRowSize;
+      if (LoadU32(base, row) != kList[i].number) continue;
+      REXLOG_INFO("[custom] weapon 0x{:02X} ({}): pickup message text 0x{:04X}", kList[i].number, kList[i].name,
+                  (base[row + 4] << 8) | base[row + 5]);
+      break;
+    }
+  }
   return table;
 }
 
@@ -357,6 +391,23 @@ constexpr uint32_t kDefLookModels = 0x00, kDefLookModelsSize = 0x14;
 constexpr uint32_t kDefLookPlace = 0x28, kDefLookPlaceSize = 0x1C;
 // A multiplayer table entry's pickup model (u16) and its scale (u16).
 constexpr uint32_t kEntryModel = 6, kEntryModelSize = 4;
+// g_ModelStates: 8 bytes per model number {u32 loaded file, u16 file id, u16 scale}.
+constexpr uint32_t kModelStates = 0x825F42E8;
+
+// The third-person model number of a custom weapon with a model of its own, else 0.
+// Its own models apply only when their files were loaded into the override (with
+// pd_file_override off or the files missing, the weapon keeps its look weapon's models:
+// a borrowed model number must never point at an empty archive entry).
+inline bool HasOwnModels(const Weapon& w) {
+  if (!w.model_hi) return false;
+  const auto& files = pd::fileoverride::Get().files;
+  return files.count(w.model_hi) && files.count(w.model_lo ? w.model_lo : w.model_hi) &&
+         (!w.model_number || files.count(w.model_file));
+}
+inline uint32_t OwnModelNumber(uint32_t number) {
+  const int i = IndexOf(number);
+  return i >= 0 && HasOwnModels(kList[i]) ? kList[i].model_number : 0;
+}
 
 inline void CopyLook(uint8_t* base, uint32_t def, uint8_t look) {
   if (!look) return;
@@ -381,6 +432,7 @@ inline void Install(uint8_t* base, Alloc alloc) {
   g_entries = alloc(uint32_t(kCount) * pd::weapons::kWeaponEntrySize);
   for (int i = 0; i < kCount; ++i) {
     const Weapon& w = kList[i];
+    const bool own_models = HasOwnModels(w);  // its own model files are loaded (pd_file_override)
     const uint32_t def = alloc(kWeaponDefCopySize);
     const uint32_t base_def = LoadU32(base, kWeapons + uint32_t(w.base) * 4);
     if (g_entries && def && base_def) {
@@ -389,6 +441,14 @@ inline void Install(uint8_t* base, Alloc alloc) {
       pd::weapons::StoreU16(base, def + kWeaponDefName, w.text_id);
       if (w.secondary) StoreU32(base, def + kWeaponDefSecondary, w.secondary);
       CopyLook(base, def, w.look);
+      if (w.model_hi && !own_models) {
+        REXLOG_WARN("[custom] weapon 0x{:02X} ({}): its model files are not in the override folder: drawn as "
+                    "weapon {}", w.number, w.name, w.look);
+      }
+      if (own_models) {  // its own first-person model files
+        pd::weapons::StoreU16(base, def + 0, w.model_hi);
+        pd::weapons::StoreU16(base, def + 2, w.model_lo ? w.model_lo : w.model_hi);
+      }
       StoreU32(base, kWeapons + uint32_t(w.number) * 4, def);
     }
     const int base_index = TableIndexOf(base, w.base);
@@ -405,6 +465,14 @@ inline void Install(uint8_t* base, Alloc alloc) {
                     base + pd::weapons::kWeaponTable + uint32_t(look_index) * pd::weapons::kWeaponEntrySize +
                         kEntryModel,
                     kEntryModelSize);
+      }
+      if (own_models && w.model_number) {  // its own pickup model (the look's scale is kept)
+        pd::weapons::StoreU16(base, entry + kEntryModel, w.model_number);
+        // The borrowed model number now loads the gun's third-person file.
+        pd::weapons::StoreU16(base, kModelStates + uint32_t(w.model_number) * 8 + 4, w.model_file);
+        REXLOG_INFO("[custom] weapon 0x{:02X}: own models: first person 0x{:04X}/0x{:04X}, third person and "
+                    "pickup model 0x{:03X} = file 0x{:04X}", w.number, w.model_hi, w.model_lo, w.model_number,
+                    w.model_file);
       }
     }
     REXLOG_INFO("[custom] weapon 0x{:02X} ({}) from weapon {}: definition 0x{:08X}, table index {} -> entry "

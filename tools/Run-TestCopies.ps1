@@ -36,6 +36,10 @@
   from test_cmd.txt beside its exe, and logs every stage, menu and highlighted
   row ([test] lines), which is how a menu path is recorded for a test script.
 
+.PARAMETER ExtraArgs
+  Settings given to every copy for this run, as command-line flags, e.g.
+  -ExtraArgs pd_file_override (several: space or comma separated; the leading
+  -- is added when missing).
 .PARAMETER Scenario
   Run a test script in every copy (tools\test-scripts, see its README.md): the
   host gets lobby-host.txt then <scenario>\host.txt; client N gets
@@ -63,6 +67,7 @@ param(
     [switch]$TestPipe,
     [string]$Scenario = '',
     [string[]]$Folders = @(),
+    [string[]]$ExtraArgs = @(),
     [int]$DelaySeconds = 2
 )
 
@@ -70,6 +75,11 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 # Through powershell -File a list arrives as one string, as with -Monitors: split it.
 $Folders = @(($Folders -join ',') -split ',' | Where-Object { $_ -ne '' })
+# Extra settings for every copy, e.g. -ExtraArgs --pd_file_override (space or comma separated).
+# A name without dashes gets them (through powershell -File a value starting with '-'
+# can be taken for a parameter name), so -ExtraArgs pd_file_override works too.
+$ExtraArgs = @(($ExtraArgs -join ' ') -split '[,\s]+' | Where-Object { $_ -ne '' } |
+    ForEach-Object { if ($_.StartsWith('-')) { $_ } else { "--$_" } })
 if ($Folders.Count -eq 0) {
     $Folders = @((Join-Path $repo 'out\build\win-amd64-release'), 'F:\pd-client', 'F:\pd-client-2')
 }
@@ -126,6 +136,7 @@ for ($i = 0; $i -lt $Copies; $i++) {
     if ($isClient -and $FreeMouse) { $gameArgs += '--no-mnk_mouse' }
     if ($TestPipe) { $gameArgs += '--pd_test_pipe' }
     if ($Scenario) { $gameArgs += "--pd_test_sync_dir=$syncDir" }
+    $gameArgs += $ExtraArgs
 
     Write-Host "Starting $exe $($gameArgs -join ' ')"
     if ($gameArgs.Count -gt 0) {
