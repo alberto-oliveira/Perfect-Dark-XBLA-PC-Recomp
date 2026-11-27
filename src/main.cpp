@@ -1340,6 +1340,8 @@ void PdXbowNetFrame() {
 // ---- The Ricochet Laser (pd_ricochet.h) --------------------------------------------
 // A custom weapon (pd_custom_weapons.h): the Laser drawn as a Mauler, whose shots
 // bounce off walls. Its colours are cosmetic: each PC uses its own settings.
+// pd_rico_tint / pd_rico_flash_tint: only when the Carom LX's own model files are not in
+// the override folder (make_carom.py); with them, its colours come from its textures.
 REXCVAR_DEFINE_STRING(pd_rico_tint, "white", "PerfectDark",
                       "The Ricochet Laser's colour (it looks like a Mauler): white, red, orange, yellow, "
                       "green, cyan, blue, purple, pink, #RRGGBB, or off");
@@ -1473,9 +1475,14 @@ void PdRicoRulesFrame() {
 // Each frame (game thread): the settings.
 void PdRicoFrame() {
   namespace rico = pd::ricochet;
-  pd::custom::g_tint[pd::custom::IndexOf(rico::kWeaponRicochet)] = pd::custom::ParseTint(REXCVAR_GET(pd_rico_tint));
-  pd::custom::g_flash[pd::custom::IndexOf(rico::kWeaponRicochet)].rgb =
-      pd::custom::ParseTint(REXCVAR_GET(pd_rico_flash_tint));
+  const int index = pd::custom::IndexOf(rico::kWeaponRicochet);
+  // With its own model files (make_carom.py) the colours are in its textures and the red
+  // flash in its files; the tint and the runtime flash colour are only the fallback for a
+  // PC without them.
+  const bool own_model = pd::custom::HasOwnModels(pd::custom::kList[index]);
+  pd::custom::g_tint[index] = own_model ? pd::custom::kNoTint : pd::custom::ParseTint(REXCVAR_GET(pd_rico_tint));
+  pd::custom::g_flash[index].rgb =
+      own_model ? pd::custom::kNoTint : pd::custom::ParseTint(REXCVAR_GET(pd_rico_flash_tint));
   rico::g_beam_tint = pd::custom::ParseTint(REXCVAR_GET(pd_rico_beam_tint));
   rico::g_beam_width = std::clamp(REXCVAR_GET(pd_rico_beam_width), 10, 1000);
   PdRicoRulesFrame();

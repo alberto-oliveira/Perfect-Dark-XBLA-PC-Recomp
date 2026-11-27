@@ -104,8 +104,12 @@ inline constexpr Weapon kList[] = {
     // The Ricochet Laser, named the Carom LX (a carom: a shot that rebounds, in
     // billiards). base: the Laser (its pulse and Stream, whose shots bounce off
     // walls: pd_ricochet.h); looks like the Mauler (weapon 6), its muzzle flash
-    // drawn red (pd_rico_flash_tint); name: the text of solo item 0x4E (0x4CE5)
-    {0x52, 29, 0x4CE5, "Carom LX", 0, 0, 0, 6},
+    // drawn red (pd_rico_flash_tint); name: the text of solo item 0x4E (0x4CE5).
+    // Its own model (tools/models/make_carom.py, in the override folder): the Mauler white
+    // with blue details, a red flash in both views and a longer front; first person 0x277
+    // (mesh 0x278), third person and pickup 0x279 (mesh 0x27A) as model 0x116
+    // (MODEL_CHRECMMINE, solo only). Without those files it is the tinted Mauler as before.
+    {0x52, 29, 0x4CE5, "Carom LX", 0, 0, 0, 6, 0x277, 0x277, 0x116, 0x279},
     // The proof gun of custom gun models (phase 2, until real custom guns replace it): a
     // Falcon 2 with a model of its own, made by tools/models/make_testgun.py (--install
     // puts its files in the override folder). Number: the necklace's (solo

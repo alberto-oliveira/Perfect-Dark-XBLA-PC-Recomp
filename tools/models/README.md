@@ -19,6 +19,9 @@ Tools for getting gun models and textures out of the game's data files, and chan
 | `xbla_format.py` | Reads and writes XBLA mesh files (used by the tools below). |
 | `glb2xbla.py <gun.glb> --template-n64 <file> --template-mesh <file> --mesh-id <hex> --file-id <hex> -o <dir>` | A Blender export -> an XBLA mesh file plus a copy of the template N64 model file linked to it. |
 | `make_testgun.py <dir>` | The scripted proof gun (`testgun.glb`, `testgun_tp.glb`, `testgun.png`). |
+| `recolour.py <in.png> <out.png> --skin\|--flash` | Recolours a texture by hue (metal near-white, green details blue; or a green flash red). |
+| `blender/roundtrip.py` | Run by Blender (`blender --background --factory-startup --python roundtrip.py -- in.glb out.glb [--stretch AXIS SIGN CUT FACTOR]`): imports, optionally stretches, exports glTF for `glb2xbla.py`. |
+| `make_carom.py <dir> --install <override> [--blender <exe>]` | The Carom LX's own model (white and blue Mauler, red flash in both views, longer front with Blender). |
 
 Notes on what Blender shows:
 - The model is in its rest pose. Part 42 is the magazine; part 43 is the reload magazine, which animations move with the hand (on the Mauler it sits beside the gun).

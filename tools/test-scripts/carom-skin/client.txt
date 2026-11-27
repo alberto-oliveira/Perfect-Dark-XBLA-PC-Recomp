@@ -1,0 +1,36 @@
+# Scenario "carom-skin", client: watches the host's Carom LX and then a real Mauler.
+# Runs after lobby-client.txt.
+
+pick 825FA2F8                # Ready
+signal ready-{copy}
+waitmenu none 120
+wait 3000
+waitsignal host-armed 1 60
+tp near Zqhost 200
+face Zqhost -5
+wait 400
+shot carom-client-sees-held    # the held Carom LX, third person
+signal placed
+waitsignal host-side 1 30
+wait 400
+shot carom-client-side         # in profile: the longer front
+signal side-seen
+waitsignal fired-pulse 1 60
+wait 10
+shot carom-client-sees-pulse   # its third-person flash (red)
+waitsignal fired-stream 1 60
+shot carom-client-sees-stream
+waitsignal host-mauler 1 60
+face Zqhost -5
+wait 300
+shot mauler-client-sees-held   # a real Mauler, third person (green)
+waitsignal host-side-2 1 30
+wait 400
+shot mauler-client-side        # the real Mauler in profile
+signal side-seen-2
+signal placed-2
+waitsignal fired-mauler 1 60
+wait 10
+shot mauler-client-sees-fire   # its flash (green)
+waitsignal host-done 1 90
+log carom-skin: client done
