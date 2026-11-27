@@ -80,6 +80,38 @@ inline const char* const kControlName = "Control";
 
 // ---- Fields ------------------------------------------------------------------------
 
+// ---- The 250-round charge (P1) ---------------------------------------------------
+// The weapon has an ammo definition of its own (N64 struct ammodef: +0 u32 ammo type,
+// +4 casing, +8 s16 clip size, +0x0C reload animation, +0x10 flags): an ammo type the
+// game never uses (0x1C), a clip of kCharge rounds and AMMOFLAG_NORESERVE, the flag the
+// cloak and the combat boost use: every round gained goes into the clip, capped at its
+// size, and none is held in reserve (bgun_set_ammo_quantity). The type's capacity in
+// g_AmmoTypes (12 bytes per type: s32 capacity, ...) and the multiplayer entry's ammo
+// (+1 type, +2 quantity) match it. A throw hands the whole clip to the turret, whose
+// ammo is one byte where 255 means "unlimited": at most 254.
+constexpr uint32_t kDefAmmo = 0x1C;             // weapondef ammos[0]
+constexpr uint32_t kAmmoDefSize = 0x14;
+constexpr uint32_t kAmmoType = 0x1C;            // AMMOTYPE_1C, unused
+constexpr int16_t kCharge = 250;
+constexpr uint32_t kAmmoFlagNoReserve = 1;
+constexpr uint32_t kAmmoTypes = 0x825CDAA8;     // g_AmmoTypes
+constexpr uint32_t kHandLoadedAmmo = 544;       // s32 loadedammo[2] (hand-relative)
+constexpr uint32_t kTurretMaxAmmo = 254;
+
+// ---- The cloak after a throw (P3) -------------------------------------------------
+// The cloaking device: player devicesactive (+196) |= DEVICE_CLOAKDEVICE, while the
+// player holds AMMOTYPE_CLOAK ammo (reserve at ammoheldarr, player+6096 + type*4), in
+// 1/60 s; chr_update_cloak uses it up while cloaked and turns the device off at 0.
+constexpr uint32_t kPlayerDevices = 196;
+constexpr uint32_t kDeviceCloak = 0x40;
+constexpr uint32_t kPlayerAmmoHeld = 6096;
+constexpr uint32_t kAmmoTypeCloak = 0x14;
+constexpr int32_t kCloakAmmoMax = 18000;        // its capacity in g_AmmoTypes (5 minutes)
+
+// ---- The view (P7) -----------------------------------------------------------------
+constexpr uint32_t kPlayerVisionMode = 16;      // u16: 2 = Slayer rocket, 3 = one frame of static
+constexpr uint16_t kVisionStatic = 3;
+
 // Hands (XBLA: N64 struct hand, at player+1632, 1956 bytes each).
 constexpr uint32_t kRightHand = pd::custom::kPlayerHands;
 constexpr uint32_t kHandFunc = 3;        // u8 gset.weaponfunc: 0 primary, 1 secondary
@@ -91,8 +123,6 @@ constexpr uint32_t kPlayerSpeedForwards = 376;    // f32
 // Objects (N64 struct defaultobj) and the autogun (struct autogunobj).
 constexpr uint32_t kObjType = 3;           // u8: 13 = OBJTYPE_AUTOGUN
 constexpr uint8_t kObjTypeAutogun = 13;
-constexpr uint32_t kObjFlags2 = 12;        // u32
-constexpr uint32_t kFlags2Invisible = 0x00080000;  // OBJFLAG2_INVISIBLE: not drawn
 constexpr uint32_t kObjProp = 20;          // struct prop *
 constexpr uint32_t kObjRealRot = 28;       // f32[3][3]; row 1 (+40) = the up axis
 constexpr uint32_t kObjHidden = 64;        // u32: owner player in bits 28-31, 4 = deleting
@@ -133,23 +163,37 @@ using pd::player::Vec;
 
 // ---- Settings (main.cpp sets them every frame; online the host's) --------------------
 inline float g_turn_speed = 0.6f;    // the turret's maxspeed while controlled
-inline float g_eye_offset = 25.0f;   // camera: units out of the turret's surface
 inline uint32_t g_explosion = 13;    // explosion type when leaving (13 = a rocket's)
+inline uint32_t g_cloak_seconds = 30;  // the thrower's cloak after a throw (0 = none)
+// The view while controlling (pd_turret_eye_*): over the barrels. The gun's pivot is
+// g_eye_pivot units out of the surface; the camera g_eye_back behind it along the look
+// and g_eye_up above it.
+inline float g_eye_pivot = 15.0f;
+inline float g_eye_back = 35.0f;
+inline float g_eye_up = 12.0f;
+// How far below the surface the turret may aim, in degrees (pd_turret_aim_below).
+inline float g_aim_below = 5.0f;
+// The Slayer rocket's "monitor" picture while controlling (pd_turret_monitor_view).
+inline bool g_monitor_view = true;
 
 constexpr uint32_t kBlobKey = 0x54555252;  // "TURR"
-constexpr uint8_t kBlobVersion = 1;
+constexpr uint8_t kBlobVersion = 2;
 struct Rules {
   uint32_t explosion = 13;
   uint32_t turn_speed_percent = 60;  // maxspeed in hundredths of a radian per tick
-  bool operator!=(const Rules& o) const { return explosion != o.explosion || turn_speed_percent != o.turn_speed_percent; }
+  uint32_t cloak_seconds = 30;
+  bool operator!=(const Rules& o) const {
+    return explosion != o.explosion || turn_speed_percent != o.turn_speed_percent || cloak_seconds != o.cloak_seconds;
+  }
 };
 inline std::vector<uint8_t> EncodeBlob(const Rules& r) {
-  return {kBlobVersion, uint8_t(r.explosion), uint8_t(r.turn_speed_percent)};
+  return {kBlobVersion, uint8_t(r.explosion), uint8_t(r.turn_speed_percent), uint8_t(r.cloak_seconds)};
 }
 inline bool DecodeBlob(const std::vector<uint8_t>& blob, Rules* out) {
-  if (blob.size() < 3 || blob[0] != kBlobVersion || blob[1] < 1 || blob[1] > 25 || blob[2] == 0) return false;
+  if (blob.size() < 4 || blob[0] != kBlobVersion || blob[1] < 1 || blob[1] > 25 || blob[2] == 0) return false;
   out->explosion = blob[1];
   out->turn_speed_percent = blob[2];
+  out->cloak_seconds = blob[3];
   return true;
 }
 
@@ -221,21 +265,61 @@ inline bool CurrentPlayerControls(const uint8_t* base) {
   return player && LoadU32(base, pd::player::kGVars + 1188) == player;
 }
 
-// The camera's position while controlling: the turret's position, moved out of the
-// surface it is stuck to along its up axis (realrot row 1).
-inline Vec EyeOf(const uint8_t* base, uint32_t obj) {
+// ---- Small vector helpers ------------------------------------------------------------
+inline Vec Add(Vec a, Vec b) { return {a.x + b.x, a.y + b.y, a.z + b.z}; }
+inline Vec Scale(Vec a, float s) { return {a.x * s, a.y * s, a.z * s}; }
+inline float Dot(Vec a, Vec b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+inline Vec Normalised(Vec a, Vec fallback) {
+  const float len = std::sqrt(Dot(a, a));
+  return len > 0.0001f ? Scale(a, 1.0f / len) : fallback;
+}
+
+// The surface the turret is stuck to faces along the turret's up axis (realrot row 1):
+// (0, 1, 0) on a floor, sideways on a wall.
+inline Vec SurfaceNormal(const uint8_t* base, uint32_t obj) {
+  return Normalised(pd::player::LoadVec(base, obj + kObjRealRot + 12), {0.0f, 1.0f, 0.0f});
+}
+
+// The turret's gun: g_eye_pivot units out of its surface.
+inline Vec PivotOf(const uint8_t* base, uint32_t obj) {
   const uint32_t prop = LoadU32(base, obj + kObjProp);
-  Vec p = pd::player::LoadVec(base, prop + pd::player::kPropPos);
-  Vec up = pd::player::LoadVec(base, obj + kObjRealRot + 12);
-  const float len = std::sqrt(up.x * up.x + up.y * up.y + up.z * up.z);
-  if (len > 0.0001f) {
-    p.x += up.x / len * g_eye_offset;
-    p.y += up.y / len * g_eye_offset;
-    p.z += up.z / len * g_eye_offset;
-  } else {
-    p.y += g_eye_offset;
-  }
-  return p;
+  return Add(pd::player::LoadVec(base, prop + pd::player::kPropPos), Scale(SurfaceNormal(base, obj), g_eye_pivot));
+}
+
+// Where the camera wants to be while controlling (look = the view direction): just
+// behind and above the turret's barrels, so they show low in the middle of the view and
+// the shots visibly leave them. main.cpp pulls it in if a wall is closer.
+inline Vec WantedEye(const uint8_t* base, uint32_t obj, Vec look) {
+  return Add(Add(PivotOf(base, obj), Scale(Normalised(look, {0, 0, 1}), -g_eye_back)), {0.0f, g_eye_up, 0.0f});
+}
+
+// The aim limit: a direction may point at most g_aim_below degrees into the surface
+// (dot(dir, normal) >= -sin(limit)). A direction beyond it is turned back onto the limit,
+// keeping its heading along the surface. Returns true if it changed `dir`.
+inline bool ClampAim(Vec* dir, Vec normal) {
+  const float min_dot = -std::sin(g_aim_below * 3.14159265f / 180.0f);
+  const Vec d = Normalised(*dir, normal);
+  const float along = Dot(d, normal);
+  if (along >= min_dot) return false;
+  // The part of the direction along the surface; looking straight into the wall leaves
+  // none, so then any direction along the surface does (the one nearest "up").
+  Vec tangent = Add(d, Scale(normal, -along));
+  if (Dot(tangent, tangent) < 1e-6f) tangent = Add({0, 1, 0}, Scale(normal, -normal.y));
+  tangent = Normalised(tangent, {1, 0, 0});
+  *dir = Add(Scale(normal, min_dot), Scale(tangent, std::sqrt(1.0f - min_dot * min_dot)));
+  return true;
+}
+
+// The direction a turret faces when it settles: out of a wall (levelled), or, on a floor
+// or ceiling, horizontally where its thrower faced (`thrower_dir`).
+inline Vec RestingAim(Vec normal, Vec thrower_dir) {
+  if (std::fabs(normal.y) > 0.7f) return Normalised({thrower_dir.x, 0.0f, thrower_dir.z}, {0, 0, 1});
+  return Normalised({normal.x, 0.0f, normal.z}, {0, 0, 1});
+}
+
+// A direction from the turret's angles (the shot direction, N64 autogun_tick_shoot).
+inline Vec DirOf(float yrot, float xrot) {
+  return {std::cos(xrot) * std::sin(yrot), std::sin(xrot), std::cos(xrot) * std::cos(yrot)};
 }
 
 // The turret's goal angles for a look direction: yrot = atan2(x, z) in 0..2pi,
@@ -250,11 +334,21 @@ inline void AnglesOf(const Vec& look, float* yrot, float* xrot) {
   *xrot = std::asin(s < -1.0f ? -1.0f : (s > 1.0f ? 1.0f : s));
 }
 
+// The direction each thrower faced at its throw (the resting aim of a floor turret), by
+// player number; and the loaded rounds of this PC's player just before its throw (they
+// all go into the turret, P1).
+inline Vec g_thrower_dir[8] = {};
+inline int32_t g_throw_clip = -1;
+// The level frame at which this PC's player's turret cloak ends (0 = none running): the
+// cloaking device is switched off then, whatever cloak ammo is left.
+inline uint32_t g_cloak_until = 0;
+
 // Forgets every turret (a new stage).
 inline void Reset() {
   std::memset(g_turrets, 0, sizeof(g_turrets));
   g_control = Control{};
   g_deploying_weapon = 0;
+  g_cloak_until = 0;
 }
 
 // ---- Install ------------------------------------------------------------------------
@@ -285,10 +379,28 @@ inline void Install(uint8_t* base, Alloc alloc) {
 
   StoreU32(base, def + kDefFunctions, primary);
   StoreU32(base, def + kDefFunctions + 4, special);
+
+  // The 250-round charge: its own ammo definition, type capacity and pickup quantity.
+  const uint32_t laptop_ammo = LoadU32(base, laptop + kDefAmmo);
+  const uint32_t ammo = alloc(kAmmoDefSize + 0x0C);
+  if (laptop_ammo && ammo) {
+    std::memcpy(base + ammo, base + laptop_ammo, kAmmoDefSize);
+    StoreU32(base, ammo + 0, kAmmoType);
+    pd::weapons::StoreU16(base, ammo + 8, uint16_t(kCharge));
+    StoreU32(base, ammo + 0x10, LoadU32(base, ammo + 0x10) | kAmmoFlagNoReserve);
+    StoreU32(base, def + kDefAmmo, ammo);
+    StoreU32(base, kAmmoTypes + kAmmoType * 12, uint32_t(kCharge));
+  }
+  const int index = pd::custom::IndexOf(kWeaponTurret);
+  if (pd::custom::g_entries && index >= 0) {
+    const uint32_t entry = pd::custom::g_entries + uint32_t(index) * pd::weapons::kWeaponEntrySize;
+    base[entry + 1] = uint8_t(kAmmoType);
+    base[entry + 2] = uint8_t(kCharge);
+  }
   REXLOG_INFO("[turret] weapon 0x{:02X}: primary 0x{:08X} (the Laptop's Deploy 0x{:08X}, flags 0x{:08X}), "
-              "secondary 0x{:08X} (special {}, name 0x{:04X})",
+              "secondary 0x{:08X} (special {}, name 0x{:04X}), ammo 0x{:08X} (type 0x{:02X}, clip {}, no reserve)",
               kWeaponTurret, primary, deploy, LoadU32(base, primary + kFuncFlags), special, kSpecialControl,
-              kTextControl);
+              kTextControl, ammo, kAmmoType, kCharge);
 }
 
 }  // namespace pd::turret

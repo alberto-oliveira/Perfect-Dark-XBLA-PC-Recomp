@@ -1,0 +1,83 @@
+# Scenario "turret-polish" (Remote Turret polish round, tests T-A/B/C/D/E/G): 2 copies,
+# -ExtraArgs pd_file_override. Runs after lobby-host.txt.
+#   T-A the 250-round charge: clip 250 / reserve 0, the turret gets the clip, the gun is
+#       left at 0 with no auto-switch, a new give refills it to 250; SMG untouched;
+#   T-B the gun is not drawn after the throw (host first person, client third person);
+#   T-C an 8 s cloak after the throw (the client's log: p1 cloaked, then not);
+#   T-D the over-the-barrel view, tracers from the barrels;
+#   T-E the aim limit (looking hard down at a floor turret stops ~5 degrees below level)
+#       and a turret thrown at a wall turning out of it;
+#   T-G the Slayer "monitor" view while controlling; static only for a moment.
+
+cvar pd_turret_cloak_seconds 8
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start
+waitmenu none 60
+wait 5000
+give 0x42
+equip 0x42
+wait 2500
+shot polish-armed
+signal armed
+waitsignal placed 1 60
+wait 500
+face Zqclient -25
+trig 0 255 300               # throw
+wait 1500
+shot polish-thrown           # T-B: no gun in hand
+signal thrown
+wait 1500
+btn rb                       # Control
+wait 1500
+trig 0 255 200               # take control
+wait 400
+shot polish-control-enter    # static burst?
+wait 1200
+shot polish-control-view     # T-D/T-G: barrels low in the middle, monitor lines
+face Zqhost                  # T-F: our own body (it threw from there)
+wait 800
+shot polish-own-body-early
+face Zqclient
+wait 500
+trig 0 255 1200
+wait 300
+shot polish-firing           # tracers from the barrels
+wait 1500
+log T-E: look hard down
+rstick 0 -32000 2500
+wait 2700
+shot polish-aim-down
+pos aim-down
+face Zqhost                  # T-F: our own body, seen from the turret
+wait 800
+shot polish-own-body
+btn rb                       # leave: explodes
+wait 1500
+shot polish-after-leave      # gun back, no static
+wait 2000
+log T-A: refill
+give 0x42
+wait 4000                    # the refill reloads first
+log T-E: wall throw
+face Zqclient 0 90           # side on: towards a wall, level
+trig 0 255 300
+wait 3500
+btn rb
+wait 1500
+trig 0 255 200
+wait 1500
+shot polish-wall-view        # the turret faces out of the wall
+face Zqhost                  # T-F: our own body, seen from the turret thrown sideways
+wait 800
+shot polish-own-body-side
+rstick 32000 0 2500          # turn hard one way
+wait 2700
+shot polish-wall-turned
+pos wall-turned
+btn rb
+wait 2000
+signal host-done
+wait 2000
+log turret-polish: host done

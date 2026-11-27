@@ -302,6 +302,42 @@ name "Remote Turret". Findings on the way:
   Borrowed model 0x19F has scale 4096, so `pd::custom::Install` now copies the replaced
   model's scale (409).
 
+**Polish round (after the user's first hands-on):**
+
+- **The 250-round charge.** The weapon has its own ammo definition: the unused ammo type
+  0x1C, a clip of 250 and `AMMOFLAG_NORESERVE`, the cloak's and combat boost's flag. With
+  it, every round gained goes into the clip, never into a reserve. The type's capacity in
+  `g_AmmoTypes` (0x825CDAA8, 12 bytes per type) and the multiplayer entry (+1 type,
+  +2 quantity) match it.
+  - `laptop_deploy` reads the Laptop's ammo at 0x8221E858 and sets what is left at
+    0x8221E8A4 (`li r3,14`); both see 0x42, so the player's SMG ammo is untouched.
+  - With NORESERVE that "set" adds back into the clip, so the deploy hook gives the turret
+    the whole clip (at most 254: 255 means unlimited) and empties it.
+  - Player: reserve ammo `ammoheldarr` at +6096 (+4 per type); a hand's loaded ammo at
+    hand+544.
+- **Gun hidden while the turret exists:** in first person, the gun renderer's hook; in third
+  person, on every PC, a hook before `chr_render_attached_object`'s `model_render` (0x8210A0A8
+  -> 0x8210A0B0; r31 = the held prop, obj +92 = its weapon; r28 = the chr).
+- **Cloak:** `devicesactive` (+196, no shift in this part of the player struct) |= 0x40, with
+  at least that many seconds of cloak ammo (type 0x14), and a timer of our own that switches
+  it off. Both PCs see the thrower cloaked (`CHRHFLAG_CLOAKED` 0x20000000 at chr +0x14). It
+  starts about 2 s after the throw: throwing pauses the cloak, as with the cloaking device.
+- **Over-the-barrel view:** the turret is no longer hidden. On screen, `autogun_tick_shoot`
+  fires from the barrel tips (off screen, from the prop's centre: the earlier "tracers from
+  the screen edge"). The camera sits behind and above the gun's pivot, pulled in short of
+  walls.
+- **Aim limit:** at most `pd_turret_aim_below` degrees into the surface (normal = the turret's
+  up axis, realrot row 1), clamped in the camera hook after the input step, with the view
+  angles written back. An idle turret faces out of its surface (on a floor, the way its
+  thrower faced).
+- **Own body:** `player_tick_third_person` sub_820FD4A8 ticks a player's own body only for
+  the eyespy (camera mode 2) or the Slayer view. At 0x820FD6C4 (`lwz r11,0(r30)` camera mode)
+  a controlling player reads as 2, so the body shows from the turret and the HUD's camera
+  mode is unchanged.
+- **Monitor view:** the level render's `visionmode == 2` check (0x8218BA40, sub_8218AB68)
+  and the level tick's per-player check for the hum and beep (0x8218A4B8) read 2 while
+  controlling. Visionmode 3 (one frame of static) is set on entering and on leaving.
+
 **Tests it will need:**
 
 - the camera hook (by eye);

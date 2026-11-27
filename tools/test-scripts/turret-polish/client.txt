@@ -1,0 +1,20 @@
+# Scenario "turret-polish", client: watches the host (third person, cloak).
+
+pick 825FA2F8                # Ready
+signal ready-{copy}
+waitmenu none 120
+wait 3000
+waitsignal armed 1 60
+tp near Zqhost 450
+wait 500
+face Zqhost
+wait 500
+shot polish-client-armed     # the host holds the Remote Turret
+signal placed
+waitsignal thrown 1 60
+wait 300
+shot polish-client-thrown    # the host cloaked, no gun
+wait 9000
+shot polish-client-uncloaked
+waitsignal host-done 1 120
+log turret-polish: client done

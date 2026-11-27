@@ -147,6 +147,12 @@ current menu, and the selected option of an open dropdown.
   the turret shot to pieces by Zqclient2 (control ends). Every PC's copy goes.
 - `turret-handson` (2 copies, `-ExtraArgs pd_file_override`): both players get the Remote
   Turret and the Laptop Gun (and its pickups lie around), then play by hand.
+- `turret-polish` (2 copies, `-ExtraArgs pd_file_override`): the polish round: the 250-round
+  charge (clip, hand-over, refill), the gun hidden after the throw, an 8 s cloak (both PCs'
+  "cloaked" flags), the over-the-barrel view with the Slayer monitor picture, the aim limit
+  (looking hard down), a sideways throw.
+- `turret-body` (2 copies): the host throws a turret a short way ahead, takes control and
+  looks back at itself: its own body must show.
 - `turret-skin` (2 copies, `-ExtraArgs pd_file_override`, make_turretgun.py's files installed):
   the Remote Turret's model in first person (idle, up, down), held in third person (front,
   profile), its pickups (weapon slots all index 50), and a real Laptop Gun to compare.

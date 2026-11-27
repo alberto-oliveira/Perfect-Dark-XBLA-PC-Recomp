@@ -1,0 +1,34 @@
+# Scenario "turret-body" (Remote Turret, test T-F): 2 copies. Runs after lobby-host.txt.
+# The host throws a turret a short way ahead (looking down), takes control and looks back
+# at itself: its own body must show. The client stays far away.
+
+cvar pd_turret_cloak_seconds 0
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start
+waitmenu none 60
+wait 5000
+give 0x42
+equip 0x42
+wait 2500
+signal armed
+waitsignal placed 1 60
+look 0 -55
+wait 500
+trig 0 255 300               # throw a short way ahead
+wait 3000
+btn rb
+wait 1500
+trig 0 255 200               # take control
+wait 1500
+face Zqhost
+wait 800
+shot body-from-turret
+face Zqhost 0 20
+wait 500
+shot body-from-turret-2
+btn rb
+wait 1500
+signal host-done
+log turret-body: host done

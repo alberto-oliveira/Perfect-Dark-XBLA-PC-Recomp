@@ -68,6 +68,7 @@ uint32_t PdRicoRenderBeams(PPCContext& ctx, uint8_t* base, uint32_t gdl);
 void PdTurretDeployed(uint8_t* base, uint32_t obj);
 void PdTurretGoals(uint8_t* base, uint32_t r1, uint32_t obj);
 void PdTurretFiring(uint8_t* base, uint32_t obj);
+uint32_t PdTurretCamera(PPCContext& ctx, uint8_t* base, uint32_t pos);
 
 namespace {
 // The calling guest thread's full context and guest memory, for a hook that needs
@@ -757,8 +758,24 @@ void PdHookCustomAsBase(PPCRegister& weapon);  // (custom weapons, further down)
 // for the sentry made next (PdHookTurretDeployed), then the check sees the base, so a
 // Remote Turret's throw makes a Laptop sentry (laptop_deploy).
 void PdHookTurretDeployCheck(PPCRegister& r11) {
-  pd::turret::g_deploying_weapon = r11.u32;
+  namespace tu = pd::turret;
+  tu::g_deploying_weapon = r11.u32;
+  // This PC's player throwing a Remote Turret: its clip (after the round the throw took)
+  // is what the turret will get (PdTurretDeployed).
+  uint8_t* base = HookBase();
+  const uint32_t player = pd::player::Player(base, 0);
+  if (r11.u32 == tu::kWeaponTurret && player && tu::LoadU32(base, pd::player::kGVars + 1188) == player) {
+    tu::g_throw_clip = int32_t(tu::LoadU32(base, player + pd::custom::kPlayerHands + tu::kHandLoadedAmmo));
+  }
   PdHookCustomAsBase(r11);
+}
+
+// laptop_deploy (sub_8221E5C8) asks for the thrower's Laptop ammo and sets what is left
+// (`li r3,14` before `bl 0x82177a50` at 0x8221E858 and `bl 0x8217d778` at 0x8221E8A4):
+// for a Remote Turret it asks about the Remote Turret's own ammo, so the player's SMG
+// ammo is left alone.
+void PdHookTurretDeployAmmo(PPCRegister& r3) {
+  if (pd::turret::g_deploying_weapon == pd::turret::kWeaponTurret) r3.u64 = pd::turret::kWeaponTurret;
 }
 
 // Right after laptop_deploy returned the new sentry (0x82170B34, r3; 0 = none).
@@ -774,11 +791,8 @@ void PdHookTurretFiring(PPCRegister& r31) { PdTurretFiring(HookBase(), r31.u32);
 // and rooms it is checked from): while the local player controls a turret, the
 // camera is at the turret. The look and up directions stay the player's.
 void PdHookTurretCamera(PPCRegister& r3, PPCRegister& r6, PPCRegister& r7) {
-  uint8_t* base = HookBase();
-  namespace tu = pd::turret;
-  if (!tu::CurrentPlayerControls(base) || !tu::IsTurret(base, tu::g_control.obj)) return;
-  const uint32_t prop = tu::LoadU32(base, tu::g_control.obj + tu::kObjProp);
-  pd::player::StoreVec(base, r3.u32, tu::EyeOf(base, tu::g_control.obj));
+  const uint32_t prop = PdTurretCamera(HookContext(), HookBase(), r3.u32);
+  if (!prop) return;
   r6.u64 = prop + pd::player::kPropPos;
   r7.u64 = prop + pd::player::kPropRooms;
 }
@@ -828,18 +842,6 @@ bool TurretLocalTurn(uint8_t* base) {
 
 void PdHookTurretTrigger(PPCRegister& r3) {
   if (!TurretLocalTurn(HookBase())) return;
-  {  // TEMP_TURRET: the trigger each step from 1 s before to 2 s after control ends
-    static uint32_t ended = 0;
-    uint8_t* base = HookBase();
-    const uint32_t frame = pd::turret::LoadU32(base, pd::player::kLevelFrames);
-    const uint32_t player = pd::player::Player(base, 0);
-    if (pd::turret::g_control.on) ended = frame;
-    if (ended && frame - ended < 120 && frame >= ended)
-      REXLOG_INFO("[turret] TEMP_TURRET step frame {}: trigger {} on {} block {} func {} hand state {}", frame,
-                  r3.u32, pd::turret::g_control.on, pd::turret::g_control.block_trigger,
-                  base[player + pd::turret::kRightHand + pd::turret::kHandFunc],
-                  int32_t(pd::turret::LoadU32(base, player + pd::turret::kRightHand + 1540)));
-  }
   pd::turret::g_control.trigger = r3.u32 != 0;
   TurretBlockTrigger(r3);
 }
@@ -848,7 +850,56 @@ void PdHookTurretTrigger(PPCRegister& r3) {
 // The first-person gun renderer sub_821761F8 at its start (return_on_true; it takes
 // the display list pointer in r3 and writes it back): no gun while the view is at
 // the turret.
-bool PdHookTurretHideGun() { return pd::turret::CurrentPlayerControls(HookBase()); }
+bool PdHookTurretHideGun() {
+  uint8_t* base = HookBase();
+  namespace tu = pd::turret;
+  if (tu::CurrentPlayerControls(base)) return true;
+  // The gun was thrown: while the local player's turret exists, the Remote Turret is
+  // drawn in no hand (it stays selected, for Control).
+  const uint32_t player = pd::player::Player(base, 0);
+  return player && tu::LoadU32(base, pd::player::kGVars + 1188) == player &&
+         int8_t(base[player + pd::player::kWeapon]) == int8_t(tu::kWeaponTurret) && tu::LocalTurret(base) != 0;
+}
+
+// chr_render_attached_object (sub_8210A070) before its model_render call (0x8210A0A8;
+// r31 = the attached prop, r28 = the chr; true jumps past the call to 0x8210A0B0): a
+// held Remote Turret is not drawn while its player's turret exists, on every PC.
+bool PdHookTurretHeldGun(PPCRegister& r31, PPCRegister& r28) {
+  uint8_t* base = HookBase();
+  namespace tu = pd::turret;
+  const uint32_t prop = r31.u32;
+  if (!prop || base[prop] != 4) return false;  // prop type 4 = a weapon
+  const uint32_t obj = tu::LoadU32(base, prop + 4);
+  if (!obj || base[obj + 92] != tu::kWeaponTurret) return false;  // obj +92 = its weapon number
+  for (int n = 0; n < 8; ++n) {
+    const uint32_t player = pd::player::Player(base, n);
+    if (!player) continue;
+    const uint32_t player_prop = pd::player::PropOf(base, player);
+    if (player_prop && tu::LoadU32(base, player_prop + 4) == r28.u32) return tu::IsTurret(base, tu::g_turrets[n]);
+  }
+  return false;
+}
+
+// player_tick_third_person (sub_820FD4A8) where it decides whether a player's own body
+// is ticked and drawn (0x820FD6C4, r11 = the camera mode, r30 = the player): only for
+// another player, the eyespy's view (2) or the Slayer rocket's; a player looking out of
+// a turret sees their own body too, as with the eyespy.
+void PdHookTurretOwnBody(PPCRegister& r11, PPCRegister& r30) {
+  uint8_t* base = HookBase();
+  if (pd::turret::g_control.on && r30.u32 == pd::player::Player(base, 0)) r11.u64 = 2;
+}
+
+// The Slayer rocket's view: the level render draws its interlaced "monitor" picture when
+// the current player's vision mode is 2 (`lhz r10,16(r11)`, `cmplwi r10,2` at
+// 0x8218BA40), and the level tick plays its hum and beep while any player's is
+// (0x8218A4B8, r11 = the player). A player controlling a turret reads as 2 at both.
+void PdHookTurretVisionRender(PPCRegister& r10, PPCRegister& r11) {
+  if (pd::turret::g_monitor_view && pd::turret::CurrentPlayerControls(HookBase())) r10.u64 = 2;
+}
+void PdHookTurretVisionSound(PPCRegister& r10, PPCRegister& r11) {
+  uint8_t* base = HookBase();
+  if (pd::turret::g_control.on && r11.u32 == pd::player::Player(base, 0)) r10.u64 = 2;
+}
 
 // Using one's own thrown Laptop sentry picks it up (sub_822211E8: inv_give_single_weapon,
 // then the pickup message, with `li r3,14` before each; r28 = the sentry): a Remote

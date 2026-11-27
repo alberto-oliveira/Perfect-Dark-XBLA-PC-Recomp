@@ -1062,6 +1062,48 @@ address = 0x820F4190
 name = "PdHookTurretTrigger"
 registers = ["r3"]
 
+# laptop_deploy sub_8221E5C8's Laptop ammo calls (`li r3,14` then `bl 0x82177a50` at
+# 0x8221E858, `bl 0x8217d778` at 0x8221E8A4): a Remote Turret's throw uses its own ammo.
+[[midasm_hook]]
+address = 0x8221E858
+name = "PdHookTurretDeployAmmo"
+registers = ["r3"]
+
+[[midasm_hook]]
+address = 0x8221E8A4
+name = "PdHookTurretDeployAmmo"
+registers = ["r3"]
+
+# chr_render_attached_object sub_8210A070 before its model_render (`mr r4,r27` at
+# 0x8210A0A8; r31 = the held prop, r28 = the chr): a thrown Remote Turret is not drawn in
+# its player's hand (jumps past the call).
+[[midasm_hook]]
+address = 0x8210A0A8
+name = "PdHookTurretHeldGun"
+registers = ["r31", "r28"]
+jump_address_on_true = 0x8210A0B0
+
+# player_tick_third_person sub_820FD4A8: a player's own body is ticked (animated and
+# marked on screen, so it is drawn) when the camera mode (`lwz r11,0(r30)`, r30 = the
+# player) is the eyespy's (2) at 0x820FD6C4: a player controlling a turret reads as 2.
+[[midasm_hook]]
+address = 0x820FD6C4
+name = "PdHookTurretOwnBody"
+registers = ["r11", "r30"]
+
+# The Slayer rocket's "monitor" view and sounds for a player controlling a turret:
+# the level render's vision mode check (`cmplwi cr6,r10,2` at 0x8218BA40, sub_8218AB68)
+# and the level tick's per-player check (0x8218A4B8, sub_8218A3D8; r11 = the player).
+[[midasm_hook]]
+address = 0x8218BA40
+name = "PdHookTurretVisionRender"
+registers = ["r10", "r11"]
+
+[[midasm_hook]]
+address = 0x8218A4B8
+name = "PdHookTurretVisionSound"
+registers = ["r10", "r11"]
+
 # The first-person gun renderer sub_821761F8 (called once a frame with &gdl): no gun
 # while the view is at the turret.
 [[midasm_hook]]
