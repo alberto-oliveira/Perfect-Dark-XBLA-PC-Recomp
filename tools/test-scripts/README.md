@@ -131,6 +131,8 @@ current menu, and the selected option of an open dropdown.
 - `testgun` (2 copies, `-ExtraArgs pd_file_override`, the proof gun's files in the override
   folder): the Test Gun (custom weapon 0x50, its own model) in first and third person and
   as pickups, next to a real Falcon 2.
+- `carom-skin` (2 copies, `-ExtraArgs pd_file_override`, make_carom.py's files installed): the
+  Carom LX's own model in first and third person, its flash, side views, and a real Mauler.
 - `ricochet-func` (2 copies): the client's copy of the host's primary/secondary
   bits (`peek`) after each toggle, for the Carom LX and the Laser.
 

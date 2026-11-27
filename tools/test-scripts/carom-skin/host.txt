@@ -1,0 +1,79 @@
+# Scenario "carom-skin" (Carom LX skin, tests C1-C3): 2 copies, -ExtraArgs pd_file_override,
+# with make_carom.py's files in game\DataFiles\override. Runs after lobby-host.txt.
+# The host's extra weapon slots are all the Carom LX (table index 48), so its pickups lie
+# around. The host shows the Carom LX in first person (idle, a pulse with its flash, the
+# Stream, a reload, a switch away and back) while the client watches the held gun and its
+# flash; then the same with a real Mauler (green, unchanged).
+
+cvar pd_mp_weapons 48,48,48,48,48,48,48,48,48,48
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start
+waitmenu none 60
+wait 4000
+look 90 -20
+wait 200
+shot carom-around-90           # pickups, if any are in view
+look 270 -20
+wait 200
+shot carom-around-270
+give 6
+give 0x52
+equip 0x52
+wait 2500
+look 0 0
+wait 300
+shot carom-host-idle
+signal host-armed
+waitsignal placed 1 60
+wait 300
+face Zqclient 0 90             # side on to the client: the gun in profile (longer front)
+wait 300
+signal host-side
+waitsignal side-seen 1 30
+wait 300
+face Zqclient -40              # the floor in front of the client
+wait 300
+trig 0 255 150
+wait 40
+shot carom-host-pulse
+signal fired-pulse
+wait 1500
+btn rb                         # Stream
+wait 800
+face Zqclient -40
+trig 0 255 1200
+wait 500
+shot carom-host-stream
+signal fired-stream
+wait 1500
+look 0 -60
+btn x                          # reload
+wait 350
+shot carom-host-reload
+wait 2500
+log carom-skin: real mauler
+equip 6
+wait 2500
+look 0 0
+wait 300
+shot mauler-host-idle
+signal host-mauler
+face Zqclient 0 90             # the real Mauler in profile, to compare
+signal host-side-2
+waitsignal side-seen-2 1 30
+face Zqclient -40
+waitsignal placed-2 1 60
+trig 0 255 150
+wait 40
+shot mauler-host-fire
+signal fired-mauler
+wait 1500
+equip 0x52
+wait 2500
+look 0 0
+wait 300
+shot carom-host-back
+signal host-done
+log carom-skin: host done

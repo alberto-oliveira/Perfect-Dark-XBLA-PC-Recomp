@@ -234,3 +234,33 @@ Callers:
 ## 12. After your first hands-on (2026-11-26)
 - **Triangle winding:** the game's meshes are **clockwise** seen from the front (Falcon 0x9E5: 1076 of 1076 triangles) and it culls the other side; glTF/Blender is counter-clockwise. The first tools copied the order through in both directions. A round trip of a game mesh stayed right, but a mesh made outside the game (the Test Gun) drew inside-out ("open" boxes). `xblamesh.py glb` and `glb2xbla.py` now swap each triangle's last two corners. After the fix the round trip is still identical, the Test Gun's meshes are all clockwise, and it draws as closed boxes.
 - **Pickup message:** a borrowed weapon number can already have its own row in the game's pickup-name table (0x50, the necklace, whose text 0x4CE6 is the Detonator Crossbow's name), and the game's lookup (`sub_8220C0F0`) takes the first match. The custom rows now come first; the log lists the text each custom weapon gets.
+
+## 13. Carom LX skin (branch `carom-skin`, 2026-11-26)
+- **What it is:** the Carom LX (0x52) gets its own model, made by `tools/models/make_carom.py --install` from the Mauler's files:
+  - first person 0x4CB -> **0x277**, its mesh 0xA2E -> **0x278**;
+  - third person/pickup 0x34A -> **0x279**, its mesh 0x850 -> **0x27A**, shown as model **0x116** (MODEL_CHRECMMINE, solo only);
+  - texture slots: **0xD02** (first person, like 0x15D7), **0xD03** (third person, like 0xFB5), **0xD04** (third-person flash, like 0x96F).
+  - With the files loaded, its white tint and runtime flash colour are off; without them, they come back as the fallback.
+- **Recolour** (`recolour.py`, by hue):
+  - metal -> near-white with one cool grey hue (lightness 0.55 + 0.45 x old);
+  - the yellow-green details (hue 50-140, saturation > 0.3, brightness > 0.12) -> blue (215);
+  - darker or teal pixels are dirt and become metal;
+  - pure-black specks inside parts take their neighbours' colour.
+- **Flash, both views:**
+  - first person: the flash part's single vertex colour (`{FEFEFEFF, 0, 05xxxxxx}` in the N64 file) set to red in the Carom's copy;
+  - third person: it is a `chrgunfire` node drawn as a white quad, its colour all texture (texconfig[0], 0x96F green, shared by 0x34A and 0x35A). The copy points it at the red slot 0xD04.
+  - Both checked in game; the real Mauler keeps its green flash.
+- **Blender round trip** (`tools/models/blender/roundtrip.py`, Blender 5.2 headless):
+  - an unchanged Mauler comes back with every triangle, UVs exact, skin weights exact, colours within 7/255;
+  - Blender merges sub-meshes that share a material (harmless), and adds an "Icosphere" bone-shape mesh (the script deletes it).
+- **Model change:** Blender stretches everything past the front fifth by 1.6 (first person z > 14, third person x < -113). The flash moves with it: first-person part 90 +40.8 N64 units, third-person `chrgunfire` x -181 -> -222. In game the blade reaches visibly further than the real Mauler's (side views).
+- **Tests on 2 copies:**
+  - C1/C2: white and blue in first person, third person and pickup; red flash in both views;
+  - C3: the real Mauler unchanged;
+  - C4: the longer front;
+  - C5: without the files, the tinted Mauler as before.
+- **Emissive glow on the blue parts: not available as is.**
+  - The remastered-mesh shader uses texture **alpha as a cut-out**: a DXT5 texture with alpha 0 on the metal made the metal vanish. So alpha cannot mask the reflection.
+  - A reflection (env) map is bound straight from its header without being requested, so only env maps already loaded at start-up work: 0xE93 is resident; a taken-over env slot was never loaded.
+  - Env maps are **cube maps** (0xE93: 256x256 DXT1 x 6 faces, 393216 bytes).
+  - A glow would need: a second, cut-out copy of the blue parts with a high reflection strength, plus a blue cube map made resident by patching its slot before the resident loop in `sub_82262D60`. Not done; it is also unknown whether reflection stays bright in dark rooms.
