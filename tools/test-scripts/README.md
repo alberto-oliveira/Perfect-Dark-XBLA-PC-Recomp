@@ -151,6 +151,10 @@ current menu, and the selected option of an open dropdown.
   charge (clip, hand-over, refill), the gun hidden after the throw, an 8 s cloak (both PCs'
   "cloaked" flags), the over-the-barrel view with the Slayer monitor picture, the aim limit
   (looking hard down), a sideways throw.
+- `turret-ammo` (2 copies): the Remote Turret's ammo: clip 250 + reserve, a throw hands the
+  clip to the turret, a re-throw (the old turret explodes), control, firing, and Reload
+  while controlling topping the turret up to 254 from the reserve. (Its "use your own
+  turret" step does not pick it up from a script; that is checked by hand.)
 - `turret-body` (2 copies): the host throws a turret a short way ahead, takes control and
   looks back at itself: its own body must show.
 - `turret-skin` (2 copies, `-ExtraArgs pd_file_override`, make_turretgun.py's files installed):

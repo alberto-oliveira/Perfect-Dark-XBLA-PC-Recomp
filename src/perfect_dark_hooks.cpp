@@ -766,6 +766,7 @@ void PdHookTurretDeployCheck(PPCRegister& r11) {
   const uint32_t player = pd::player::Player(base, 0);
   if (r11.u32 == tu::kWeaponTurret && player && tu::LoadU32(base, pd::player::kGVars + 1188) == player) {
     tu::g_throw_clip = int32_t(tu::LoadU32(base, player + pd::custom::kPlayerHands + tu::kHandLoadedAmmo));
+    tu::g_throw_reserve = int32_t(tu::LoadU32(base, player + tu::kPlayerAmmoHeld + tu::kAmmoType * 4));
   }
   PdHookCustomAsBase(r11);
 }
@@ -859,6 +860,57 @@ bool PdHookTurretHideGun() {
   const uint32_t player = pd::player::Player(base, 0);
   return player && tu::LoadU32(base, pd::player::kGVars + 1188) == player &&
          int8_t(base[player + pd::player::kWeapon]) == int8_t(tu::kWeaponTurret) && tu::LocalTurret(base) != 0;
+}
+
+// TEMP_TURRET: autogun_tick_shoot calls for our turrets, logged once a second.
+void PdHookTurretShootProbe(PPCRegister& r28) {
+  uint8_t* base = HookBase();
+  namespace tu = pd::turret;
+  if (!tu::IsTurret(base, r28.u32)) return;
+  static uint32_t calls = 0, last = 0;
+  ++calls;
+  const uint32_t frame = tu::LoadU32(base, pd::player::kLevelFrames);
+  if (frame / 60 != last / 60) {
+    REXLOG_INFO("[turret] TEMP_TURRET shoot calls {} (frame {}): firing {} ammo {} flags 0x{:08X}", calls, frame,
+                int(int8_t(base[r28.u32 + tu::kGunFiring])), base[r28.u32 + tu::kGunAmmo], tu::LoadU32(base, r28.u32 + 8));
+    calls = 0;
+    last = frame;
+  }
+}
+
+// bgun_reload_if_possible (sub_8217CCA8) at its start, the way Reload reaches the gun:
+// while the local player controls a turret, it reloads the turret.
+void PdHookTurretReload() {
+  uint8_t* base = HookBase();
+  if (pd::turret::CurrentPlayerControls(base)) pd::turret::g_control.reload_request = true;
+}
+
+// weapon_get_pickup_ammo_qty (sub_8220CB10) at its exit (0x8220CD60; r3 = the rounds,
+// r31 = the weapon object): a Remote Turret pickup gives kPickupAmmo (the function only
+// knows the game's own ammo types and gives 1 round for any other).
+void PdHookTurretPickupAmmo(PPCRegister& r3, PPCRegister& r31) {
+  uint8_t* base = HookBase();
+  if (r31.u32 && base[r31.u32 + 92] == pd::turret::kWeaponTurret) r3.u64 = pd::turret::kPickupAmmo;
+}
+
+// Using one's own thrown sentry, after the weapon and the message (sub_822211E8 at
+// 0x822214F0, r28 = the sentry; true jumps to its end, 0x822215D4): the game would put
+// the sentry's rounds back as Laptop (SMG) ammo; a Remote Turret's go into the Remote
+// Turret's reserve instead (up to its capacity).
+bool PdHookTurretPickupRounds(PPCRegister& r28) {
+  uint8_t* base = HookBase();
+  namespace tu = pd::turret;
+  bool ours = false;
+  for (const uint32_t t : tu::g_turrets) ours = ours || (t && t == r28.u32);
+  if (!ours) return false;
+  const uint32_t ammo = base[r28.u32 + tu::kGunAmmo];
+  const uint32_t player = tu::LoadU32(base, pd::player::kGVars + 1188);
+  if (ammo > 0 && ammo != 255 && player) {
+    const uint32_t at = player + tu::kPlayerAmmoHeld + tu::kAmmoType * 4;
+    tu::StoreU32(base, at, std::min(tu::LoadU32(base, at) + ammo, tu::kReserve));
+  }
+  REXLOG_INFO("[turret] own turret picked up: {} rounds back into the reserve", ammo);
+  return true;
 }
 
 // chr_render_attached_object (sub_8210A070) before its model_render call (0x8210A0A8;

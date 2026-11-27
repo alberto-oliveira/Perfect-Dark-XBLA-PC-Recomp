@@ -1,0 +1,53 @@
+# Scenario "turret-ammo" (Remote Turret, ammo with reserve and reload): 2 copies. Runs
+# after lobby-host.txt. The [turret] "clip ... reserve" lines show the ammo:
+#   1. give: clip 250, reserve 500;
+#   2. throw a short way ahead: the turret gets 249, the gun reloads from the reserve;
+#   3. walk up to the turret and use it: its rounds go back into the reserve;
+#   4. throw again, take control, fire ~2 s, tap Activate/Reload: the turret is topped up
+#      to 254 from the clip and the reserve after 1.5 s;
+#   5. leave.
+
+cvar pd_turret_cloak_seconds 0
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start
+waitmenu none 60
+wait 5000
+give 0x42
+equip 0x42
+wait 2500
+signal armed
+waitsignal placed 1 60
+log step 2: throw
+look 0 -55
+trig 0 255 300
+wait 4000                    # the gun reloads meanwhile
+log step 3: pick it up
+tp near turret 60
+wait 500
+face turret
+wait 300
+btn x 150
+wait 1500
+pos picked-up
+log step 4: throw, control, fire, reload
+wait 2000
+look 0 -55
+trig 0 255 300
+wait 3000
+btn rb
+wait 1500
+trig 0 255 200
+wait 1500
+trig 0 255 2000                # fire where the turret points
+wait 2500
+give 0x42                    # rounds to reload the turret with
+wait 3000
+btn x 150                    # reload the turret
+wait 3000
+shot after-reload
+btn rb                       # leave
+wait 2000
+signal host-done
+log turret-ammo: host done

@@ -80,23 +80,35 @@ inline const char* const kControlName = "Control";
 
 // ---- Fields ------------------------------------------------------------------------
 
-// ---- The 250-round charge (P1) ---------------------------------------------------
+// ---- Ammo -------------------------------------------------------------------------
 // The weapon has an ammo definition of its own (N64 struct ammodef: +0 u32 ammo type,
-// +4 casing, +8 s16 clip size, +0x0C reload animation, +0x10 flags): an ammo type the
-// game never uses (0x1C), a clip of kCharge rounds and AMMOFLAG_NORESERVE, the flag the
-// cloak and the combat boost use: every round gained goes into the clip, capped at its
-// size, and none is held in reserve (bgun_set_ammo_quantity). The type's capacity in
-// g_AmmoTypes (12 bytes per type: s32 capacity, ...) and the multiplayer entry's ammo
-// (+1 type, +2 quantity) match it. A throw hands the whole clip to the turret, whose
-// ammo is one byte where 255 means "unlimited": at most 254.
+// +4 casing, +8 s16 clip size, +0x0C reload animation, +0x10 flags), with an ammo type
+// no weapon uses: AMMOTYPE_DART (0x11). It must be below 20: a multiplayer ammo crate
+// has slots only for types 1-19 (setup.c, `priammotype < 20`). The clip holds kClip
+// rounds; the player carries up to kReserve more (the type's capacity in g_AmmoTypes,
+// 12 bytes per type: s32 capacity, ...). A throw hands the clip to the turret, whose ammo
+// is one byte where 255 means "unlimited": at most 254. Reload while controlling tops
+// the turret up from the clip and the reserve (PdTurretTick).
+//   - Picking up a Remote Turret gives kPickupAmmo (weapon_get_pickup_ammo_qty only knows
+//     the game's own types: 1 round otherwise; hook at its exit);
+//   - an ammo crate gives kCrateAmmo (the multiplayer entry: +1 ammo type, +2 quantity);
+//   - picking up one's own turret puts its rounds back into the reserve.
+// The pickup message's "dart"/"darts" texts (only darts use them) become turret rounds.
 constexpr uint32_t kDefAmmo = 0x1C;             // weapondef ammos[0]
 constexpr uint32_t kAmmoDefSize = 0x14;
-constexpr uint32_t kAmmoType = 0x1C;            // AMMOTYPE_1C, unused
-constexpr int16_t kCharge = 250;
-constexpr uint32_t kAmmoFlagNoReserve = 1;
+constexpr uint32_t kAmmoType = 0x11;            // AMMOTYPE_DART, used by no weapon
+constexpr int16_t kClip = 250;
+constexpr uint32_t kReserve = 500;
+constexpr uint32_t kPickupAmmo = 250;
+constexpr uint8_t kCrateAmmo = 125;
 constexpr uint32_t kAmmoTypes = 0x825CDAA8;     // g_AmmoTypes
 constexpr uint32_t kHandLoadedAmmo = 544;       // s32 loadedammo[2] (hand-relative)
 constexpr uint32_t kTurretMaxAmmo = 254;
+constexpr uint16_t kTextDart = 0x5219;          // L_PROPOBJ_025 (bank 0x29 << 9 | 25)
+constexpr uint16_t kTextDarts = 0x5254;         // L_PROPOBJ_084
+// The turret's reload (Reload pressed while controlling): it cannot fire for
+// this many frames (60 a second), then it is topped up.
+constexpr uint32_t kReloadFrames = 90;
 
 // ---- The cloak after a throw (P3) -------------------------------------------------
 // The cloaking device: player devicesactive (+196) |= DEVICE_CLOAKDEVICE, while the
@@ -171,8 +183,11 @@ inline uint32_t g_cloak_seconds = 30;  // the thrower's cloak after a throw (0 =
 inline float g_eye_pivot = 15.0f;
 inline float g_eye_back = 35.0f;
 inline float g_eye_up = 12.0f;
-// How far below the surface the turret may aim, in degrees (pd_turret_aim_below).
+// How far below the surface the turret may aim, in degrees (pd_turret_aim_below), and
+// how far from the direction it rests in (pd_turret_aim_cone): its model looks wrong
+// turned further.
 inline float g_aim_below = 5.0f;
+inline float g_aim_cone = 70.0f;
 // The Slayer rocket's "monitor" picture while controlling (pd_turret_monitor_view).
 inline bool g_monitor_view = true;
 
@@ -220,6 +235,8 @@ struct Control {
   bool block_trigger = false;
   int released_steps = 0;    // input steps in a row with the trigger let go
   bool trigger = false;      // the trigger itself, as the input step read it
+  bool reload_request = false;  // Reload was pressed while controlling
+  uint32_t reload_until = 0;    // the turret is reloading until this level frame (0 = not)
 
 };
 inline Control g_control;
@@ -310,6 +327,20 @@ inline bool ClampAim(Vec* dir, Vec normal) {
   return true;
 }
 
+// The cone limit: at most g_aim_cone degrees from `axis` (the resting aim). A direction
+// outside is turned back onto the cone's edge, keeping its side. True if it changed.
+inline bool ClampCone(Vec* dir, Vec axis) {
+  const float max_rad = g_aim_cone * 3.14159265f / 180.0f;
+  const Vec d = Normalised(*dir, axis);
+  const float c = Dot(d, axis);
+  if (c >= std::cos(max_rad)) return false;
+  Vec side = Add(d, Scale(axis, -c));
+  // Straight behind: swing round sideways (along the horizontal at right angles to the axis).
+  if (Dot(side, side) < 1e-6f) side = {axis.z, 0.0f, -axis.x};
+  side = Normalised(side, {1, 0, 0});
+  *dir = Add(Scale(axis, std::cos(max_rad)), Scale(side, std::sin(max_rad)));
+  return true;
+}
 // The direction a turret faces when it settles: out of a wall (levelled), or, on a floor
 // or ceiling, horizontally where its thrower faced (`thrower_dir`).
 inline Vec RestingAim(Vec normal, Vec thrower_dir) {
@@ -339,9 +370,20 @@ inline void AnglesOf(const Vec& look, float* yrot, float* xrot) {
 // all go into the turret, P1).
 inline Vec g_thrower_dir[8] = {};
 inline int32_t g_throw_clip = -1;
+inline int32_t g_throw_reserve = -1;
 // The level frame at which this PC's player's turret cloak ends (0 = none running): the
 // cloaking device is switched off then, whatever cloak ammo is left.
 inline uint32_t g_cloak_until = 0;
+
+// Both limits for turret `obj` (owner `owner`): the cone around its resting aim, then the
+// surface. True if `dir` changed.
+inline bool ClampTurretAim(const uint8_t* base, uint32_t obj, int owner, Vec* dir) {
+  const Vec normal = SurfaceNormal(base, obj);
+  const Vec rest = RestingAim(normal, owner >= 0 && owner < 8 ? g_thrower_dir[owner] : Vec{0, 0, 1});
+  const bool a = ClampCone(dir, rest);
+  const bool b = ClampAim(dir, normal);
+  return a || b;
+}
 
 // Forgets every turret (a new stage).
 inline void Reset() {
@@ -380,27 +422,26 @@ inline void Install(uint8_t* base, Alloc alloc) {
   StoreU32(base, def + kDefFunctions, primary);
   StoreU32(base, def + kDefFunctions + 4, special);
 
-  // The 250-round charge: its own ammo definition, type capacity and pickup quantity.
+  // Its own ammo: definition, the type's capacity (the reserve), the crate quantity.
   const uint32_t laptop_ammo = LoadU32(base, laptop + kDefAmmo);
   const uint32_t ammo = alloc(kAmmoDefSize + 0x0C);
   if (laptop_ammo && ammo) {
     std::memcpy(base + ammo, base + laptop_ammo, kAmmoDefSize);
     StoreU32(base, ammo + 0, kAmmoType);
-    pd::weapons::StoreU16(base, ammo + 8, uint16_t(kCharge));
-    StoreU32(base, ammo + 0x10, LoadU32(base, ammo + 0x10) | kAmmoFlagNoReserve);
+    pd::weapons::StoreU16(base, ammo + 8, uint16_t(kClip));
     StoreU32(base, def + kDefAmmo, ammo);
-    StoreU32(base, kAmmoTypes + kAmmoType * 12, uint32_t(kCharge));
+    StoreU32(base, kAmmoTypes + kAmmoType * 12, kReserve);
   }
   const int index = pd::custom::IndexOf(kWeaponTurret);
   if (pd::custom::g_entries && index >= 0) {
     const uint32_t entry = pd::custom::g_entries + uint32_t(index) * pd::weapons::kWeaponEntrySize;
     base[entry + 1] = uint8_t(kAmmoType);
-    base[entry + 2] = uint8_t(kCharge);
+    base[entry + 2] = kCrateAmmo;
   }
   REXLOG_INFO("[turret] weapon 0x{:02X}: primary 0x{:08X} (the Laptop's Deploy 0x{:08X}, flags 0x{:08X}), "
-              "secondary 0x{:08X} (special {}, name 0x{:04X}), ammo 0x{:08X} (type 0x{:02X}, clip {}, no reserve)",
+              "secondary 0x{:08X} (special {}, name 0x{:04X}), ammo 0x{:08X} (type 0x{:02X}, clip {}, reserve {})",
               kWeaponTurret, primary, deploy, LoadU32(base, primary + kFuncFlags), special, kSpecialControl,
-              kTextControl, ammo, kAmmoType, kCharge);
+              kTextControl, ammo, kAmmoType, kClip, kReserve);
 }
 
 }  // namespace pd::turret

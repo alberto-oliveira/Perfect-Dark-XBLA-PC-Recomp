@@ -1091,6 +1091,35 @@ address = 0x820FD6C4
 name = "PdHookTurretOwnBody"
 registers = ["r11", "r30"]
 
+# bgun_reload_if_possible sub_8217CCA8 at its start (r3 = the hand; called by the level
+# tick sub_8218AB68 for the Reload button and an Activate tap with nothing to use): while
+# controlling, Reload reloads the turret (the gun's own reload goes on as usual).
+[[midasm_hook]]
+address = 0x8217CCA8
+name = "PdHookTurretReload"
+
+# weapon_get_pickup_ammo_qty sub_8220CB10 at its exit (0x8220CD60; r3 = the rounds,
+# r31 = the weapon object): a Remote Turret pickup gives a clip's worth.
+[[midasm_hook]]
+address = 0x8220CD60
+name = "PdHookTurretPickupAmmo"
+registers = ["r3", "r31"]
+
+# sub_822211E8, using one's own sentry: its ammo hand-back (`lbz r11,169(r28)` at
+# 0x822214F0 .. 0x822215D4) gives Laptop ammo; a Remote Turret's rounds go into its own
+# reserve instead (true jumps past).
+[[midasm_hook]]
+address = 0x822214F0
+name = "PdHookTurretPickupRounds"
+registers = ["r28"]
+jump_address_on_true = 0x822215D4
+
+# TEMP_TURRET: autogun_tick_shoot sub_82207DC0 after it loaded the object (r28).
+[[midasm_hook]]
+address = 0x82207DFC
+name = "PdHookTurretShootProbe"
+registers = ["r28"]
+
 # The Slayer rocket's "monitor" view and sounds for a player controlling a turret:
 # the level render's vision mode check (`cmplwi cr6,r10,2` at 0x8218BA40, sub_8218AB68)
 # and the level tick's per-player check (0x8218A4B8, sub_8218A3D8; r11 = the player).

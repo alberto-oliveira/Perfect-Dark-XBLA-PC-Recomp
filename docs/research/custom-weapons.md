@@ -338,6 +338,26 @@ name "Remote Turret". Findings on the way:
   and the level tick's per-player check for the hum and beep (0x8218A4B8) read 2 while
   controlling. Visionmode 3 (one frame of static) is set on entering and on leaving.
 
+**Second polish round (the user's second hands-on):**
+
+- **Ammo type DART (0x11), with a reserve.** The NORESERVE charge is gone, and so is type
+  0x1C: an MP ammo crate has slots only for types 1-19 (`setup.c`: `priammotype < 20`), so
+  0x1C could never come in a crate. DART is used by no weapon. The clip holds 250 and the
+  reserve 500 (`g_AmmoTypes` capacity). The pickup message's "dart"/"darts" texts
+  (0x5219/0x5254, only darts use them) read "turret round(s)".
+- **Pickups gave 1 round:** `weapon_get_pickup_ammo_qty` (sub_8220CB10) only knows the game's
+  own types. A hook at its exit (0x8220CD60; r3 = the rounds, r31 = the weapon object)
+  gives 250 for a Remote Turret.
+- **Picking up one's own turret zeroed the ammo:** sub_822211E8 put the turret's rounds back
+  as Laptop (SMG) ammo (`li r3,14`). A jump hook at 0x822214F0 -> 0x822215D4 puts them into
+  the Remote Turret's reserve instead.
+- **Turret reload:** Reload reaches the gun through `bgun_reload_if_possible` sub_8217CCA8
+  (called by the level tick). While controlling, its entry starts a 1.5 s turret reload: no
+  firing, then the turret (max 254) is topped up from the clip, then the reserve. The
+  Activate/Reload tap count (player +208) is not set by this port's Reload button.
+- **Turn limit:** at most `pd_turret_aim_cone` (70) degrees from the resting aim, as well as
+  the surface limit: the model's barrel looks wrong turned further.
+
 **Tests it will need:**
 
 - the camera hook (by eye);

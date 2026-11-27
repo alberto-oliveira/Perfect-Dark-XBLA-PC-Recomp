@@ -1,0 +1,11 @@
+# Scenario "turret-ammo", client: keeps out of the way.
+
+pick 825FA2F8                # Ready
+signal ready-{copy}
+waitmenu none 120
+wait 3000
+waitsignal armed 1 60
+tp near Zqhost 1500
+signal placed
+waitsignal host-done 1 180
+log turret-ammo: client done

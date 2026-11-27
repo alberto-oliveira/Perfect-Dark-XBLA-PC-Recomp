@@ -5266,6 +5266,9 @@ class PerfectDarkApp : public rex::ReXApp {
     const std::string control = std::string(pd::turret::kControlName) + "\n";
     REXLOG_INFO("[turret] function name text 0x{:04X} = \"{}\"{}", pd::turret::kTextControl, pd::turret::kControlName,
                 OverrideText(mem, pd::turret::kTextControl, control.c_str()) ? "" : " FAILED");
+    // Its ammo's pickup message (the "dart" texts, which only darts use).
+    OverrideText(mem, pd::turret::kTextDart, "turret round\n");
+    OverrideText(mem, pd::turret::kTextDarts, "turret rounds\n");
   }
 
   static void OverrideLobbyLabels(rex::memory::Memory* mem) {
