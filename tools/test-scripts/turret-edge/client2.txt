@@ -1,0 +1,44 @@
+# Scenario "turret-edge", Zqclient2: watches phase B, kills the host in phase C and
+# shoots the host's turret in phase D (with the Reaper).
+
+pick 825FA2F8                # Ready
+signal ready-{copy}
+waitmenu none 120
+wait 3000
+waitsignal armed 1 60
+tp near Zqclient 500
+wait 500
+face Zqhost
+signal placed-{copy}
+waitsignal firing 1 120
+wait 2500
+shot B-client2
+pos B-client2
+waitsignal kill-me 1 120
+give 20
+equip 20
+wait 2500
+tp near Zqhost 300
+wait 500
+face Zqhost
+trig 0 255 4000
+wait 4500
+pos C-client2
+signal killed
+wait 5000                    # respawn (the turret's explosion may have caught us)
+btn a 200
+wait 1500
+btn a 200
+wait 3000
+give 20
+equip 20
+waitsignal shoot-turret 1 120
+tp near turret 250
+wait 500
+face turret
+trig 0 255 4000
+wait 4500
+pos D-client2
+signal turret-shot
+waitsignal host-done 1 120
+log turret-edge: client2 done

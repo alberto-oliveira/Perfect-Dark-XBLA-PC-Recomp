@@ -797,14 +797,13 @@ bool PdHookTurretFreeze() {
   return true;
 }
 
-// bgun_tick_gameplay (sub_821807A0) in a network match, where it stores a human
-// player's trigger as XBLA's input exchange handed it back (0x82180B60, r10 = the
-// trigger; the value passed to bgun_tick_gameplay is not used then): the turret tick
-// gets the trigger from here; the gun sees it released while the player controls a
-// turret, and after leaving until it really is.
+// bmove_process_input's call of bgun_tick_gameplay(triggeron) (sub_821807A0 at
+// 0x820F4190, r3 = the trigger): the turret tick gets the trigger from here; the gun
+// sees it released while the player controls a turret, and after leaving until it has
+// been let go for a few steps.
 namespace {
 // The gun's view of the local player's trigger (`trigger`, changed in place).
-void TurretBlockTrigger(PPCRegister& trigger, const char* where) {
+void TurretBlockTrigger(PPCRegister& trigger) {
   uint8_t* base = HookBase();
   namespace tu = pd::turret;
   tu::Control& c = tu::g_control;
@@ -815,10 +814,10 @@ void TurretBlockTrigger(PPCRegister& trigger, const char* where) {
     c.block_trigger = false;
   } else if (trigger.u32 != 0) {
     trigger.u64 = 0;
-    // TEMP_TURRET: which of the two places held the trigger off.
+    // TEMP_TURRET: the trigger held off (twice a second at most).
     static uint32_t last = 0;
     const uint32_t frame = tu::LoadU32(base, pd::player::kLevelFrames);
-    if (frame / 30 != last / 30) REXLOG_INFO("[turret] TEMP_TURRET frame {}: trigger held off at {}", frame, where);
+    if (frame / 30 != last / 30) REXLOG_INFO("[turret] TEMP_TURRET frame {}: trigger held off", frame);
     last = frame;
   }
 }
@@ -842,12 +841,9 @@ void PdHookTurretTrigger(PPCRegister& r3) {
                   int32_t(pd::turret::LoadU32(base, player + pd::turret::kRightHand + 1540)));
   }
   pd::turret::g_control.trigger = r3.u32 != 0;
-  TurretBlockTrigger(r3, "the input step");
+  TurretBlockTrigger(r3);
 }
-void PdHookTurretTriggerNet(PPCRegister& r10) {
-  if (!TurretLocalTurn(HookBase())) return;
-  TurretBlockTrigger(r10, "the network trigger");
-}
+
 
 // The first-person gun renderer sub_821761F8 at its start (return_on_true; it takes
 // the display list pointer in r3 and writes it back): no gun while the view is at

@@ -83,9 +83,9 @@ join order (the local player is always 0), so scripts are safer with names.
 | `give <weapon>` | give a weapon (number, e.g. `29` or `0x1D`) and fill every ammo type |
 | `equip <weapon>` | switch to a weapon the player has |
 | `look <theta> <verta>` | set the view angles (degrees; verta up from the horizon) |
-| `face <player> [verta] [turn]` | aim at that player's chest (or in its direction, at that vertical angle), then turn `turn` degrees (its sign picks the side) |
+| `face <player> [verta] [turn]` | aim at that player's chest (or in its direction, at that vertical angle), then turn `turn` degrees (its sign picks the side); while controlling a Remote Turret, from the turret; `face turret` aims at a Remote Turret |
 | `tp <x> <y> <z> [theta]` | move there (onto the floor below that point), facing theta |
-| `tp near <player> <distance>` | move to `distance` units in front of that player, facing them |
+| `tp near <player> <distance>` | move to `distance` units in front of that player, facing them (`tp near turret <distance>`: near a Remote Turret, in the direction this player faces) |
 | `pos [tag]` | log every player's position, room, view, weapon and knockback speed |
 | `track <frames>` / `track off` | log the local player like `pos` every N level frames |
 | `watchplayer <offset> <bytes>` | `watch` on the local player's struct (page-wide: noisy) |
@@ -141,6 +141,10 @@ current menu, and the selected option of an open dropdown.
   + trigger), tries to walk (the body stays), aims at the client with `face` (from the
   turret while controlling), fires until the client dies, then toggles back: the turret
   explodes and goes on both PCs.
+- `turret-edge` (3 copies): the host's rules reach the clients (blob "TURR", explosion
+  21); a turret used by its owner (pick-up; not reached by the script yet); control kept
+  when the ammo runs out; the owner killed while controlling (the turret explodes);
+  the turret shot to pieces by Zqclient2 (control ends). Every PC's copy goes.
 
 The Carom LX's development scenarios (bounces, hits, Stream, wall sweeps) need
 its debug code back: they are in `tools/debug-bank/ricochet-laser-scenarios/`.

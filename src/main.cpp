@@ -2490,7 +2490,17 @@ void PdTestPlayerTick(PPCContext& ctx, uint8_t* base) {
 
   pl::Request r;
   if (!pl::Take(&r)) return;
-  if (!r.who.empty()) {
+  // `face turret` / `tp near turret <distance>`: a Remote Turret on this PC (the first
+  // one found) instead of a player.
+  const bool at_a_turret =
+      (r.action == pl::Action::kFace || r.action == pl::Action::kTeleportNear) && r.who == "turret";
+  auto any_turret_prop = [&]() -> uint32_t {
+    for (const uint32_t t : pd::turret::g_turrets) {
+      if (pd::turret::IsTurret(base, t)) return pd::turret::LoadU32(base, t + pd::turret::kObjProp);
+    }
+    return 0;
+  };
+  if (!r.who.empty() && !at_a_turret) {
     r.number = pl::PlayerByName(base, r.who);
     if (r.number < 0) REXLOG_WARN("[test] no player named {}", r.who);
   }
@@ -2518,13 +2528,13 @@ void PdTestPlayerTick(PPCContext& ctx, uint8_t* base) {
       REXLOG_INFO("[test] look {:.1f} {:.1f}", r.a, r.b);
       break;
     case pl::Action::kFace: {
-      const uint32_t other = pl::PropOf(base, pl::Player(base, r.number));
+      const uint32_t other = at_a_turret ? any_turret_prop() : pl::PropOf(base, pl::Player(base, r.number));
       if (!other) {
-        REXLOG_WARN("[test] face {}: no such player", r.number);
+        REXLOG_WARN("[test] face {}: no such player or turret", r.who.empty() ? std::to_string(r.number) : r.who);
         break;
       }
       pl::Vec target = pl::LoadVec(base, other + pl::kPropPos);
-      target.y -= 40.0f;  // the prop is at eye height: aim at the chest
+      if (!at_a_turret) target.y -= 40.0f;  // a player's prop is at eye height: aim at the chest
       float theta, verta;
       // From the eye: the player's, or the Remote Turret's while controlling one.
       const bool at_turret = pd::turret::g_control.on && pd::turret::IsTurret(base, pd::turret::g_control.obj);
@@ -2545,13 +2555,15 @@ void PdTestPlayerTick(PPCContext& ctx, uint8_t* base) {
       int16_t first_room = -1;
       if (r.action == pl::Action::kTeleportNear) {
         // `distance` in front of the other player, facing it.
-        const uint32_t other_player = pl::Player(base, r.number);
-        const uint32_t other = pl::PropOf(base, other_player);
+        // (Near a turret: in the direction this player faces, from a point a little above it.)
+        const uint32_t other_player = at_a_turret ? player : pl::Player(base, r.number);
+        const uint32_t other = at_a_turret ? any_turret_prop() : pl::PropOf(base, other_player);
         if (!other) {
-          REXLOG_WARN("[test] tp near {}: no such player", r.number);
+          REXLOG_WARN("[test] tp near {}: no such player or turret", r.who.empty() ? std::to_string(r.number) : r.who);
           break;
         }
-        const pl::Vec at = pl::LoadVec(base, other + pl::kPropPos);
+        pl::Vec at = pl::LoadVec(base, other + pl::kPropPos);
+        if (at_a_turret) at.y += 60.0f;
         const float facing = pl::LoadF32(base, other_player + pl::kTheta);
         // How far the other player can see along `theta` (up to r.a): the
         // collision test (cd_test_los_oobok_findclosest_autoflags, 0 = hit) and

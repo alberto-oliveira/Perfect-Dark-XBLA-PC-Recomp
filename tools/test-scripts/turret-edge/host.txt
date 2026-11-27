@@ -1,0 +1,83 @@
+# Scenario "turret-edge" (Remote Turret, R3): 3 copies. Runs after lobby-host.txt.
+#   A. the host throws a turret at its own feet and uses it: it is picked up as the
+#      Remote Turret (no Laptop Gun);
+#   B. a turret near Zqclient, controlled, fired until its ammo runs out: firing
+#      stops, control stays; Zqclient2 watches (its copy aims and fires too);
+#   C. Zqclient2 kills the host while it controls the turret: control ends, the
+#      turret explodes;
+#   D. after respawning, a new turret near Zqclient2, controlled; Zqclient2 shoots
+#      the turret to pieces: control ends ("the turret is destroyed").
+
+cvar pd_turret_explosion 21  # host blob "TURR": the clients must log the host's rules
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start
+waitmenu none 60
+wait 5000
+give 0x42
+equip 0x42
+wait 2500
+signal armed
+waitsignal placed {clients} 60
+wait 500
+log A: pick up
+face Zqclient -80            # at its own feet
+trig 0 255 300
+wait 3000
+pos A-thrown
+tp near turret 70            # walk up to it
+wait 500
+face turret
+wait 500
+btn x 200                    # use it
+wait 1000
+btn x 200
+wait 2000
+pos A-used
+log B: ammo out
+face Zqclient -25
+trig 0 255 300
+wait 3000
+btn rb                       # Control
+wait 1500
+trig 0 255 200               # take control
+wait 1500
+face Zqclient
+signal firing
+trig 0 255 6000              # 200 rounds last ~3.5 s
+wait 7000
+pos B-ammo-out
+shot B-ammo-out
+log C: killed while controlling
+signal kill-me
+waitsignal killed 1 90
+wait 2000
+pos C-died
+shot C-died
+wait 4000
+btn a 200
+wait 1500
+btn a 200
+wait 4000
+pos C-respawned
+log D: turret shot to pieces
+give 0x42
+equip 0x42
+wait 2500
+face Zqclient2 -25
+trig 0 255 300
+wait 3000
+btn rb
+wait 1500
+trig 0 255 200
+wait 1500
+pos D-control
+signal shoot-turret
+waitsignal turret-shot 1 90
+wait 2000
+pos D-after
+shot D-after
+signal host-done
+wait 2000
+log turret-edge: host done
