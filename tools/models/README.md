@@ -22,6 +22,7 @@ Tools for getting gun models and textures out of the game's data files, and chan
 | `recolour.py <in.png> <out.png> --skin\|--flash` | Recolours a texture by hue (metal near-white, green details blue; or a green flash red). |
 | `blender/roundtrip.py` | Run by Blender (`blender --background --factory-startup --python roundtrip.py -- in.glb out.glb [--stretch AXIS SIGN CUT FACTOR]`): imports, optionally stretches, exports glTF for `glb2xbla.py`. |
 | `make_carom.py <dir> --install <override> [--blender <exe>]` | The Carom LX's own model (white and blue Mauler, red flash in both views, longer front with Blender). |
+| `make_turretgun.py <dir> --install <override>` | The Remote Turret's own model: the Laptop Gun in gunmetal and hazard orange (`recolour.py --hazard`), with new parts made in Python (an antenna with a ball tip, an emitter dish at the muzzle) added to both meshes. |
 
 Notes on what Blender shows:
 - The model is in its rest pose. Part 42 is the magazine; part 43 is the reload magazine, which animations move with the hand (on the Mauler it sits beside the gun).

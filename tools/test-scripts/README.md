@@ -145,6 +145,9 @@ current menu, and the selected option of an open dropdown.
   21); a turret used by its owner (pick-up; not reached by the script yet); control kept
   when the ammo runs out; the owner killed while controlling (the turret explodes);
   the turret shot to pieces by Zqclient2 (control ends). Every PC's copy goes.
+- `turret-skin` (2 copies, `-ExtraArgs pd_file_override`, make_turretgun.py's files installed):
+  the Remote Turret's model in first person (idle, up, down), held in third person (front,
+  profile), its pickups (weapon slots all index 50), and a real Laptop Gun to compare.
 
 The Carom LX's development scenarios (bounces, hits, Stream, wall sweeps) need
 its debug code back: they are in `tools/debug-bank/ricochet-laser-scenarios/`.

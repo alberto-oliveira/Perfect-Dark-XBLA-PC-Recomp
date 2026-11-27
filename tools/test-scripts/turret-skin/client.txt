@@ -1,0 +1,26 @@
+# Scenario "turret-skin", client: watches the host's Remote Turret and a real Laptop Gun.
+# Runs after lobby-client.txt.
+
+pick 825FA2F8                # Ready
+signal ready-{copy}
+waitmenu none 120
+wait 3000
+waitsignal host-armed 1 60
+tp near Zqhost 160
+face Zqhost -5
+wait 400
+signal placed
+waitsignal host-front 1 30
+wait 400
+shot turret-client-front     # the held Remote Turret, third person, from the front
+signal front-seen
+waitsignal host-side 1 30
+wait 400
+shot turret-client-side      # in profile: antenna and dish
+signal side-seen
+waitsignal host-laptop 1 60
+wait 400
+shot laptop-client-side      # a real Laptop Gun in profile, to compare
+signal laptop-seen
+waitsignal host-done 1 90
+log turret-skin: client done

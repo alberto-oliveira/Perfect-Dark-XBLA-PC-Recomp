@@ -3,6 +3,8 @@
 #
 #   python -I recolour.py <in.png> <out.png> --skin   (metal -> near-white, green -> blue)
 #   python -I recolour.py <in.png> <out.png> --flash  (green muzzle flash -> red)
+#   python -I recolour.py <in.png> <out.png> --hazard (the Remote Turret's Laptop Gun: light grey
+#            parts -> hazard orange, dark parts -> bluish gunmetal; coloured lights kept)
 #   options: --details-hue 215 (degrees, the colour green parts become), --white 0.55 (how
 #            light the metal gets: brightness = white + (1 - white) * old brightness),
 #            --flash-hue 0
@@ -51,6 +53,21 @@ def flash(r, g, b, flash_hue):
     return r, g, b
 
 
+def hazard(r, g, b):
+    """The Remote Turret: the Laptop Gun's light grey gun parts become hazard orange, its dark
+    laptop case a bluish gunmetal; the shading is kept. Saturated pixels (the green lights,
+    the red label) and the atlas's black background stay. Greys between 0.30 and 0.55
+    brightness (the shaded edges of light parts) blend from gunmetal to orange, so no hard
+    line runs along a part's shading."""
+    h, s, v = colorsys.rgb_to_hsv(r, g, b)
+    if s > 0.35 or v < 0.006:
+        return r, g, b
+    metal = colorsys.hsv_to_rgb(215 / 360, 0.20, min(1.0, 0.06 + 1.15 * v))
+    orange = colorsys.hsv_to_rgb(28 / 360, 0.88, min(1.0, 0.30 + 0.70 * v))
+    t = max(0.0, min(1.0, (v - 0.30) / 0.25))
+    return tuple(m * (1 - t) + o * t for m, o in zip(metal, orange))
+
+
 def fill_specks(img, w, h):
     """Pure-black pixels inside a part (DXT1's black "transparent" texels: invisible on the
     old dark metal, specks on light metal) take the average of their non-black neighbours,
@@ -83,7 +100,12 @@ def main():
         key = rgba[i:i + 3]
         if key not in cache:
             r, g, b = (c / 255 for c in key)
-            nr, ng, nb = skin(r, g, b, details_hue, white) if '--skin' in a else flash(r, g, b, flash_hue)
+            if '--skin' in a:
+                nr, ng, nb = skin(r, g, b, details_hue, white)
+            elif '--hazard' in a:
+                nr, ng, nb = hazard(r, g, b)
+            else:
+                nr, ng, nb = flash(r, g, b, flash_hue)
             cache[key] = bytes(int(round(max(0.0, min(1.0, c)) * 255)) for c in (nr, ng, nb))
         out[i:i + 3] = cache[key]
     if '--skin' in a:

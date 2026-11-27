@@ -1,0 +1,54 @@
+# Scenario "turret-skin" (Remote Turret model, tests C1-C3): 2 copies, -ExtraArgs
+# pd_file_override, with make_turretgun.py's files in game\DataFiles\override. Runs after
+# lobby-host.txt. The host's extra weapon slots are all the Remote Turret (table index 50),
+# so its pickups lie around. The host shows it in first person (idle, looking up, looking
+# down) while the client watches the held gun (front, profile); then a real Laptop Gun.
+
+cvar pd_mp_weapons 50,50,50,50,50,50,50,50,50,50
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start
+waitmenu none 60
+wait 4000
+look 90 -20
+wait 200
+shot turret-around-90        # pickups, if any are in view
+look 270 -20
+wait 200
+shot turret-around-270
+give 14
+give 0x42
+equip 0x42
+wait 2500
+look 0 0
+wait 300
+shot turret-host-idle
+look 0 45
+wait 300
+shot turret-host-up
+look 0 -45
+wait 300
+shot turret-host-down
+signal host-armed
+waitsignal placed 1 60
+face Zqclient 0
+wait 300
+signal host-front
+waitsignal front-seen 1 30
+face Zqclient 0 90           # side on to the client: the gun in profile
+wait 300
+signal host-side
+waitsignal side-seen 1 30
+log turret-skin: real laptop
+equip 14
+wait 2500
+look 0 0
+wait 300
+shot laptop-host-idle
+face Zqclient 0 90
+wait 300
+signal host-laptop
+waitsignal laptop-seen 1 30
+signal host-done
+log turret-skin: host done

@@ -121,8 +121,11 @@ inline constexpr Weapon kList[] = {
     // The Remote Turret (pd_turret.h): the Laptop Gun, whose primary throws its sentry
     // (keeping the gun) and whose secondary takes control of it. Number and name: solo
     // item 0x42 (the flight plans) and its text 0x4CE1. Its two functions are set by
-    // pd::turret::Install.
-    {0x42, 14, 0x4CE1, "Remote Turret", 0, 0, 0, 0},
+    // pd::turret::Install. Its own model (tools/models/make_turretgun.py): the Laptop Gun
+    // in gunmetal and hazard orange with an antenna and an emitter dish; first person
+    // 0x27B (mesh 0x27C), third person and pickup 0x27D (mesh 0x27E) as model 0x19F
+    // (MODEL_CHRLUMPHAMMER2: no multiplayer pickup or third-person model uses it).
+    {0x42, 14, 0x4CE1, "Remote Turret", 0, 0, 0, 0, 0x27B, 0x27B, 0x19F, 0x27D},
 };
 constexpr int kCount = int(sizeof(kList) / sizeof(kList[0]));
 static_assert(kFirstSpareFuncBitWeapon + kCount - 1 <= kLastSpareFuncBitWeapon, "no spare function bits left");
@@ -476,6 +479,12 @@ inline void Install(uint8_t* base, Alloc alloc) {
                     kEntryModelSize);
       }
       if (own_models && w.model_number) {  // its own pickup model (the look's scale is kept)
+        // The borrowed model number takes the scale of the model it replaces (a gun's is 409;
+        // a borrowed number may have another: 0x19F's is 4096, ten times too big).
+        const uint32_t old_model = (base[entry + kEntryModel] << 8) | base[entry + kEntryModel + 1];
+        const uint32_t old_scale = kModelStates + old_model * 8 + 6;
+        pd::weapons::StoreU16(base, kModelStates + uint32_t(w.model_number) * 8 + 6,
+                              uint16_t((base[old_scale] << 8) | base[old_scale + 1]));
         pd::weapons::StoreU16(base, entry + kEntryModel, w.model_number);
         // The borrowed model number now loads the gun's third-person file.
         pd::weapons::StoreU16(base, kModelStates + uint32_t(w.model_number) * 8 + 4, w.model_file);
