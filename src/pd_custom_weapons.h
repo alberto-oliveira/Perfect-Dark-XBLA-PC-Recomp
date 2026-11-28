@@ -471,6 +471,12 @@ inline void Install(uint8_t* base, Alloc alloc) {
                     kEntryModelSize);
       }
       if (own_models && w.model_number) {  // its own pickup model (the look's scale is kept)
+        // The borrowed model number takes the scale of the model it replaces (a gun's is 409;
+        // a borrowed number may have another: 0x19F's is 4096, ten times too big).
+        const uint32_t old_model = (base[entry + kEntryModel] << 8) | base[entry + kEntryModel + 1];
+        const uint32_t old_scale = kModelStates + old_model * 8 + 6;
+        pd::weapons::StoreU16(base, kModelStates + uint32_t(w.model_number) * 8 + 6,
+                              uint16_t((base[old_scale] << 8) | base[old_scale + 1]));
         pd::weapons::StoreU16(base, entry + kEntryModel, w.model_number);
         // The borrowed model number now loads the gun's third-person file.
         pd::weapons::StoreU16(base, kModelStates + uint32_t(w.model_number) * 8 + 4, w.model_file);

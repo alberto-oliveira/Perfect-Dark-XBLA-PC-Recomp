@@ -317,6 +317,110 @@ death.
 
 **Feasibility: high. Difficulty: ★★☆☆☆** (walking); ★★★ with fire rate.
 
+## Engine findings from the Remote Turret work (branch remote-turret, 2026-11-27)
+
+The Remote Turret is on hold on its own branch (`remote-turret`): its implementation
+notes are there. These findings apply to any custom weapon. All were verified in tests
+unless marked otherwise.
+
+**Player struct offsets (XBLA vs N64).**
+- No shift up to +0xC8: `visionmode` +16 (u16), `devicesactive` +196, `badrockettime` +200.
+- +8 from about +0xD0 on: `isdead` +224, `speedsideways` +368, `speedstrafe` +372,
+  `speedforwards` +376, `vv_theta` +332, `vv_verta` +348.
+- +0x28 in the gun-control area: `ammoheldarr` (reserve ammo by type, s32) +6096.
+- A hand (player +1632, 1956 bytes each): +3 `gset.weaponfunc`, +12 `triggeron`,
+  +544 `loadedammo[2]`, +1540 state.
+- Hand +1708 is the N64 `attacktype` (guess).
+- `bondactivateorreload` +208 is NOT set by this port's Reload button.
+
+**Ammo.**
+- Multiplayer ammo crates have slots only for ammo types 1-19 (`setup.c`:
+  `priammotype < 20`). A custom ammo type for crates must be below 20.
+  `AMMOTYPE_DART` (0x11) is used by no weapon.
+- `weapon_get_pickup_ammo_qty` (sub_8220CB10) knows only the game's own types and gives
+  1 round for any other. Its exit is 0x8220CD60 (r3 = the rounds, r31 = the weapon
+  object).
+- `g_AmmoTypes` is at 0x825CDAA8: 12 bytes per type, s32 capacity = the reserve's maximum.
+- ammodef: +0 type, +4 casing, +8 s16 clip, +0x0C reload animation, +0x10 flags.
+  `AMMOFLAG_NORESERVE` (1) makes every gain go into the clip. With it,
+  `bgun_set_ammo_quantity` ADDS to the clip instead of setting.
+- `bgun_get_ammo_qty_for_weapon` sub_82177A50 / by type sub_821778A8 = clip + reserve.
+- The MP weapon entry: +1 primary ammo type, +2 quantity (crates).
+- Reload reaches the gun through `bgun_reload_if_possible` sub_8217CCA8 (hand in r3),
+  called by the level tick sub_8218AB68.
+
+**Throwing.**
+- A throw without `FUNCFLAG_DISCARDWEAPON` goes through the ordinary throw, which does
+  `loadedammo[ammoindex]--`: a throw function needs ammoindex >= 0.
+- The thrown-projectile maker is sub_821709E8 (local throws, the replay of remote ones,
+  bots).
+- A special function (`INVENTORYFUNCTYPE_SPECIAL`) with an unknown special number fires
+  with no ammo and does nothing: a clean "function the mod handles itself".
+
+**The trigger.** `bmove_process_input` passes the local player's trigger to
+`bgun_tick_gameplay` at 0x820F4190 (r3). Holding it at 0 there stops the gun firing.
+- The input step that toggles the function reads the trigger as off for one step.
+- 0x82180B60 (XBLA's input exchange) handles the other players' triggers.
+
+**Camera, view and body.**
+- `player_tick`'s normal branch places the camera at 0x821005E0: r3 = the position (a
+  stack copy), r6/r7 = the position and rooms it is checked from. The look and up stay
+  the player's.
+- The walk call `bwalk_apply_move_data` is at 0x820F4494 (skip to 0x820F449C to freeze
+  the body; the view still turns).
+- The first-person gun renderer sub_821761F8 is called once a frame with &gdl. It draws
+  the hands at 0x821769A8..0x821769EC. The gun's place in the view comes from weapondef
+  +0x2C/+0x30/+0x34 (posx/posy/posz), read every frame.
+- A player's own body is drawn only for the eyespy (camera mode 2) or the Slayer view:
+  `player_tick_third_person` sub_820FD4A8 reads the camera mode at 0x820FD6C4 (r11; r30 =
+  the player).
+- The Slayer rocket's "monitor" picture: the level render checks `visionmode == 2` at
+  0x8218BA40 (sub_8218AB68), and its sounds are checked per player at 0x8218A4B8.
+  Visionmode 3 draws one frame of static and resets itself.
+- A player's held gun in third person: before its `model_render` at 0x8210A0A8 (r31 = the
+  prop, r28 = the chr; jump to 0x8210A0B0 to skip it).
+- `OBJFLAG2_INVISIBLE` (flags2 +12, 0x80000) hides an object on this PC only.
+
+**Cloak.**
+- The cloaking device = `devicesactive` |= 0x40, plus cloak ammo (type 0x14,
+  `ammoheldarr`, in 1/60 s).
+- Granted by code on the owner's PC, every PC sees the player cloaked
+  (`CHRHFLAG_CLOAKED` 0x20000000 at chr +0x14).
+- Throwing or firing pauses it (vanilla).
+
+**Laptop sentries (autoguns) online.**
+- The owner bits (obj +64 >> 28) are the thrown-laptop slot, the same on every PC, not a
+  player number.
+- The goal angles are world angles, 84(r1) = yrot and 88(r1) = xrot (`apply_rotation` at
+  0x822078F4). The shot runs along (cos x · sin y, sin x, cos x · cos y).
+- `autogun_tick_shoot` sub_82207DC0 shoots from the barrel tips only when the sentry is
+  on screen, otherwise from its centre. Its shot start (168(r1)) is known on both paths
+  at 0x82208058 (r28 = the object).
+- The sentry's model turns its gun about the wrong axis on a sloping surface: the
+  barrel comes off its body.
+- An explosion's network message names the source prop by its sync id (prop +44;
+  negative ids are skipped). For a sentry the receivers set `OBJFLAG_DEACTIVATED`
+  instead of deleting it.
+- Using one's own thrown sentry (sub_822211E8) gives back a Laptop and its rounds as SMG
+  ammo.
+
+**Models.**
+- XBLA mesh texture coordinates run v up (texel row = (1 - v) × height). Triangles are
+  clockwise seen from the front.
+- New parts can be added to a mesh directly in Python (`xbla_format.py`): append
+  vertices rigid on one bone and triangles to a group's last sub-mesh.
+- Borrowed model numbers have their own scale: model 0x19F's is 4096, ten times a gun's
+  409. `pd::custom::Install` now gives a borrowed number the replaced model's scale.
+- Model 0x19F (MODEL_CHRLUMPHAMMER2) is free in multiplayer: no pickup, no
+  third-person model.
+- Laptop Gun files: first person 0x385/0x4C7 -> mesh 0xA22 (texture 0x1591); third
+  person model 0x105 = file 0x358 -> mesh 0x855 (texture 0x0FC4).
+- Free archive ids so far: 0x271/0x272 and 0x27F upward; 0x27B-0x27E are used by
+  `remote-turret`.
+
+**Test scripts.** A script cannot "use" an object with `btn x`: X is Reload in this
+port.
+
 ## Test tools added (branch weapon-research)
 
 The pipe commands `give`, `equip`, `look`, `face <player|gamertag> [verta]`,
