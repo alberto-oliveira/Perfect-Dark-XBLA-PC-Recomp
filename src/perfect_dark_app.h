@@ -4610,6 +4610,38 @@ class PerfectDarkApp : public rex::ReXApp {
 
   static inline float* look_last_written_theta_ = nullptr;
 
+  // A turn of the local player's view by the game itself, not the mouse (the Slow Gun's
+  // sway, pd_slow.h): degrees, theta to the right and verta up. It takes the same path as
+  // a mouse turn (OnMouseLookDelta): in a network session it is banked and applied by the
+  // player's own input step (or sent with the input in lockstep); with no session it is
+  // written straight away. Game thread.
+  static void AddLookTurn(float dtheta, float dverta) {
+    if (dtheta == 0.0f && dverta == 0.0f) return;
+    PerfectDarkApp* app = current_instance_;
+    if (!app || !app->runtime() || !app->runtime()->memory()) return;
+    auto* mem = app->runtime()->memory();
+    namespace netplay = rex::kernel::xam::netplay;
+    const bool exchanging = NetInputActive(mem);
+    if (exchanging || netplay::IsHostingSession() || netplay::IsJoinedSession()) {
+      std::lock_guard<std::mutex> lock(net_look_mutex_);
+      if (exchanging) {
+        net_look_theta_ += dtheta;
+        net_look_verta_ += dverta;
+      } else {
+        local_look_theta_ += dtheta;
+        local_look_verta_ += dverta;
+      }
+      return;
+    }
+    const uint32_t a = GetLivePlayerThetaAddr(mem);
+    if (!a) return;
+    float theta = ReadGuestF32(mem, a) + dtheta;
+    while (theta < 0.0f) theta += 360.0f;
+    while (theta >= 360.0f) theta -= 360.0f;
+    const float verta = std::clamp(ReadGuestF32(mem, a + 0x10) + dverta, -kMaxPitchDegrees, kMaxPitchDegrees);
+    ApplyLookAngles(mem, a, theta, verta);
+  }
+
   // ---------------------------------------------------------------------------
   // Mouse look in networked matches (Co-Operative, Counter-Operative).
   //

@@ -2206,6 +2206,7 @@ constexpr uint32_t kGVarsCurrentPlayer = 0x82648BF8 + 1188;  // g_Vars.currentpl
 constexpr uint32_t kPlayerIsDead = 224;                      // player->isdead (XBLA +8)
 constexpr uint32_t kChrBlur = 728;                           // s16 chr->blurdrugamount
 constexpr uint32_t kPlayerHealth = 228;                      // f32 player->bondhealth (0-1; XBLA +8)
+constexpr uint32_t kPlayerBreathing = 416;                   // f32 player->bondbreathing (0-1; N64 +0x198, XBLA +8)
 constexpr uint8_t kPropTypePlayer = 6;                       // prop->type (N64 PROPTYPE_PLAYER)
 
 // TEMP_SLOW (probe P1): also mark a vanilla Mauler's hits, to see whether the marker
@@ -2288,11 +2289,16 @@ REXCVAR_DEFINE_DOUBLE(pd_slow_seconds, 15.0, "PerfectDark",
 REXCVAR_DEFINE_DOUBLE(pd_slow_full_charge, 2.5, "PerfectDark",
                       "Slow Gun: how many times longer a fully charged hit slows");
 REXCVAR_DEFINE_INT32(pd_slow_move, 50, "PerfectDark", "Slow Gun: a slowed player's movement speed, %");
-REXCVAR_DEFINE_INT32(pd_slow_aim, 50, "PerfectDark", "Slow Gun: a slowed player's mouse aim speed, %");
+REXCVAR_DEFINE_INT32(pd_slow_aim, 30, "PerfectDark", "Slow Gun: a slowed player's mouse aim speed, %");
 REXCVAR_DEFINE_INT32(pd_slow_fire, 50, "PerfectDark", "Slow Gun: a slowed player's gun speed (fire rate), %");
-REXCVAR_DEFINE_INT32(pd_slow_blur, 800, "PerfectDark",
+REXCVAR_DEFINE_INT32(pd_slow_blur, 3000, "PerfectDark",
                      "Slow Gun: the blur while slowed (0-5000; a fully charged hit: pd_slow_blur_full)");
-REXCVAR_DEFINE_INT32(pd_slow_blur_full, 4000, "PerfectDark", "Slow Gun: the blur after a fully charged hit");
+REXCVAR_DEFINE_INT32(pd_slow_blur_full, 5000, "PerfectDark", "Slow Gun: the blur after a fully charged hit");
+REXCVAR_DEFINE_DOUBLE(pd_slow_sway, 4.0, "PerfectDark",
+                      "Slow Gun: how far a slowed player's view sways, degrees each way (0 = none)");
+REXCVAR_DEFINE_DOUBLE(pd_slow_sway_full, 10.0, "PerfectDark", "Slow Gun: the view's sway after a fully charged hit");
+REXCVAR_DEFINE_INT32(pd_slow_beam_width, 200, "PerfectDark",
+                     "Slow Gun: its shots' beams, % of the Laser's width (wider when charged)");
 REXCVAR_DEFINE_DOUBLE(pd_slow_poison_seconds, 8.0, "PerfectDark",
                       "Slow Gun: how long its poison lasts (seconds, one tick a second; death ends it)");
 REXCVAR_DEFINE_DOUBLE(pd_slow_poison_damage, 0.3, "PerfectDark",
@@ -2320,13 +2326,15 @@ pd::slow::Rules PdSlowOwnRules() {
   r.blur_full = std::clamp(REXCVAR_GET(pd_slow_blur_full), 0, 5000);
   r.poison_seconds = float(std::clamp(REXCVAR_GET(pd_slow_poison_seconds), 0.0, 120.0));
   r.poison_damage = float(std::clamp(REXCVAR_GET(pd_slow_poison_damage), 0.0, 100.0));
+  r.sway = float(std::clamp(REXCVAR_GET(pd_slow_sway), 0.0, 45.0));
+  r.sway_full = float(std::clamp(REXCVAR_GET(pd_slow_sway_full), 0.0, 45.0));
   return r;
 }
 
 void PdSlowLogRules(const char* who, const pd::slow::Rules& r) {
-  REXLOG_INFO("[slow] {}: {:.1f} s (x{:.1f} full charge), move {}%, aim {}%, fire {}%, blur {}/{}, poison {:.1f} s x "
-              "{:.2f}", who, r.seconds, r.full_charge, r.move, r.aim, r.fire, r.blur, r.blur_full, r.poison_seconds,
-              r.poison_damage);
+  REXLOG_INFO("[slow] {}: {:.1f} s (x{:.1f} full charge), move {}%, aim {}%, fire {}%, blur {}/{}, sway {:.1f}/{:.1f}, "
+              "poison {:.1f} s x {:.2f}", who, r.seconds, r.full_charge, r.move, r.aim, r.fire, r.blur, r.blur_full,
+              r.sway, r.sway_full, r.poison_seconds, r.poison_damage);
 }
 
 void PdSlowRulesFrame() {
@@ -2378,6 +2386,7 @@ void PdSlowFrame(uint8_t* base) {
   if (charge != pd::custom::kNoTint) slow::g_charge_colour = (charge << 8) | 0x7F;  // the Mauler's own alpha
   const uint32_t beam = pd::custom::ParseTint(REXCVAR_GET(pd_slow_beam_tint));
   if (beam != pd::custom::kNoTint) slow::g_beam_colour = beam;
+  slow::g_beam_width = std::clamp(REXCVAR_GET(pd_slow_beam_width), 10, 1000);
 }
 
 // The player-hit function sub_821274A0 where it reads the blur code (0x821278C4, r10),
@@ -2411,10 +2420,11 @@ void PdSlowStateLog(uint8_t* base, uint32_t player) {
   const uint32_t chr = prop ? GuestU32(base, prop + 4) : 0;
   const int32_t blur = chr ? int16_t((base[chr + kChrBlur] << 8) | base[chr + kChrBlur + 1]) : -1;
   REXLOG_INFO("[slow] state: {:.1f} s left, tier {}, attacker {}, {} (health {:.3f}), poison {:.1f} s, rounds {}, "
-              "theta {:.1f}, blur {}, clock hooks: move {} gun {}/{}",
+              "theta {:.1f}, blur {}, breathing {:.2f}, sway {:.1f}/{:.1f}, clock hooks: move {} gun {}/{}",
               st.left60 / 60.0f, st.tier, st.attacker, GuestU32(base, player + kPlayerIsDead) ? "dead" : "alive",
               slow::LoadF32(base, player + kPlayerHealth), st.poison_left60 / 60.0f,
               GuestU32(base, hand + slow::kHandLoadedAmmo), slow::LoadF32(base, player + pd::player::kTheta), blur,
+              slow::LoadF32(base, player + kPlayerBreathing), slow::g_sway.theta, slow::g_sway.verta,
               slow::g_move_scaled, slow::g_gun_scaled, slow::g_gun_calls);
   slow::g_move_scaled = slow::g_gun_scaled = slow::g_gun_calls = 0;
 }
@@ -2462,11 +2472,12 @@ void PdSlowTick(uint8_t* base) {
     const float dt60 = slow::LoadF32(base, slow::kClockFreal);  // 60ths of a second this frame
     st.left60 -= dt60;
     slow::PoisonClock(dt60);
-    // The blur: topped up to its level, fading out over the last 2 seconds.
+    // The dizziness fades out over the last 2 seconds.
+    const float fade = std::min(1.0f, std::max(st.left60, 0.0f) / 120.0f);
+    // The blur: topped up to its level.
     const uint32_t prop = GuestU32(base, player + pd::player::kProp);
     const uint32_t chr = prop ? GuestU32(base, prop + 4) : 0;  // prop+4 = its chr
     if (chr) {
-      const float fade = std::min(1.0f, std::max(st.left60, 0.0f) / 120.0f);
       const int32_t want = int32_t(float(slow::TierBlur(slow::g_rules, st.tier)) * fade);
       const int32_t now = int16_t((base[chr + kChrBlur] << 8) | base[chr + kChrBlur + 1]);
       if (now < want) {
@@ -2474,9 +2485,23 @@ void PdSlowTick(uint8_t* base) {
         base[chr + kChrBlur + 1] = uint8_t(want);
       }
     }
+    // Breathing: held up to the hit's level (the game lets it fall again afterwards).
+    const float breath = slow::TierBreathing(st.tier) * fade;
+    if (slow::LoadF32(base, player + kPlayerBreathing) < breath) slow::StoreF32(base, player + kPlayerBreathing, breath);
+    // Sway: the view turns by how much the wave's offset changed this frame.
+    // It also fades in over its first second, so the view does not jump when it starts.
+    slow::Sway& sw = slow::g_sway;
+    sw.t60 += dt60;
+    const float fade_in = std::min(1.0f, sw.t60 / 60.0f);
+    float theta = 0.0f, verta = 0.0f;
+    slow::SwayOffset(sw.t60, slow::TierSway(slow::g_rules, st.tier) * fade * fade_in, &theta, &verta);
+    PerfectDarkApp::AddLookTurn(theta - sw.theta, verta - sw.verta);
+    sw.theta = theta;
+    sw.verta = verta;
   }
   if (st.left60 <= 0.0f && st.poison_left60 <= 0.0f && st.poison_due == 0) {
     st = {};
+    slow::g_sway = {};
     REXLOG_INFO("[slow] the slow is over");  // TEMP_SLOW
   }
   slow::g_aim_factor = slow::Factor(slow::g_rules.aim);

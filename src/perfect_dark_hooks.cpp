@@ -822,6 +822,18 @@ void PdHookSlowChargeDrain(PPCRegister& r8, PPCRegister& r10, PPCRegister& r11) 
   r10.u64 = PdSlowChargeDrain(HookBase(), r11.u32 - pd::slow::kHandLoadedAmmo, r10.u32, r8.u32);
 }
 
+// The game's checks for the Mauler (its charge, the charge's sound, colour and reset; see
+// perfect_dark_config.toml): the Slow Gun (a Magnum underneath) answers as a Mauler, so
+// its secondary charges as the Mauler's does; other custom weapons as PdHookCustomAsBase.
+void PdHookCustomAsBase(PPCRegister& weapon);  // below, "Custom weapons"
+void PdHookSlowAsMauler(PPCRegister& weapon) {
+  if (weapon.u32 == pd::slow::kWeaponSlow) {
+    weapon.u64 = pd::slow::kWeaponMauler;
+    return;
+  }
+  PdHookCustomAsBase(weapon);
+}
+
 // The gun renderer (sub_821761F8) just before it blends a charging Mauler's colour
 // (`bl colour_blend` at 0x821767D0; r3 = the colour it blends towards, r29 = the hand):
 // a Slow Gun blends towards its own colour.

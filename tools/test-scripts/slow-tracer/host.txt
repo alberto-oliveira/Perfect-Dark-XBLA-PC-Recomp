@@ -32,11 +32,26 @@ face Zqclient 0 6
 log slow-tracer: slow gun
 signal fire-2
 trig 0 255 40
+wait 30
 shot t-slow-0
+wait 30
 shot t-slow-1
+wait 30
 shot t-slow-2
-wait 60
+wait 30
 shot t-slow-3
+wait 30
+shot t-slow-4
+wait 30
+shot t-slow-5
+wait 30
+shot t-slow-6
+wait 30
+shot t-slow-7
+wait 30
+shot t-slow-8
+wait 30
+shot t-slow-9
 wait 2000
 face Zqclient 0 -6
 signal fire-3
@@ -50,11 +65,26 @@ btn rb                       # the charge
 wait 2800
 signal fire-4
 trig 0 255 40
+wait 30
 shot t-charged-0
+wait 30
 shot t-charged-1
+wait 30
 shot t-charged-2
-wait 40
+wait 30
 shot t-charged-3
+wait 30
+shot t-charged-4
+wait 30
+shot t-charged-5
+wait 30
+shot t-charged-6
+wait 30
+shot t-charged-7
+wait 30
+shot t-charged-8
+wait 30
+shot t-charged-9
 wait 2000
 signal host-done
 log slow-tracer: host done

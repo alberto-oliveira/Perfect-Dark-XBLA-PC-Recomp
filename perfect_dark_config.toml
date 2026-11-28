@@ -1036,9 +1036,12 @@ address = 0x821278C4
 name = "PdHookSlowHitReceive"
 registers = ["r10", "r21", "r25", "r26", "r28", "r30"]
 
-# The game's checks for the Mauler (weapon 6, N64 WEAPON_MAULER) see the base weapon's
-# number for a custom weapon (PdHookCustomAsBase; each register is not used afterwards
-# for anything else; docs/research/custom-weapons.md "Slow Gun: static research"):
+# The game's checks for the Mauler (weapon 6, N64 WEAPON_MAULER): the Slow Gun (a Magnum
+# underneath) answers as a Mauler, so its secondary charges as the Mauler's does
+# (PdHookSlowAsMauler); any other custom weapon answers with its base weapon (each
+# register is not used afterwards for anything else; docs/research/custom-weapons.md
+# "Slow Gun: static research"). bgun_create_fx's switch keeps PdHookCustomAsBase: the
+# Magnum makes a tracer too.
 #   gset_populate sub_82186358 (`cmplwi r8,6`: the charge into gset+2; r8 is also the
 #   Laser test at 0x821863D4), bgun_tick_gameplay2 sub_8217CD40 (`cmplwi r11,6`: calls
 #   bgun_tick_mauler_charge), sub_82179A40 (r10, `cmplwi r10,19` then `cmplwi r10,6`:
@@ -1051,22 +1054,22 @@ registers = ["r10", "r21", "r25", "r26", "r28", "r30"]
 # killed outright); a Slow Gun's charge buys a longer slow and more blur, not damage.
 [[midasm_hook]]
 address = 0x82186370
-name = "PdHookCustomAsBase"
+name = "PdHookSlowAsMauler"
 registers = ["r8"]
 
 [[midasm_hook]]
 address = 0x8217CED0
-name = "PdHookCustomAsBase"
+name = "PdHookSlowAsMauler"
 registers = ["r11"]
 
 [[midasm_hook]]
 address = 0x82179C24
-name = "PdHookCustomAsBase"
+name = "PdHookSlowAsMauler"
 registers = ["r10"]
 
 [[midasm_hook]]
 address = 0x821799B4
-name = "PdHookCustomAsBase"
+name = "PdHookSlowAsMauler"
 registers = ["r10"]
 
 [[midasm_hook]]
@@ -1076,7 +1079,7 @@ registers = ["r26"]
 
 [[midasm_hook]]
 address = 0x821767AC
-name = "PdHookCustomAsBase"
+name = "PdHookSlowAsMauler"
 registers = ["r11"]
 
 # bgun_tick_mauler_charge sub_82175F98 where a charge step takes a round (`addi

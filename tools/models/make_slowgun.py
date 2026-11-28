@@ -1,6 +1,6 @@
 # The Slow Gun's own model: the DY357 Magnum in deep violet with acid-green details, a fatter
-# cylinder (a "canister" drum), a longer barrel, and the Mauler's green muzzle flash in both
-# views. docs/research/custom-weapons.md, "Slow Gun"; the method is the Carom LX's
+# cylinder (a "canister" drum), a longer barrel, and a violet muzzle flash in both views (the
+# colour of its shots). docs/research/custom-weapons.md, "Slow Gun"; the method is the Carom LX's
 # (make_carom.py), except that the mesh edits are done here in Python, straight on the XBLA
 # meshes (xbla_format.py), so no Blender is needed.
 #
@@ -22,15 +22,17 @@
 #        - their texture becomes the new texture slot.
 #      First person 0x9DA -> 0x280, third person 0x83C -> 0x282.
 #   4. Copies of the N64 files that link the new meshes (glb2xbla.relink_n64): first person
-#      0x4BD -> 0x27F, third person 0x34B -> 0x281. In them, the muzzle flashes become the
-#      Mauler's green ones and move to the longer barrel's end:
+#      0x4BD -> 0x27F, third person 0x34B -> 0x281. In them, the muzzle flashes become violet
+#      and move to the longer barrel's end:
 #        - first person: the flash (part 90, drawn from the N64 display list) names its texture
-#          in the list (`C0580004` + texture number): the Magnum's 0x39B becomes the Mauler's
-#          0x85E; the part moves forward (patch_model.py --offset);
-#        - third person: its chrgunfire node (the flash quad) uses texconfig[0], which becomes
-#          the Mauler's third-person flash texture 0x96F; it moves forward too.
-#   5. texpack.py --slot: texture slots 0xD07 (first person, like 0x14BE) and 0xD08 (third
-#      person, like 0xF7C), with mip levels.
+#          in the list (`C0580004` + texture number): the Magnum's 0x39B becomes slot 0xD09, a
+#          violet copy of it; the part's vertices move forward (patch_model.py --offset), and so
+#          does the muzzle position node (part 50, MODELPART_GUN_MUZZLEPOS: where the game
+#          starts the shot and its tracer beam);
+#        - third person: its chrgunfire node (the flash quad) uses texconfig[0], the orange
+#          0x96A: slot 0xD0A, a violet copy of it; it moves forward too.
+#   5. texpack.py --slot: texture slots 0xD07 (first person, like 0x14BE), 0xD08 (third
+#      person, like 0xF7C), 0xD09 and 0xD0A (the flashes, like 0x39B and 0x96A), with mips.
 # src/pd_custom_weapons.h gives the Slow Gun these files (0x27F, model 0x1A1 = file 0x281).
 import os, shutil, struct, subprocess, sys
 
@@ -43,8 +45,10 @@ FP_N64, FP_MESH, TP_N64, TP_MESH = 0x4BD, 0x9DA, 0x34B, 0x83C
 NEW_FP_N64, NEW_FP_MESH, NEW_TP_N64, NEW_TP_MESH = 0x27F, 0x280, 0x281, 0x282
 FP_TEX, TP_TEX = 0x14BE, 0xF7C
 SLOT_FP, SLOT_TP = 0xD07, 0xD08
-MAULER_FP_FLASH, MAULER_TP_FLASH = 0x85E, 0x96F
-MAGNUM_FP_FLASH = 0x39B
+MAGNUM_FP_FLASH, MAGNUM_TP_FLASH = 0x39B, 0x96A
+SLOT_FP_FLASH, SLOT_TP_FLASH = 0xD09, 0xD0A
+FLASH_HUE = '275'  # violet, as the shots' beams (pd_slow_beam_tint, 0xB050FF)
+MUZZLE_PART = 50   # MODELPART_GUN_MUZZLEPOS
 FLASH_PART = 90
 # The grip panels in the texture atlas (both textures share the layout): made acid green.
 GRIP_PANELS = ('411', '121', '477', '246')
@@ -118,21 +122,44 @@ def edit_tp(mesh, bulge, barrel):
     print(f'third person: {fat} cylinder vertices x{bulge}, {long_} barrel vertices x{barrel}')
 
 
-def green_fp_flash(path):
+def violet_fp_flash(path):
     """First-person N64 file: the flash's display list names the Magnum's flash texture
-    (`C0580004 0000039B`): the Mauler's green one instead."""
+    (`C0580004 0000039B`): the violet slot instead."""
     d = bytearray(open(path, 'rb').read())
     old = bytes.fromhex('C0580004') + struct.pack('>I', MAGNUM_FP_FLASH)
     at = d.find(old)
     if at < 0: sys.exit('the first-person flash texture was not found')
-    struct.pack_into('>I', d, at + 4, MAULER_FP_FLASH)
+    struct.pack_into('>I', d, at + 4, SLOT_FP_FLASH)
     open(path, 'wb').write(d)
-    print(f'first-person flash texture 0x{MAGNUM_FP_FLASH:04X} -> 0x{MAULER_FP_FLASH:04X} at 0x{at:X}')
+    print(f'first-person flash texture 0x{MAGNUM_FP_FLASH:04X} -> 0x{SLOT_FP_FLASH:04X} at 0x{at:X}')
 
 
-def green_tp_flash(path, barrel):
+def move_part_node(path, part, dz):
+    """N64 model file: position node `part` (from the part table: modeldef +8 parts, +12 count,
+    then the part numbers) moves dz along z (its rodata starts with its position, relative to
+    its parent node)."""
+    d = bytearray(open(path, 'rb').read())
+    base = 0x05000000
+    u32 = lambda o: struct.unpack('>I', d[o:o + 4])[0]
+    parts, count = u32(8) - base, struct.unpack('>h', d[12:14])[0]
+    for i in range(count):
+        if struct.unpack('>H', d[parts + count * 4 + i * 2:parts + count * 4 + i * 2 + 2])[0] != part:
+            continue
+        node = u32(parts + i * 4) - base
+        if struct.unpack('>H', d[node:node + 2])[0] & 0xFF != 0x02:
+            sys.exit(f'part {part} is not a position node')
+        rod = u32(node + 4) - base
+        z = struct.unpack('>f', d[rod + 8:rod + 12])[0]
+        struct.pack_into('>f', d, rod + 8, z + dz)
+        open(path, 'wb').write(d)
+        print(f'part {part} (position node 0x{node + base:08X}): z {z:.1f} -> {z + dz:.1f}')
+        return
+    sys.exit(f'no part {part} in {path}')
+
+
+def violet_tp_flash(path, barrel):
     """Third-person N64 file: its chrgunfire node (the flash quad) uses texconfig[0]: the
-    Mauler's green flash texture; the flash moves to the longer barrel's end."""
+    violet flash slot; the flash moves to the longer barrel's end."""
     d = bytearray(open(path, 'rb').read())
     base = 0x05000000
     u32 = lambda o: struct.unpack('>I', d[o:o + 4])[0]
@@ -145,11 +172,11 @@ def green_tp_flash(path, barrel):
                 rod = u32(o + 4) - base
                 tc = u32(rod + 24) - base
                 old = struct.unpack('>i', d[tc:tc + 4])[0]
-                struct.pack_into('>i', d, tc, MAULER_TP_FLASH)
+                struct.pack_into('>i', d, tc, SLOT_TP_FLASH)
                 x = struct.unpack('>f', d[rod:rod + 4])[0]
                 if x < TP_BARREL_CUT:
                     struct.pack_into('>f', d, rod, TP_BARREL_CUT + (x - TP_BARREL_CUT) * barrel)
-                print(f'third-person flash: texture 0x{old:04X} -> 0x{MAULER_TP_FLASH:04X}, x {x:.1f} -> '
+                print(f'third-person flash: texture 0x{old:04X} -> 0x{SLOT_TP_FLASH:04X}, x {x:.1f} -> '
                       f'{struct.unpack(">f", d[rod:rod + 4])[0]:.1f}')
                 done = True
             child = u32(o + 0x14)
@@ -173,8 +200,12 @@ def main():
 
     # 1-2: the game's files, the textures recoloured
     run(unpack, 'pack', os.path.join(data_dir, 'PackedSegFile'), f'{FP_N64:X},{FP_MESH:X},{TP_N64:X},{TP_MESH:X}', files)
-    run(unpack, 'tex', raw, f'{FP_TEX:X},{TP_TEX:X}', tex)
-    py('textures.py', raw, tex, png, f'{FP_TEX:X},{TP_TEX:X}')
+    textures = f'{FP_TEX:X},{TP_TEX:X},{MAGNUM_FP_FLASH:X},{MAGNUM_TP_FLASH:X}'
+    run(unpack, 'tex', raw, textures, tex)
+    py('textures.py', raw, tex, png, textures)
+    for name, texture in (('slow_fp_flash.png', MAGNUM_FP_FLASH), ('slow_tp_flash.png', MAGNUM_TP_FLASH)):
+        py('recolour.py', os.path.join(png, f'tex_{texture:04X}.png'), os.path.join(png, name), '--flash',
+           '--flash-hue', FLASH_HUE, '--flash-from', '0', '120')
     for name, texture in (('slow_fp.png', FP_TEX), ('slow_tp.png', TP_TEX)):
         py('recolour.py', os.path.join(png, f'tex_{texture:04X}.png'), os.path.join(png, name), '--slow',
            '--green-rect', *GRIP_PANELS)
@@ -194,13 +225,16 @@ def main():
         open(os.path.join(game, f'file_{new_n64:04X}.bin'), 'wb').write(data)
         print(f'N64 file 0x{new_n64:04X} (from 0x{n64:04X}): {changed} links 0x{mesh:04X} -> 0x{new_mesh:04X}')
     fp_n64 = os.path.join(game, f'file_{NEW_FP_N64:04X}.bin')
-    green_fp_flash(fp_n64)
+    violet_fp_flash(fp_n64)
     shift = (FP_MUZZLE - FP_BARREL_CUT) * (barrel - 1) * FP_N64_SCALE  # the muzzle moves this far (N64 units)
     py('patch_model.py', fp_n64, fp_n64, '--offset', str(FLASH_PART), '0', '0', f'{shift:.1f}')
-    green_tp_flash(os.path.join(game, f'file_{NEW_TP_N64:04X}.bin'), barrel)
+    move_part_node(fp_n64, MUZZLE_PART, shift)
+    violet_tp_flash(os.path.join(game, f'file_{NEW_TP_N64:04X}.bin'), barrel)
 
     # 5: texture slots
-    for slot, donor, image in ((SLOT_FP, FP_TEX, 'slow_fp.png'), (SLOT_TP, TP_TEX, 'slow_tp.png')):
+    for slot, donor, image in ((SLOT_FP, FP_TEX, 'slow_fp.png'), (SLOT_TP, TP_TEX, 'slow_tp.png'),
+                               (SLOT_FP_FLASH, MAGNUM_FP_FLASH, 'slow_fp_flash.png'),
+                               (SLOT_TP_FLASH, MAGNUM_TP_FLASH, 'slow_tp_flash.png')):
         py('texpack.py', raw, f'{slot:X}', os.path.join(png, image), '--slot', f'{donor:X}',
            '-o', os.path.join(game, f'tex_{slot:04X}.bin'))
 

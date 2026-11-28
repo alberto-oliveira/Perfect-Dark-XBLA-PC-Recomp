@@ -11,7 +11,8 @@
 #            the texture, so no colour rule finds them)
 #   options: --details-hue 215 (degrees, the colour green parts become), --white 0.55 (how
 #            light the metal gets: brightness = white + (1 - white) * old brightness),
-#            --flash-hue 0
+#            --flash-hue 0, --flash-from 50 170 (the hues, degrees, a flash's colour has: the
+#            Mauler's green; the Magnum's orange flash is about 0-80)
 #
 # "Green" = hue 50-140 degrees (the Mauler's details are yellow-green, ~75-90; its dirt is teal, ~165), saturation above 0.3 and brightness above 0.12 (darker
 # greenish pixels are dirt in the metal, not details). Metal = everything else that
@@ -50,9 +51,9 @@ def skin(r, g, b, details_hue, white):
     return colorsys.hsv_to_rgb(210 / 360, 0.06, white + (1.0 - white) * v)
 
 
-def flash(r, g, b, flash_hue):
+def flash(r, g, b, flash_hue, lo=50 / 360, hi=170 / 360):
     h, s, v = colorsys.rgb_to_hsv(r, g, b)
-    if is_green(h, s) or (50 / 360 <= h <= 170 / 360 and s > 0.05):
+    if lo <= h <= hi and s > 0.05:
         return colorsys.hsv_to_rgb(flash_hue, s, v)
     return r, g, b
 
@@ -115,7 +116,9 @@ def main():
             elif '--slow' in a:
                 nr, ng, nb = slow(r, g, b)
             else:
-                nr, ng, nb = flash(r, g, b, flash_hue)
+                lo, hi = ((float(a[a.index('--flash-from') + 1]), float(a[a.index('--flash-from') + 2]))
+                          if '--flash-from' in a else (50.0, 170.0))
+                nr, ng, nb = flash(r, g, b, flash_hue, lo / 360, hi / 360)
             cache[key] = bytes(int(round(max(0.0, min(1.0, c)) * 255)) for c in (nr, ng, nb))
         out[i:i + 3] = cache[key]
     if '--skin' in a:
