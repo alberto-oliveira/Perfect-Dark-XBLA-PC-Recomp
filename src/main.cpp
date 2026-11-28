@@ -1870,7 +1870,9 @@ void RicoDrawBounces(PPCContext& ctx, uint8_t* base, uint32_t shooter, rico::Vec
 // number, r1 = shot_create's frame (the shot's start at 144(r1), its direction at
 // 112(r1)); g_Vars.currentplayer = the player who fired, on every PC.
 void PdRicoTick(PPCContext& ctx, uint8_t* base);
+void PdSlowShotHit(PPCContext& ctx, uint8_t* base);
 void PdRicoShot(PPCContext& ctx, uint8_t* base) {
+  PdSlowShotHit(ctx, base);  // the Slow Gun: who its shot hit (the tint)
   namespace pl = pd::player;
   const uint32_t player = pl::LoadU32(base, pl::kGVars + 1188);
   if (!player) return;
@@ -2204,6 +2206,7 @@ constexpr uint32_t kGVarsCurrentPlayer = 0x82648BF8 + 1188;  // g_Vars.currentpl
 constexpr uint32_t kPlayerIsDead = 224;                      // player->isdead (XBLA +8)
 constexpr uint32_t kChrBlur = 728;                           // s16 chr->blurdrugamount
 constexpr uint32_t kPlayerHealth = 228;                      // f32 player->bondhealth (0-1; XBLA +8)
+constexpr uint8_t kPropTypePlayer = 6;                       // prop->type (N64 PROPTYPE_PLAYER)
 
 // TEMP_SLOW (probe P1): also mark a vanilla Mauler's hits, to see whether the marker
 // reaches the other PCs before the Slow Gun exists.
@@ -2297,10 +2300,17 @@ REXCVAR_DEFINE_DOUBLE(pd_slow_poison_damage, 0.3, "PerfectDark",
 // TEMP_SLOW: set to a tier (1-3) to slow the local player as if hit (then it goes back to 0).
 REXCVAR_DEFINE_INT32(pd_slow_test, 0, "PerfectDark", "TEMP_SLOW: slow the local player as if hit by this tier");
 
-void PdSlowTick(uint8_t* base);
-void PdSlowFrame(uint8_t* base) {
-  namespace slow = pd::slow;
-  slow::Rules& r = slow::g_rules;
+REXCVAR_DEFINE_STRING(pd_slow_player_tint, "green", "PerfectDark",
+                      "Slow Gun: the colour a slowed player is drawn with (a name, #RRGGBB or off; this PC's view)");
+
+// The rules in use: this PC's settings, or online the host's (pd_slow.h, "SLOW" blob).
+namespace {
+bool slow_hosting = false;
+pd::slow::Rules slow_sent;
+uint32_t slow_poll_frames = 0;
+
+pd::slow::Rules PdSlowOwnRules() {
+  pd::slow::Rules r;
   r.seconds = float(std::clamp(REXCVAR_GET(pd_slow_seconds), 0.0, 600.0));
   r.full_charge = float(std::clamp(REXCVAR_GET(pd_slow_full_charge), 1.0, 10.0));
   r.move = std::clamp(REXCVAR_GET(pd_slow_move), 5, 100);
@@ -2310,6 +2320,49 @@ void PdSlowFrame(uint8_t* base) {
   r.blur_full = std::clamp(REXCVAR_GET(pd_slow_blur_full), 0, 5000);
   r.poison_seconds = float(std::clamp(REXCVAR_GET(pd_slow_poison_seconds), 0.0, 120.0));
   r.poison_damage = float(std::clamp(REXCVAR_GET(pd_slow_poison_damage), 0.0, 100.0));
+  return r;
+}
+
+void PdSlowLogRules(const char* who, const pd::slow::Rules& r) {
+  REXLOG_INFO("[slow] {}: {:.1f} s (x{:.1f} full charge), move {}%, aim {}%, fire {}%, blur {}/{}, poison {:.1f} s x "
+              "{:.2f}", who, r.seconds, r.full_charge, r.move, r.aim, r.fire, r.blur, r.blur_full, r.poison_seconds,
+              r.poison_damage);
+}
+
+void PdSlowRulesFrame() {
+  namespace netplay = rex::kernel::xam::netplay;
+  namespace slow = pd::slow;
+  const slow::Rules own = PdSlowOwnRules();
+  if (netplay::IsHostingSession()) {
+    if (!slow_hosting || own != slow_sent) {
+      const std::vector<uint8_t> blob = slow::EncodeBlob(own);
+      netplay::SetHostBlob(slow::kBlobKey, blob.data(), blob.size());
+      PdSlowLogRules("hosting: rules sent to the joined PCs", own);
+      slow_hosting = true;
+      slow_sent = own;
+    }
+    slow::g_rules = own;
+    return;
+  }
+  slow_hosting = false;
+  if (!netplay::IsJoinedSession()) {
+    slow::g_rules = own;
+    return;
+  }
+  if (++slow_poll_frames % 30 != 0) return;
+  netplay::HostBlob blob;
+  slow::Rules host;  // the defaults until the host's are heard
+  const bool heard = netplay::LatestHostBlob(slow::kBlobKey, &blob) && slow::DecodeBlob(blob.data, &host);
+  if (host != slow::g_rules) PdSlowLogRules(heard ? "joined: the host's rules" : "joined: default rules (nothing heard)", host);
+  slow::g_rules = host;
+}
+}  // namespace
+
+void PdSlowTick(uint8_t* base);
+void PdSlowFrame(uint8_t* base) {
+  namespace slow = pd::slow;
+  PdSlowRulesFrame();
+  slow::g_player_tint = pd::custom::ParseTint(REXCVAR_GET(pd_slow_player_tint));
   PdSlowTick(base);
   // TEMP_SLOW: how many Slow Gun beams were drawn (beam_render's colour hook), once a second.
   static uint32_t last_drawn = 0;
@@ -2375,8 +2428,20 @@ void PdSlowTick(uint8_t* base) {
   const uint32_t player = GuestU32(base, pd::player::kPlayers);  // players[0]: this PC's player
   if (GuestU32(base, kGVarsMpRunning) == 0 || !player) {
     st = {};  // no match: nobody is slowed
+    std::fill(std::begin(slow::g_marked60), std::end(slow::g_marked60), 0.0f);
     slow::g_aim_factor = 1.0f;
     return;
+  }
+  // Who this PC sees slowed (the tint): each mark counts down while its player is alive.
+  const float frame60 = slow::LoadF32(base, slow::kClockFreal);
+  for (int i = 0; i < 8; ++i) {
+    if (slow::g_marked60[i] <= 0.0f) continue;
+    const uint32_t other = pd::player::Player(base, i);
+    if (!other) {
+      slow::g_marked60[i] = 0.0f;
+    } else if (GuestU32(base, other + kPlayerIsDead) == 0) {
+      slow::g_marked60[i] -= frame60;
+    }
   }
   // TEMP_SLOW: the test setting starts a slow as a hit would.
   if (const int32_t test = REXCVAR_GET(pd_slow_test)) {
@@ -2458,6 +2523,61 @@ void PdSlowPoison(PPCContext& ctx, uint8_t* base) {
                 slow::g_rules.poison_damage, before, slow::LoadF32(base, player + kPlayerHealth), st.attacker,
                 attacker_prop);
   }
+}
+
+// The first player (this PC's numbering) on the segment from -> to, other than `shooter`
+// (a player struct), or -1: as RicoFirstPlayer (the same body capsule; players dying or
+// dead are not hit).
+int SlowFirstPlayer(const uint8_t* base, rico::Vec from, rico::Vec to, uint32_t shooter) {
+  namespace pl = pd::player;
+  int best = -1;
+  float best_s = 2.0f;
+  for (int n = 0; n < 8; ++n) {
+    const uint32_t player = pl::Player(base, n);
+    if (!player || player == shooter) continue;
+    const uint32_t prop = pl::PropOf(base, player);
+    const uint32_t chr = prop ? pl::LoadU32(base, prop + 4) : 0;
+    if (!chr || base[chr + 7] == 4 || base[chr + 7] == 5) continue;  // dying or dead
+    const rico::Vec eye = RicoLoadVec(base, prop + pl::kPropPos);
+    float eye_height = pl::LoadF32(base, player + pl::kEyeHeight);
+    if (!(eye_height > 20.0f && eye_height < 400.0f)) eye_height = 160.0f;
+    const rico::Vec feet{eye.x, eye.y - eye_height, eye.z};
+    const rico::Vec head{eye.x, eye.y + rico::kPlayerAboveEyes, eye.z};
+    float s = 0.0f;
+    if (rico::SegmentDistance2(from, to, feet, head, &s) <= rico::kPlayerRadius * rico::kPlayerRadius && s < best_s) {
+      best = n;
+      best_s = s;
+    }
+  }
+  return best;
+}
+
+// shot_create right after its shot_calculate_hits (0x821FC9B8; r31 = the hand number;
+// the shot's start at 144(r1), its direction at 112(r1)), on every PC for every
+// player's shot (g_Vars.currentplayer = the shooter): a player a Slow Gun shot hit is
+// marked as slowed on this PC, for the tint. What the shot hit is found as the Ricochet
+// Laser finds it: the first player on the line from the shot's start to the game's hit
+// point (the hand's hit position, hand+1372), other than the shooter. (r3 here is NOT
+// the prop hit: it was 0 for a hit, test R4.)
+void PdSlowShotHit(PPCContext& ctx, uint8_t* base) {
+  namespace slow = pd::slow;
+  const uint32_t shooter = GuestU32(base, kGVarsCurrentPlayer);
+  if (!shooter || base[shooter + pd::custom::kPlayerWeapon] != slow::kWeaponSlow) return;
+  const uint32_t hand = shooter + pd::custom::kPlayerHands + (ctx.r31.u32 & 1) * pd::custom::kHandSize;
+  rico::Vec dir = RicoLoadVec(base, ctx.r1.u32 + 112);
+  const float len = rico::Length(dir);
+  if (len < 0.001f) return;
+  dir = dir * (1.0f / len);
+  const rico::Vec from = RicoLoadVec(base, ctx.r1.u32 + 144);
+  const rico::Vec to = RicoLoadVec(base, hand + rico::kHandHitPos) + dir * 20.0f;
+  const int victim = SlowFirstPlayer(base, from, to, shooter);
+  // TEMP_SLOW
+  REXLOG_INFO("[slow] shot hook: shooter {}, first player on the line {} ({})",
+              pd::crossbow::PlayerOfProp(base, GuestU32(base, shooter + pd::player::kProp)), victim,
+              pd::crossbow::PlayerName(base, victim));
+  if (victim < 0) return;
+  const uint32_t tier = slow::TierOfCharge(slow::LoadF32(base, hand + slow::kHandCharge));
+  slow::MarkSlowed(victim, tier);
 }
 
 // The local player's move tick before its input step (0x820F4DB0): movement and stick aim

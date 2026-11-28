@@ -684,11 +684,21 @@ void PdHookCustomHeldGunAfter(PPCRegister& r30) {
 void PdHookCustomObjectColour(PPCRegister& r3, PPCRegister& r4) {
   uint8_t* base = HookBase();
   const uint32_t prop = r3.u32;
-  if (!prop || base[prop] != 4) return;  // prop type 4 = a weapon
-  const uint32_t obj = pd::custom::LoadU32(base, prop + 4);
-  if (!obj) return;
+  if (!prop) return;
   uint32_t tint, strength;
-  if (!ObjectOverlay(base, obj, tint, strength)) return;
+  if (base[prop] == 6) {  // prop type 6 = a player: the chr renderer calls this too
+    // A player this PC sees slowed by the Slow Gun (pd_slow.h, "Who is slowed").
+    if (pd::slow::g_player_tint == pd::custom::kNoTint) return;
+    const int player = pd::crossbow::PlayerOfProp(base, prop);
+    if (player < 0 || pd::slow::g_marked60[player] <= 0.0f) return;
+    tint = pd::slow::g_player_tint;
+    strength = pd::slow::g_player_tint_strength;
+  } else {
+    if (base[prop] != 4) return;  // prop type 4 = a weapon
+    const uint32_t obj = pd::custom::LoadU32(base, prop + 4);
+    if (!obj) return;
+    if (!ObjectOverlay(base, obj, tint, strength)) return;
+  }
   // The colour is four s32 channels, 0-255 each (RGBA): blended as one RGBA word.
   uint32_t rgba = 0;
   for (uint32_t i = 0; i < 4; ++i) {

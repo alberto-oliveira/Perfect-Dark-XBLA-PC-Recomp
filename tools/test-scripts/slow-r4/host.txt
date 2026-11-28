@@ -1,0 +1,35 @@
+# Scenario "slow-r4" (Slow Gun, R4): 3 copies. Runs after lobby-host.txt.
+# The host's rules reach the joined PCs (host pd_slow_seconds 20; the clients' own 5
+# are ignored: [slow] joined lines and Zqclient's state), and a slowed player is drawn
+# tinted on every PC (screenshots of Zqclient from the host and from Zqclient2, while
+# slowed and after).
+
+cvar pd_slow_seconds 20
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start
+waitmenu none 60
+wait 5000
+give 0x44
+equip 0x44
+waitsignal c1-turned 1 60
+wait 2000                    # Zqclient's new facing reaches this PC
+tp near Zqclient 350
+wait 300
+face Zqclient
+pos placed
+wait 2500
+shot r4-host-before
+log slow-r4: hit
+trig 0 255 60
+signal hit
+wait 1500
+face Zqclient
+shot r4-host-slowed
+wait 22000
+face Zqclient
+shot r4-host-after
+signal host-done
+waitsignal client-done 2 120
+log slow-r4: host done

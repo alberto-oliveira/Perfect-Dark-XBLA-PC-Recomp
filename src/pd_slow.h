@@ -23,6 +23,7 @@
 #include <cstring>
 #include <atomic>
 #include <map>
+#include <vector>
 
 namespace pd::slow {
 
@@ -210,6 +211,48 @@ struct Rules {
 };
 inline Rules g_rules;
 
+// The host's rules (a slow and its poison are applied on the victim's own PC, so every PC
+// must use the same ones: online, the host's). The host sends them as a host blob
+// (netplay::SetHostBlob, as the Detonator Crossbow's and the Ricochet Laser's) and each
+// joined PC uses what it last heard. Blob: [version], then u16s (big-endian): seconds x10,
+// full charge x10, move, aim, fire, blur, blur after a full charge, poison seconds x10,
+// poison damage x100.
+constexpr uint32_t kBlobKey = 0x534C4F57;  // "SLOW"
+constexpr uint8_t kBlobVersion = 1;
+
+inline bool operator!=(const Rules& a, const Rules& b) {
+  return a.seconds != b.seconds || a.full_charge != b.full_charge || a.move != b.move || a.aim != b.aim ||
+         a.fire != b.fire || a.blur != b.blur || a.blur_full != b.blur_full ||
+         a.poison_seconds != b.poison_seconds || a.poison_damage != b.poison_damage;
+}
+
+inline std::vector<uint8_t> EncodeBlob(const Rules& r) {
+  const int32_t values[] = {int32_t(r.seconds * 10.0f + 0.5f), int32_t(r.full_charge * 10.0f + 0.5f), r.move, r.aim,
+                            r.fire, r.blur, r.blur_full, int32_t(r.poison_seconds * 10.0f + 0.5f),
+                            int32_t(r.poison_damage * 100.0f + 0.5f)};
+  std::vector<uint8_t> blob{kBlobVersion};
+  for (const int32_t v : values) {
+    const uint32_t u = uint32_t(std::clamp(v, 0, 0xFFFF));
+    blob.push_back(uint8_t(u >> 8));
+    blob.push_back(uint8_t(u));
+  }
+  return blob;
+}
+inline bool DecodeBlob(const std::vector<uint8_t>& blob, Rules* r) {
+  if (blob.size() < 1 + 9 * 2 || blob[0] != kBlobVersion) return false;
+  auto at = [&](int i) { return int32_t((blob[1 + i * 2] << 8) | blob[2 + i * 2]); };
+  r->seconds = float(at(0)) / 10.0f;
+  r->full_charge = float(at(1)) / 10.0f;
+  r->move = at(2);
+  r->aim = at(3);
+  r->fire = at(4);
+  r->blur = at(5);
+  r->blur_full = at(6);
+  r->poison_seconds = float(at(7)) / 10.0f;
+  r->poison_damage = float(at(8)) / 100.0f;
+  return true;
+}
+
 // The local player's slow.
 struct State {
   float left60 = 0.0f;  // 60ths of a second of slow left (counts down while alive)
@@ -309,5 +352,26 @@ inline void RestoreClock(uint8_t* base, const ClockScaler& c) {
 inline ClockScaler g_move_clock, g_gun_clock;
 inline bool g_gun_clock_scaled = false;
 inline uint32_t g_move_scaled = 0, g_gun_scaled = 0, g_gun_calls = 0;  // TEMP_SLOW: hook counts
+
+// ---- Who is slowed, as each PC sees it --------------------------------------------------
+//
+// A slowed player is drawn with a sickly overlay on every PC. Only the victim's PC gets
+// the hit message, but every PC replays every player's shot (shot_create runs there too,
+// from the shooter's hand, and shot_calculate_hits finds what it hit: 0x821FC9B8, r3 = the
+// prop hit), so each PC marks a player hit by a Slow Gun shot itself, for the slow's length
+// by the shot's charge. It can disagree with the victim's PC on a shot that barely hit
+// or missed: it is only the look. The mark, like the slow, waits while its player is dead.
+inline float g_marked60[8] = {};      // by this PC's player number: 60ths of a second left
+inline uint32_t g_player_tint = 0x80FF30;  // 0xRRGGBB (pd_slow_player_tint), or kNoTint
+inline uint32_t g_player_tint_strength = 50;  // %
+
+inline uint32_t TierOfCharge(float charge) {
+  if (charge < 1.0f) return kTierShot;
+  return charge >= 5.0f ? kTierFull : kTierCharged;
+}
+inline void MarkSlowed(int player, uint32_t tier) {
+  if (player < 0 || player >= 8) return;
+  g_marked60[player] = std::max(g_marked60[player], g_rules.seconds * 60.0f * TierLength(g_rules, tier));
+}
 
 }  // namespace pd::slow

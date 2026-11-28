@@ -1,0 +1,21 @@
+# Scenario "slow-r4", Zqclient2: watches Zqclient. Runs after lobby-client.txt.
+
+cvar pd_slow_seconds 5
+pick 825FA2F8                # Ready
+signal ready-{copy}
+waitmenu none 120
+wait 3000
+tp near Zqclient 700
+wait 300
+face Zqclient
+signal c2-placed
+waitsignal hit 1 60
+wait 1500
+face Zqclient
+shot r4-c2-slowed
+wait 22000
+face Zqclient
+shot r4-c2-after
+waitsignal host-done 1 60
+signal client-done-{copy}
+log slow-r4: client done
