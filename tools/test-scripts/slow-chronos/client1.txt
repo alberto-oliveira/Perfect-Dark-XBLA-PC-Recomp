@@ -1,0 +1,13 @@
+# Scenario "slow-chronos", Zqclient: three stacking hits, the last one kills. Runs after lobby-client.txt.
+
+pick 825FA2F8                # Ready
+signal ready-{copy}
+waitmenu none 120
+wait 3000
+give 2
+equip 2
+wait 2000
+signal armed-{copy}
+waitsignal host-done 1 180
+signal client-done-{copy}
+log slow-chronos: client done

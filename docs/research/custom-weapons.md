@@ -482,6 +482,36 @@ rounds/s. Mouse aim was not testable by script.
 - A pistol's muzzle flash lasts too short for the scripted screenshots, the real
   Magnum's too, so the flash colour was not seen in a test.
 
+**Polish (user's hands-on #1 and #2): a Magnum underneath, named Chronos.**
+- Base 8 (the Magnum's animations, ammo and behaviour). The Mauler checks that drive the
+  charge see it as a Mauler (`PdHookSlowAsMauler`).
+- The tracer is a Laser beam (number 29: the Laser's texture and streak) in violet,
+  200% wide.
+- The shot starts at the model's MODELPART_GUN_MUZZLEPOS, part 50, which moves with the
+  longer barrel. On the Magnum, part 55 is HOLDPOS, the frame's bone.
+- Violet flash textures in slots 0xD09/0xD0A.
+- Dizziness:
+  - blur 3000/5000;
+  - `bondbreathing` held up (player+416, verified by reading it back);
+  - a sway through the port's mouse-look path (`PerfectDarkApp::AddLookTurn`).
+- The Magnum shot fires about 200 ms after the trigger (its hammer animation).
+
+**Temporal effects (round 3; slow-chronos, 3 copies, all verified in logs):**
+- **Time debt:** a hit while slowed adds its time (up to 60 s) and a stack; each stack
+  takes 10% more speed (floor 15%). Logged 15 → 28.6 → 42.3 s, stacks 1-3.
+- **Time's up:** the 3rd stack kills through `chr_damage_by_dizziness` (damage 100,
+  attacker's prop). "Killed Zqclient" on the shooter's HUD.
+- **Aged clip:** both hands' `loadedammo` → 0 on the victim's PC, so the gun reloads from
+  its reserve.
+- **Rewind:** the victim's PC remembers its own positions every frame (up to 10 s; a death
+  clears the history). A full charge teleports it 3 s back with the test tools'
+  `TestTeleport`, plus one frame of static (visionmode 3). The landing spot matched the
+  victim's own track 180 frames earlier.
+- **Stolen time:** the shooter's PC calls `bgun_add_boost` sub_82178668(60ths) from its
+  own player tick: 3 s per hit, 8 s per full charge. It works on `g_Vars.currentplayer`;
+  online it also takes a network path (`g_Vars+1340`). The host's boost was on, as seen
+  in `pos`.
+
 **Test scripts.**
 - Signals sent by several clients need names with `{copy}` (`armed-{copy}`).
 - `tp near` can put two players on the same spot.

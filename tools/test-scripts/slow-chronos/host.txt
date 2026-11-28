@@ -1,0 +1,56 @@
+# Scenario "slow-chronos" (Chronos, round 3): 3 copies, -ExtraArgs pd_file_override.
+# Runs after lobby-host.txt. The temporal effects:
+#   - time debt + aged clip + time's up: three hits on Zqclient (holding a Falcon 2):
+#     stacks 1, 2, 3, its loaded rounds 0 after each hit, the 3rd hit kills (the host's
+#     HUD: "Killed Zqclient"); [slow] Chronos hit / aged clip / time's up lines there;
+#   - stolen time: the host's [slow] stolen time lines and its boost in the state lines;
+#   - rewind: Zqclient2 backs away from the host while the host charges, and takes the
+#     full charge still moving: it jumps back to where it was 3 s before ([slow] rewind,
+#     its track lines).
+
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start
+waitmenu none 60
+wait 5000
+give 0x44
+equip 0x44
+waitsignal armed 2 60
+tp near Zqclient 400
+wait 300
+face Zqclient
+wait 2500
+log slow-chronos: hit 1
+trig 0 255 60
+wait 2500
+face Zqclient
+log slow-chronos: hit 2
+trig 0 255 60
+wait 2500
+face Zqclient
+log slow-chronos: hit 3 (time's up)
+trig 0 255 60
+wait 500
+shot chronos-kill-1
+wait 400
+shot chronos-kill-2
+wait 400
+shot chronos-kill-3
+wait 1500
+pos after-kill
+btn x                        # reload a full clip for the charge
+wait 4000
+tp near Zqclient2 400
+wait 300
+face Zqclient2
+btn rb                       # the charge
+signal walk                  # Zqclient2 backs away along the aim line for 6 s
+wait 3800
+face Zqclient2
+log slow-chronos: full charge at Zqclient2 (rewind)
+trig 0 255 60
+wait 3000
+signal host-done
+waitsignal client-done 2 120
+log slow-chronos: host done

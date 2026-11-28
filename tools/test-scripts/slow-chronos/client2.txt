@@ -1,0 +1,20 @@
+# Scenario "slow-chronos", Zqclient2: walks, stops, takes a full charge: the rewind. Runs after lobby-client.txt.
+
+pick 825FA2F8                # Ready
+signal ready-{copy}
+waitmenu none 120
+wait 3000
+give 2
+equip 2
+wait 2000
+signal armed-{copy}
+waitsignal walk 1 180
+pos before-walk
+track 30
+stick 0 -32767 6000          # backwards, away from the host, still moving when hit
+track off
+pos after-walk
+waitsignal host-done 1 60
+pos after-rewind
+signal client-done-{copy}
+log slow-chronos: client done

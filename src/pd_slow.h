@@ -1,4 +1,14 @@
-// Perfect Dark XBLA PC Recomp - the Slow Gun.
+// Perfect Dark XBLA PC Recomp - Chronos, the "Slow Gun".
+//
+// A temporal gun: it slows time for its victim. Hitting someone with it is meant to be
+// worth more than killing them, so its effects pile up and outlast death:
+//   - the slow (movement, aim, fire rate) and the dizziness (blur, breathing, sway);
+//   - a poison;
+//   - time debt: hits stack, each adding to the time left and deepening the slow;
+//   - time's up: a stack threshold kills outright, credited to the shooter;
+//   - an aged clip: the victim's loaded rounds are gone;
+//   - rewind: a full charge throws the victim back to where they were 3 s before;
+//   - stolen time: the shooter gets a short combat boost for each hit.
 //
 // A custom weapon (pd_custom_weapons.h) made from the DY357 Magnum (its model, its
 // animations, its ammo), with a laser-like shot and the Mauler's charge as its
@@ -234,6 +244,14 @@ struct Rules {
   int32_t blur_full = 5000;    // ... after a fully charged hit
   float sway = 4.0f;           // the view's sway, degrees each way (the pitch: 60% of it)
   float sway_full = 10.0f;     // ... after a fully charged hit
+  // Chronos's temporal effects (0 turns one off):
+  float max_seconds = 60.0f;   // time debt: the most slow that stacked hits can pile up
+  int32_t stack_step = 10;     // time debt: each further stack takes this many % more speed (floor 15%)
+  int32_t kill_stacks = 3;     // time's up: the hit that makes this many stacks kills (0 = never)
+  float steal = 3.0f;          // stolen time: the shooter's combat boost per hit, seconds
+  float steal_full = 8.0f;     // ... per fully charged hit
+  bool age_clip = true;        // aged clip: a hit empties the victim's loaded rounds
+  float rewind = 3.0f;         // rewind: a full charge throws the victim back this many seconds (0 = off)
   float poison_seconds = 8.0f; // how long the poison lasts (one tick a second)
   float poison_damage = 0.3f;  // the damage of each tick (chr_damage units; full health is about 8)
 };
@@ -244,23 +262,30 @@ inline Rules g_rules;
 // (netplay::SetHostBlob, as the Detonator Crossbow's and the Ricochet Laser's) and each
 // joined PC uses what it last heard. Blob: [version], then u16s (big-endian): seconds x10,
 // full charge x10, move, aim, fire, blur, blur after a full charge, poison seconds x10,
-// poison damage x100, sway x10, sway after a full charge x10.
+// poison damage x100, sway x10, sway after a full charge x10, the most slow x10, the stack
+// step, the kill stacks, stolen time x10, stolen time per full charge x10, aged clip
+// (0/1), rewind x10.
 constexpr uint32_t kBlobKey = 0x534C4F57;  // "SLOW"
-constexpr uint8_t kBlobVersion = 2;
-constexpr int kBlobValues = 11;
+constexpr uint8_t kBlobVersion = 3;
+constexpr int kBlobValues = 18;
 
 inline bool operator!=(const Rules& a, const Rules& b) {
   return a.seconds != b.seconds || a.full_charge != b.full_charge || a.move != b.move || a.aim != b.aim ||
          a.fire != b.fire || a.blur != b.blur || a.blur_full != b.blur_full ||
          a.poison_seconds != b.poison_seconds || a.poison_damage != b.poison_damage || a.sway != b.sway ||
-         a.sway_full != b.sway_full;
+         a.sway_full != b.sway_full || a.max_seconds != b.max_seconds || a.stack_step != b.stack_step ||
+         a.kill_stacks != b.kill_stacks || a.steal != b.steal || a.steal_full != b.steal_full ||
+         a.age_clip != b.age_clip || a.rewind != b.rewind;
 }
 
 inline std::vector<uint8_t> EncodeBlob(const Rules& r) {
   const int32_t values[] = {int32_t(r.seconds * 10.0f + 0.5f), int32_t(r.full_charge * 10.0f + 0.5f), r.move, r.aim,
                             r.fire, r.blur, r.blur_full, int32_t(r.poison_seconds * 10.0f + 0.5f),
                             int32_t(r.poison_damage * 100.0f + 0.5f), int32_t(r.sway * 10.0f + 0.5f),
-                            int32_t(r.sway_full * 10.0f + 0.5f)};
+                            int32_t(r.sway_full * 10.0f + 0.5f), int32_t(r.max_seconds * 10.0f + 0.5f),
+                            r.stack_step, r.kill_stacks, int32_t(r.steal * 10.0f + 0.5f),
+                            int32_t(r.steal_full * 10.0f + 0.5f), r.age_clip ? 1 : 0,
+                            int32_t(r.rewind * 10.0f + 0.5f)};
   std::vector<uint8_t> blob{kBlobVersion};
   for (const int32_t v : values) {
     const uint32_t u = uint32_t(std::clamp(v, 0, 0xFFFF));
@@ -283,6 +308,13 @@ inline bool DecodeBlob(const std::vector<uint8_t>& blob, Rules* r) {
   r->poison_damage = float(at(8)) / 100.0f;
   r->sway = float(at(9)) / 10.0f;
   r->sway_full = float(at(10)) / 10.0f;
+  r->max_seconds = float(at(11)) / 10.0f;
+  r->stack_step = at(12);
+  r->kill_stacks = at(13);
+  r->steal = float(at(14)) / 10.0f;
+  r->steal_full = float(at(15)) / 10.0f;
+  r->age_clip = at(16) != 0;
+  r->rewind = float(at(17)) / 10.0f;
   return true;
 }
 
@@ -294,8 +326,45 @@ struct State {
   float poison_left60 = 0.0f;  // 60ths of a second of poison left (death ends it)
   float poison_next60 = 0.0f;  // 60ths of a second to the next tick
   int32_t poison_due = 0;      // ticks to apply (the frame tick counts, the player tick applies)
+  int32_t stacks = 0;          // time debt: the hits within this slow (it outlasts death)
+  // Done from the player's own tick (main.cpp PdSlowPlayerTick), where game functions can
+  // be called with g_Vars.currentplayer = this PC's player:
+  bool kill_due = false;       // time's up
+  bool rewind_due = false;     // rewind
+  bool age_due = false;        // aged clip
 };
 inline State g_state;
+
+// Stolen time, on the SHOOTER's PC: 60ths of a second of combat boost to give this PC's
+// player (from its own tick, through bgun_add_boost sub_82178668, which works on
+// g_Vars.currentplayer and handles the network itself).
+inline int32_t g_boost_due = 0;
+inline int32_t StolenTime60(const Rules& r, uint32_t tier) {
+  const float seconds = tier >= kTierFull ? r.steal_full : (tier == kTierCharged ? (r.steal + r.steal_full) / 2.0f : r.steal);
+  return int32_t(seconds * 60.0f);
+}
+
+// Rewind: where this PC's player was, each frame of the last few seconds (only while
+// alive), so a full-charge hit can put them back there.
+struct Place {
+  float x, y, z, theta;
+  int16_t room;
+};
+constexpr int kHistoryFrames = 600;  // 10 s at 60 frames a second (rewind is at most that)
+inline Place g_history[kHistoryFrames];
+inline int g_history_next = 0, g_history_count = 0;
+inline void Remember(const Place& p) {
+  g_history[g_history_next] = p;
+  g_history_next = (g_history_next + 1) % kHistoryFrames;
+  g_history_count = std::min(g_history_count + 1, kHistoryFrames);
+}
+// Where the player was `frames` frames ago (or as long ago as is known), if anywhere.
+inline bool PlaceAgo(int frames, Place* out) {
+  if (g_history_count == 0) return false;
+  frames = std::clamp(frames, 1, g_history_count);
+  *out = g_history[(g_history_next - frames + kHistoryFrames) % kHistoryFrames];
+  return true;
+}
 
 // True while the poison's own damage call runs: chr_damage then sends a hit with the
 // Slow Gun's gset, which must not be marked as a new Slow Gun hit.
@@ -347,11 +416,21 @@ inline void SwayOffset(float t60, float degrees, float* theta, float* verta) {
 // weaker one).
 inline void Start(uint32_t tier, int32_t attacker) {
   const float length = g_rules.seconds * 60.0f * TierLength(g_rules, tier);
-  if (length >= g_state.left60) {
+  // Time debt: a hit while slowed adds its time to what is left (up to max_seconds) and
+  // one stack; a first hit starts at one stack.
+  if (g_state.left60 > 0.0f) {
+    g_state.left60 = std::min(g_state.left60 + length, std::max(g_rules.max_seconds * 60.0f, length));
+    ++g_state.stacks;
+  } else {
     g_state.left60 = length;
-    g_state.tier = tier;
+    g_state.stacks = 1;
   }
+  g_state.tier = std::max(g_state.tier, tier);
   g_state.attacker = attacker;
+  // Time's up: enough stacks kill (the stacks start again from one after it).
+  if (g_rules.kill_stacks > 0 && g_state.stacks >= g_rules.kill_stacks) g_state.kill_due = true;
+  g_state.age_due = g_rules.age_clip;
+  if (tier >= kTierFull && g_rules.rewind > 0.0f) g_state.rewind_due = true;
   // The poison starts again too: a tick a second from now, for poison_seconds.
   g_state.poison_left60 = g_rules.poison_seconds * 60.0f;
   g_state.poison_next60 = 60.0f;
@@ -370,10 +449,12 @@ inline void PoisonClock(float dt60) {
   }
 }
 
-// The speed factor (0-1) for a percentage while slowed, 1 otherwise.
+// The speed factor (0-1) for a percentage while slowed, 1 otherwise: each stack after the
+// first takes stack_step % more (time debt), down to 15%.
 inline float Factor(int32_t percent) {
   if (!Active()) return 1.0f;
-  return std::clamp(percent, 5, 100) / 100.0f;
+  const int32_t stacked = percent - std::max(g_state.stacks - 1, 0) * g_rules.stack_step;
+  return std::clamp(stacked, 15, 100) / 100.0f;
 }
 
 // For the mouse look, read on the input thread.

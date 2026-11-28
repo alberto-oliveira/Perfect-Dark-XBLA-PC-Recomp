@@ -2231,6 +2231,8 @@ void PdSlowHitSend(uint8_t* base, uint32_t gset, uint32_t* disarm, uint32_t* blu
               function, charge, *disarm, *blur_code, slow::Tier(function, charge), r3, r4);
   *disarm = 1;
   *blur_code = slow::Tier(function, charge);
+  // Stolen time: this PC's player (the shooter) gets a combat boost for the hit.
+  slow::g_boost_due += slow::StolenTime60(slow::g_rules, *blur_code);
 }
 
 // The start of the player-hit function sub_821274A0 (0x821274A0): r10 = the disarm flag,
@@ -2247,7 +2249,11 @@ void PdSlowHitEntry(uint8_t* base, uint32_t sp, uint32_t* disarm, uint32_t r3, u
   if (!slow::IsMarker(*disarm, blur_code)) return;
   *disarm = 0;
   base[sp + 87] = 0;
-  if (r4 == 0) slow::Start(blur_code, int32_t(r3));  // the victim is this PC's player (players[0])
+  if (r4 != 0) return;  // the victim is not this PC's player (players[0])
+  slow::Start(blur_code, int32_t(r3));
+  REXLOG_INFO("[slow] Chronos hit, tier {}: {:.1f} s of slow, {} stacks{}{}{}", blur_code,
+              slow::g_state.left60 / 60.0f, slow::g_state.stacks, slow::g_state.kill_due ? ", time's up" : "",
+              slow::g_state.rewind_due ? ", rewind" : "", slow::g_state.age_due ? ", aged clip" : "");  // TEMP_SLOW
 }
 
 // bgun_tick_mauler_charge where a charge step takes a round (0x821760A4): `hand` is the
@@ -2297,6 +2303,19 @@ REXCVAR_DEFINE_INT32(pd_slow_blur_full, 5000, "PerfectDark", "Slow Gun: the blur
 REXCVAR_DEFINE_DOUBLE(pd_slow_sway, 4.0, "PerfectDark",
                       "Slow Gun: how far a slowed player's view sways, degrees each way (0 = none)");
 REXCVAR_DEFINE_DOUBLE(pd_slow_sway_full, 10.0, "PerfectDark", "Slow Gun: the view's sway after a fully charged hit");
+REXCVAR_DEFINE_DOUBLE(pd_chronos_max_seconds, 60.0, "PerfectDark",
+                      "Chronos time debt: the most slow stacked hits can pile up, seconds");
+REXCVAR_DEFINE_INT32(pd_chronos_stack_step, 10, "PerfectDark",
+                     "Chronos time debt: each further stacked hit takes this many % more speed");
+REXCVAR_DEFINE_INT32(pd_chronos_kill_stacks, 3, "PerfectDark",
+                     "Chronos time's up: the hit that makes this many stacks kills (0 = never)");
+REXCVAR_DEFINE_DOUBLE(pd_chronos_steal, 3.0, "PerfectDark",
+                      "Chronos stolen time: the shooter's combat boost per hit, seconds (0 = none)");
+REXCVAR_DEFINE_DOUBLE(pd_chronos_steal_full, 8.0, "PerfectDark",
+                      "Chronos stolen time: the shooter's combat boost per fully charged hit, seconds");
+REXCVAR_DEFINE_BOOL(pd_chronos_age_clip, true, "PerfectDark", "Chronos aged clip: a hit empties the victim's loaded rounds");
+REXCVAR_DEFINE_DOUBLE(pd_chronos_rewind, 3.0, "PerfectDark",
+                      "Chronos rewind: a full charge throws the victim back this many seconds (0 = off)");
 REXCVAR_DEFINE_INT32(pd_slow_beam_width, 200, "PerfectDark",
                      "Slow Gun: its shots' beams, % of the Laser's width (wider when charged)");
 REXCVAR_DEFINE_DOUBLE(pd_slow_poison_seconds, 8.0, "PerfectDark",
@@ -2328,13 +2347,22 @@ pd::slow::Rules PdSlowOwnRules() {
   r.poison_damage = float(std::clamp(REXCVAR_GET(pd_slow_poison_damage), 0.0, 100.0));
   r.sway = float(std::clamp(REXCVAR_GET(pd_slow_sway), 0.0, 45.0));
   r.sway_full = float(std::clamp(REXCVAR_GET(pd_slow_sway_full), 0.0, 45.0));
+  r.max_seconds = float(std::clamp(REXCVAR_GET(pd_chronos_max_seconds), 1.0, 600.0));
+  r.stack_step = std::clamp(REXCVAR_GET(pd_chronos_stack_step), 0, 50);
+  r.kill_stacks = std::clamp(REXCVAR_GET(pd_chronos_kill_stacks), 0, 20);
+  r.steal = float(std::clamp(REXCVAR_GET(pd_chronos_steal), 0.0, 60.0));
+  r.steal_full = float(std::clamp(REXCVAR_GET(pd_chronos_steal_full), 0.0, 60.0));
+  r.age_clip = REXCVAR_GET(pd_chronos_age_clip);
+  r.rewind = float(std::clamp(REXCVAR_GET(pd_chronos_rewind), 0.0, 10.0));
   return r;
 }
 
 void PdSlowLogRules(const char* who, const pd::slow::Rules& r) {
   REXLOG_INFO("[slow] {}: {:.1f} s (x{:.1f} full charge), move {}%, aim {}%, fire {}%, blur {}/{}, sway {:.1f}/{:.1f}, "
-              "poison {:.1f} s x {:.2f}", who, r.seconds, r.full_charge, r.move, r.aim, r.fire, r.blur, r.blur_full,
-              r.sway, r.sway_full, r.poison_seconds, r.poison_damage);
+              "poison {:.1f} s x {:.2f}; Chronos: max {:.0f} s, stack -{}%, kill at {} stacks, steal {:.1f}/{:.1f} s, "
+              "aged clip {}, rewind {:.1f} s", who, r.seconds, r.full_charge, r.move, r.aim, r.fire, r.blur, r.blur_full,
+              r.sway, r.sway_full, r.poison_seconds, r.poison_damage, r.max_seconds, r.stack_step, r.kill_stacks,
+              r.steal, r.steal_full, r.age_clip ? "on" : "off", r.rewind);
 }
 
 void PdSlowRulesFrame() {
@@ -2420,11 +2448,13 @@ void PdSlowStateLog(uint8_t* base, uint32_t player) {
   const uint32_t chr = prop ? GuestU32(base, prop + 4) : 0;
   const int32_t blur = chr ? int16_t((base[chr + kChrBlur] << 8) | base[chr + kChrBlur + 1]) : -1;
   REXLOG_INFO("[slow] state: {:.1f} s left, tier {}, attacker {}, {} (health {:.3f}), poison {:.1f} s, rounds {}, "
-              "theta {:.1f}, blur {}, breathing {:.2f}, sway {:.1f}/{:.1f}, clock hooks: move {} gun {}/{}",
+              "theta {:.1f}, blur {}, breathing {:.2f}, sway {:.1f}/{:.1f}, stacks {}, boost {}/{}, clock hooks: "
+              "move {} gun {}/{}",
               st.left60 / 60.0f, st.tier, st.attacker, GuestU32(base, player + kPlayerIsDead) ? "dead" : "alive",
               slow::LoadF32(base, player + kPlayerHealth), st.poison_left60 / 60.0f,
               GuestU32(base, hand + slow::kHandLoadedAmmo), slow::LoadF32(base, player + pd::player::kTheta), blur,
-              slow::LoadF32(base, player + kPlayerBreathing), slow::g_sway.theta, slow::g_sway.verta,
+              slow::LoadF32(base, player + kPlayerBreathing), slow::g_sway.theta, slow::g_sway.verta, st.stacks,
+              GuestU32(base, player + pd::player::kBoostTime), base[player + pd::player::kBoostOn],
               slow::g_move_scaled, slow::g_gun_scaled, slow::g_gun_calls);
   slow::g_move_scaled = slow::g_gun_scaled = slow::g_gun_calls = 0;
 }
@@ -2460,6 +2490,18 @@ void PdSlowTick(uint8_t* base) {
     REXLOG_INFO("[slow] test: slowed as by a tier {} hit", test);
   }
   PdSlowStateLog(base, player);  // TEMP_SLOW
+  // Rewind's history: where this PC's player is, each frame it is alive (a new life
+  // starts a new history, so a rewind never goes back across a death).
+  {
+    const uint32_t prop = GuestU32(base, player + pd::player::kProp);
+    if (GuestU32(base, player + kPlayerIsDead) != 0 || !prop) {
+      slow::g_history_count = 0;
+    } else {
+      const pd::player::Vec pos = pd::player::LoadVec(base, prop + pd::player::kPropPos);
+      slow::Remember({pos.x, pos.y, pos.z, slow::LoadF32(base, player + pd::player::kTheta),
+                      int16_t((base[prop + pd::player::kPropRooms] << 8) | base[prop + pd::player::kPropRooms + 1])});
+    }
+  }
   if (!slow::Active()) {
     slow::g_aim_factor = 1.0f;
     return;
@@ -2468,6 +2510,7 @@ void PdSlowTick(uint8_t* base) {
   if (dead) {
     st.poison_left60 = 0.0f;  // death ends the poison (the slow waits for the next life)
     st.poison_due = 0;
+    st.rewind_due = false;
   } else {
     const float dt60 = slow::LoadF32(base, slow::kClockFreal);  // 60ths of a second this frame
     st.left60 -= dt60;
@@ -2513,6 +2556,82 @@ void PdSlowTick(uint8_t* base) {
 // r3 chr, f1 damage, r5 vector, r6 gset, r7 the attacker's prop; it skips the shield,
 // as the combat knife's poison does) with the Slow Gun's gset and the attacker's prop,
 // so a poison kill gives the attacker the frag. The vector is zero: no knockback.
+namespace {
+bool TestTeleport(PPCContext& ctx, uint8_t* base, uint32_t player, pd::player::Vec want, float theta,
+                  int16_t first_room);  // the test tools' teleport (below)
+}
+
+// Chronos's effects that need the game's functions, from this PC's player's own tick
+// (the test tools' input-step hook: g_Vars.currentplayer is that player):
+//   - stolen time (the shooter's side): bgun_add_boost sub_82178668(60ths);
+//   - aged clip: both hands' loaded rounds (hand+544) become 0;
+//   - rewind: the player goes back to where it was (TestTeleport, as the test pipe's
+//     `tp`), with a frame of static (player+16 visionmode 3);
+//   - time's up: a lethal chr_damage_by_dizziness with the attacker's prop (the frag is
+//     theirs), as the poison's ticks;
+//   - then the poison's ticks.
+void PdSlowPoison(PPCContext& ctx, uint8_t* base);
+void PdSlowPlayerTick(PPCContext& ctx, uint8_t* base) {
+  namespace slow = pd::slow;
+  namespace pl = pd::player;
+  slow::State& st = slow::g_state;
+  const uint32_t player = GuestU32(base, pd::player::kPlayers);
+  if (!player || GuestU32(base, kGVarsCurrentPlayer) != player) return;
+  const bool alive = GuestU32(base, player + kPlayerIsDead) == 0;
+  if (slow::g_boost_due > 0 && alive) {
+    PPCContext call = ctx;
+    call.r1.u64 = ctx.r1.u32 - 0x600;
+    call.r3.u64 = uint32_t(slow::g_boost_due);
+    REXLOG_INFO("[slow] stolen time: {:.1f} s of combat boost", slow::g_boost_due / 60.0f);  // TEMP_SLOW
+    slow::g_boost_due = 0;
+    sub_82178668(call, base);  // bgun_add_boost
+  }
+  if (!slow::Active() || !alive) return;
+  if (st.age_due) {
+    st.age_due = false;
+    for (uint32_t h = 0; h < 2; ++h) {
+      SetGuestU32(base, player + pd::custom::kPlayerHands + h * pd::custom::kHandSize + slow::kHandLoadedAmmo, 0);
+    }
+    REXLOG_INFO("[slow] aged clip: the loaded rounds are gone");  // TEMP_SLOW
+  }
+  if (st.rewind_due) {
+    st.rewind_due = false;
+    slow::Place p;
+    if (slow::PlaceAgo(int(slow::g_rules.rewind * 60.0f), &p)) {
+      const bool moved = TestTeleport(ctx, base, player, {p.x, p.y, p.z}, p.theta, p.room);
+      base[player + 16] = 0;
+      base[player + 17] = 3;  // u16 visionmode 3: a frame of static
+      REXLOG_INFO("[slow] rewind to {:.0f} {:.0f} {:.0f}: {}", p.x, p.y, p.z, moved ? "moved" : "NOT moved");  // TEMP_SLOW
+      slow::g_history_count = 0;  // the history starts again from there
+    }
+  }
+  if (st.kill_due) {
+    st.kill_due = false;
+    st.stacks = 1;
+    const uint32_t prop = GuestU32(base, player + pl::kProp);
+    const uint32_t chr = prop ? GuestU32(base, prop + 4) : 0;
+    const uint32_t attacker_player = st.attacker >= 0 ? pl::Player(base, st.attacker) : 0;
+    if (chr) {
+      const uint32_t scratch = ctx.r1.u32 - 0x400;
+      pl::StoreVec(base, scratch, {0.0f, 0.0f, 0.0f});
+      SetGuestU32(base, scratch + 16, uint32_t(slow::kWeaponSlow) << 24);
+      PPCContext call = ctx;
+      call.r1.u64 = scratch - 0x200;
+      call.r3.u64 = chr;
+      call.f1.f64 = 100.0;  // far more than a full health (about 8)
+      call.r5.u64 = scratch;
+      call.r6.u64 = scratch + 16;
+      call.r7.u64 = attacker_player ? GuestU32(base, attacker_player + pl::kProp) : 0;
+      slow::g_poisoning = true;  // not a new Chronos hit
+      sub_8212DD90(call, base);  // chr_damage_by_dizziness
+      slow::g_poisoning = false;
+      REXLOG_INFO("[slow] time's up: killed, credited to player {}", st.attacker);  // TEMP_SLOW
+    }
+    return;
+  }
+  PdSlowPoison(ctx, base);
+}
+
 void PdSlowPoison(PPCContext& ctx, uint8_t* base) {
   namespace slow = pd::slow;
   namespace pl = pd::player;
@@ -2915,7 +3034,7 @@ void PdTestPlayerTick(PPCContext& ctx, uint8_t* base) {
   const uint32_t player = pl::Player(base, 0);
   if (!player || pl::LoadU32(base, 0x82648BF8 + 1188) != player) return;  // not the local player's turn
   PdRicoTick(ctx, base);  // the Ricochet Laser's bounce beams (once a level frame)
-  PdSlowPoison(ctx, base);  // the Slow Gun's poison ticks
+  PdSlowPlayerTick(ctx, base);  // Chronos: stolen time, aged clip, rewind, time's up, poison
 
   if (pl::g_track_frames > 0) {
     const uint32_t frame = pl::LoadU32(base, pl::kLevelFrames);

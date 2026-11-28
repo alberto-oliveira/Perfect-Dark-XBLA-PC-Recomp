@@ -1,11 +1,14 @@
-# Scenario "slow-handson" (Slow Gun, the user's check by hand): 2 copies left in the
+# Scenario "slow-handson" (Chronos, the "Slow Gun": the user's check by hand): 2 copies left in the
 # match, started with -ExtraArgs pd_file_override (make_slowgun.py's files in
 # game\DataFiles\override). Runs after lobby-host.txt. Both players get the Slow Gun
 # (0x44), the Reaper (20, to feel the slowed fire rate) and a real DY357 Magnum (8) to
 # compare; the host's extra weapon slots are all Slow Guns (table index 50), so its
 # pickups lie around. The default rules: a shot slows for 15 s (a full charge 37.5 s),
-# movement/aim/fire at 50%, the poison 8 ticks of 0.3 (about 30% of health), the slow
-# carries into the next life.
+# movement 50%, mouse aim 30%, fire 50%, blur/breathing/sway, the poison 8 ticks of 0.3
+# (about 30% of health), the slow carries into the next life; Chronos's temporal effects:
+# hits stack (time adds up to 60 s, each stack -10% speed), the 3rd stack kills, a hit
+# empties the victim's clip, a full charge rewinds the victim 3 s, the shooter gets 3 s
+# (8 s for a full charge) of combat boost per hit.
 
 cvar pd_mp_weapons 50,50,50,50,50,50,50,50,50,50
 waitplayers {players} 120

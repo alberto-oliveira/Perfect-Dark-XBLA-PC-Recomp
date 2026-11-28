@@ -118,12 +118,12 @@ inline constexpr Weapon kList[] = {
     // with the borrowed model number 0x111 (MODEL_CHRFLASHBANG: a cut weapon; no weapon
     // number's third-person model and no multiplayer pickup uses it).
     {0x50, 2, 0x4CE2, "Test Gun", 0, 0, 0, 2, 0x273, 0x273, 0x111, 0x275},
-    // The Slow Gun (pd_slow.h): the DY357 Magnum (weapon 8: its model, animations and
+    // Chronos, the "Slow Gun" (pd_slow.h): a temporal gun; the DY357 Magnum (weapon 8: its model, animations and
     // ammo) with a laser-like shot, and the Mauler's charge (drawing the whole clip) as its
     // secondary; its hits slow the victim down, make them dizzy and poison them. Number and
     // name: solo item 0x44's (0x4CE3). Its two functions are copies of the Magnum's shot,
     // made slower (pd::slow::InstallFunctions). Its own model: make_slowgun.py.
-    {0x44, 8, 0x4CE3, "Slow Gun", 0, 0, 0, 8, 0x27F, 0x27F, 0x1A1, 0x281},
+    {0x44, 8, 0x4CE3, "Chronos", 0, 0, 0, 8, 0x27F, 0x27F, 0x1A1, 0x281},
 };
 constexpr int kCount = int(sizeof(kList) / sizeof(kList[0]));
 static_assert(kFirstSpareFuncBitWeapon + kCount - 1 <= kLastSpareFuncBitWeapon, "no spare function bits left");
