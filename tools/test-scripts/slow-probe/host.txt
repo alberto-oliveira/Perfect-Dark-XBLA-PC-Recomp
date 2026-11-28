@@ -1,0 +1,54 @@
+# Scenario "slow-probe" (Slow Gun, P1): 3 copies. Runs after lobby-host.txt.
+# Does the Slow Gun's marker (in the hit message's blur code) reach the other PCs?
+# With pd_slow_probe, vanilla Mauler hits carry the marker. Read the [slow] lines:
+# host "send", clients "receive" (code 0x40 | charge, victim, attacker).
+# Control: a Tranquilizer hit sends blur code 1.
+
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start
+waitmenu none 60
+wait 5000
+cvar pd_slow_probe true
+give 28
+give 6
+tp near Zqclient 300
+wait 500
+face Zqclient
+equip 28
+wait 2500
+log slow-probe: tranquilizer at Zqclient
+trig 0 255 150
+wait 1500
+equip 6
+wait 2500
+face Zqclient
+log slow-probe: mauler primary at Zqclient
+trig 0 255 150
+wait 800
+trig 0 255 150
+wait 1500
+btn rb                       # the Mauler's charge
+wait 2500
+face Zqclient
+log slow-probe: mauler charged at Zqclient
+trig 0 255 150
+wait 2000
+tp near Zqclient2 300
+wait 500
+face Zqclient2
+btn rb                       # back to the primary
+wait 1500
+log slow-probe: mauler primary at Zqclient2
+trig 0 255 150
+wait 1500
+btn rb
+wait 2500
+face Zqclient2
+log slow-probe: mauler charged at Zqclient2
+trig 0 255 150
+wait 2000
+pos end
+signal host-done
+log slow-probe: host done

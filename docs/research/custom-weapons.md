@@ -336,7 +336,22 @@ the N64 decomp; none of it has been tested in game yet.
 - The shooter's own call (0x8212A760) passes r24 (= 0) there instead.
 - **Plan A:** at 0x8212A598, a Slow Gun gset gets r10 = `0x40 | charge byte`. The
   charge byte is gset+2 (`maulercharge`, the charge × 10, 0-50). At 0x821278C4 the
-  receivers read the marker and turn it back to 0. To be tested in P1.
+  receivers read the marker and turn it back to 0.
+- **Probe P1 (verified, 3 copies; logs host 274-275, client 231-232, client2 053-054):**
+  - **The message keeps only 2 bits of the blur code.** 0x40 arrived as 0, 0x72 as 2,
+    0x6B as 3.
+  - **Only the victim's PC replays the hit.** A third PC logged nothing for hits on the
+    other client.
+  - The send's **r9** is the disarm flag (`gset_has_function_flags(gset, 0x400)`,
+    FUNCFLAG_DISARM, at 0x8212A4FC). It travels too.
+  - The game never sends disarm + a blur code, since only weapons 28/31/86 have blur
+    codes. So the Slow Gun sends **disarm = 1 + blur code = its tier** (1 shot,
+    2 part-charged, 3 full charge).
+  - The victim's PC catches the pair at the **entry of sub_821274A0** (r10 = disarm,
+    the blur code at 87(r1), r3/r4 = attacker/victim in its own numbering) and clears
+    both before the game disarms or blurs anyone.
+  - Result: all 5 marked hits arrived with the right tier on the right PC, and the
+    Tranquilizer's code 1 arrived unchanged.
 
 **Mauler checks (`cmplwi rX,6`).** Each one needs AsBase for 0x44 unless noted:
 

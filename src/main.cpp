@@ -9,6 +9,7 @@
 #include "pd_crossbow.h"  // the detonator crossbow
 #include "pd_custom_weapons.h"  // new weapons under borrowed weapon numbers
 #include "pd_ricochet.h"        // the Ricochet Laser
+#include "pd_slow.h"            // the Slow Gun
 #include "pd_player.h"  // the local player, for test scripts
 #include "pd_file_override.h"  // custom gun models: loose files over packed ones
 
@@ -2197,6 +2198,64 @@ void PdMpMusicFrame(uint8_t* base) {
 // twice or more is a double step: the game jumps ahead on screen, which is what
 // the 4aj clock fault looked like. Every 10 s one line also gives game time
 // against real time (100% = the game runs at its own speed).
+// ---- The Slow Gun (pd_slow.h) -----------------------------------------------------
+
+// TEMP_SLOW (probe P1): also mark a vanilla Mauler's hits, to see whether the marker
+// reaches the other PCs before the Slow Gun exists.
+REXCVAR_DEFINE_BOOL(pd_slow_probe, false, "PerfectDark",
+                    "TEMP_SLOW: mark vanilla Mauler hits with the Slow Gun's marker (probe)");
+
+// chr_damage just before it sends a player hit (sub_822ABD68 at 0x8212A598): `gset` is
+// the shot's gset (r22), `disarm` (r9) and `blur_code` (r10) what it sends, r3/r4 the
+// attacker's and the victim's player numbers. A Slow Gun hit is sent as disarm + its
+// tier (pd_slow.h); any other hit goes as the game made it.
+void PdSlowHitSend(uint8_t* base, uint32_t gset, uint32_t* disarm, uint32_t* blur_code, uint32_t r3, uint32_t r4) {
+  namespace slow = pd::slow;
+  const uint8_t weapon = base[gset + slow::kGsetWeapon];
+  const bool probe = REXCVAR_GET(pd_slow_probe) && weapon == slow::kWeaponMauler;  // TEMP_SLOW
+  if (weapon != slow::kWeaponSlow && !probe) return;
+  const uint32_t function = base[gset + slow::kGsetFunction];
+  const uint32_t charge = base[gset + slow::kGsetCharge];
+  // TEMP_SLOW
+  REXLOG_INFO("[slow] send: weapon {} func {} charge {} disarm {} blur {} -> tier {} (attacker {}, victim {})", weapon,
+              function, charge, *disarm, *blur_code, slow::Tier(function, charge), r3, r4);
+  *disarm = 1;
+  *blur_code = slow::Tier(function, charge);
+}
+
+// The start of the player-hit function sub_821274A0 (0x821274A0): r10 = the disarm flag,
+// the blur code is the byte at 87(r1) (its stack argument), r3/r4 = the attacker's and the
+// victim's player numbers. On the victim's PC this is the replay of a hit sent by another
+// PC; a Slow Gun's mark is noted and cleared before the game reads either.
+void PdSlowHitEntry(uint8_t* base, uint32_t sp, uint32_t* disarm, uint32_t r3, uint32_t r4) {
+  namespace slow = pd::slow;
+  const uint32_t blur_code = base[sp + 87];
+  if (*disarm == 0 && blur_code == 0) return;
+  // TEMP_SLOW
+  REXLOG_INFO("[slow] entry: disarm {} blur {} r3 {} r4 {}{}", *disarm, blur_code, r3, r4,
+              slow::IsMarker(*disarm, blur_code) ? " -> Slow Gun hit" : "");
+  if (!slow::IsMarker(*disarm, blur_code)) return;
+  *disarm = 0;
+  base[sp + 87] = 0;
+}
+
+// The player-hit function sub_821274A0 where it reads the blur code (0x821278C4, r10),
+// TEMP_SLOW (log only): on the PC that receives a hit: r28 = the victim's chr, r21 = the attacker's prop,
+// r30 = its second argument. Returns the code the game goes on with (0 for a marker).
+uint32_t PdSlowHitReceive(uint8_t* base, uint32_t code, uint32_t victim_chr, uint32_t attacker_prop,
+                          uint32_t r25, uint32_t r26, uint32_t r30) {
+  namespace slow = pd::slow;
+  namespace xbow = pd::crossbow;
+  if (code == 0) return code;
+  const int victim = xbow::PlayerOfProp(base, GuestU32(base, victim_chr + 28));  // chr+28 = its prop
+  const int attacker = xbow::PlayerOfProp(base, attacker_prop);
+  // TEMP_SLOW
+  REXLOG_INFO("[slow] receive: code 0x{:02X} victim {} ({}{}) attacker {} ({}) r25 {} r26 {} r30 {}", code, victim,
+              xbow::PlayerName(base, victim), xbow::IsLocalPlayer(base, victim) ? ", local" : "", attacker,
+              xbow::PlayerName(base, attacker), r25, r26, r30);
+  return code;
+}
+
 // ---- Custom weapons (pd_custom_weapons.h) ----------------------------------------
 
 // Makes the custom weapons once, the first time the game thread gets here.

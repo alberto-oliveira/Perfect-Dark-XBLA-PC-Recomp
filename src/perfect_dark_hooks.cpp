@@ -18,6 +18,7 @@
 #include "pd_crossbow.h"        // the Detonator Crossbow
 #include "pd_custom_weapons.h"
 #include "pd_ricochet.h"        // the Ricochet Laser
+#include "pd_slow.h"            // the Slow Gun
 #include "pd_file_override.h"   // custom gun models: loose files over packed ones
 
 // main.cpp
@@ -64,6 +65,10 @@ bool PdXbowBoltTick(PPCContext& ctx, uint8_t* base, uint32_t prop, uint32_t obj)
 void PdTestPlayerTick(PPCContext& ctx, uint8_t* base);
 void PdRicoShot(PPCContext& ctx, uint8_t* base);
 uint32_t PdRicoRenderBeams(PPCContext& ctx, uint8_t* base, uint32_t gdl);
+void PdSlowHitSend(uint8_t* base, uint32_t gset, uint32_t* disarm, uint32_t* blur_code, uint32_t r3, uint32_t r4);
+void PdSlowHitEntry(uint8_t* base, uint32_t sp, uint32_t* disarm, uint32_t r3, uint32_t r4);
+uint32_t PdSlowHitReceive(uint8_t* base, uint32_t code, uint32_t victim_chr, uint32_t attacker_prop, uint32_t r25,
+                          uint32_t r26, uint32_t r30);
 
 namespace {
 // The calling guest thread's full context and guest memory, for a hook that needs
@@ -743,6 +748,32 @@ void PdHookRicoShot() { PdRicoShot(HookContext(), HookBase()); }
 // The player's render (sub_820FC6E0) after the crossbow bolt trails (r3 = the
 // display list): the bounce beams are drawn into it.
 void PdHookRicoRenderBeams(PPCRegister& r3) { r3.u64 = PdRicoRenderBeams(HookContext(), HookBase(), r3.u32); }
+
+// ---- The Slow Gun (pd_slow.h) ---------------------------------------------------------
+
+// chr_damage just before it sends a player hit (`bl sub_822ABD68` at 0x8212A598; r9 =
+// the disarm flag, r10 = the blur code, r22 = the gset): a Slow Gun hit sends its mark.
+void PdHookSlowHitSend(PPCRegister& r3, PPCRegister& r4, PPCRegister& r9, PPCRegister& r10, PPCRegister& r22) {
+  uint32_t disarm = r9.u32, blur_code = r10.u32;
+  PdSlowHitSend(HookBase(), r22.u32, &disarm, &blur_code, r3.u32, r4.u32);
+  r9.u64 = disarm;
+  r10.u64 = blur_code;
+}
+
+// The start of the player-hit function sub_821274A0 (r10 = the disarm flag, the blur
+// code at 87(r1)): a Slow Gun hit's mark is noted and cleared.
+void PdHookSlowHitEntry(PPCRegister& r1, PPCRegister& r3, PPCRegister& r4, PPCRegister& r10) {
+  uint32_t disarm = r10.u32;
+  PdSlowHitEntry(HookBase(), r1.u32, &disarm, r3.u32, r4.u32);
+  r10.u64 = disarm;
+}
+
+// The player-hit function sub_821274A0 after it loads the blur code (0x821278C4, r10;
+// r28 = the victim's chr, r21 = the attacker's prop): a marker is noted and becomes 0.
+void PdHookSlowHitReceive(PPCRegister& r10, PPCRegister& r21, PPCRegister& r25, PPCRegister& r26,
+                          PPCRegister& r28, PPCRegister& r30) {
+  r10.u64 = PdSlowHitReceive(HookBase(), r10.u32, r28.u32, r21.u32, r25.u32, r26.u32, r30.u32);
+}
 
 // ---- Test tools (pd_player.h) ------------------------------------------------------
 

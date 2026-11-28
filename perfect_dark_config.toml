@@ -1009,6 +1009,32 @@ address = 0x820FC7A4
 name = "PdHookRicoRenderBeams"
 registers = ["r3"]
 
+# ---- The Slow Gun (src/pd_slow.h) -------------------------------------------------------
+# chr_damage sub_82128200 just before it sends a player hit (`bl sub_822ABD68`; r10 =
+# the blur code it sends, r22 = the shot's gset, r3/r4 = the call's first arguments):
+# a Slow Gun hit is sent as "disarm + blur code" (r9 = the disarm flag), a pair the game
+# never sends (pd_slow.h).
+[[midasm_hook]]
+address = 0x8212A598
+name = "PdHookSlowHitSend"
+registers = ["r3", "r4", "r9", "r10", "r22"]
+
+# The start of the player-hit function sub_821274A0 (r10 = the disarm flag, the blur code
+# is its stack byte 87(r1), r3/r4 = attacker/victim): on the victim's PC, a Slow Gun
+# hit's mark is noted and cleared before the game disarms or blurs anyone.
+[[midasm_hook]]
+address = 0x821274A0
+name = "PdHookSlowHitEntry"
+registers = ["r1", "r3", "r4", "r10"]
+
+# The player-hit function sub_821274A0 right after it loads the blur code (`lbz
+# r10,375(r1)` at 0x821278C0; r28 = the victim's chr, r21 = the attacker's prop), on the
+# PCs that receive a hit: a marker is noted and becomes 0 (no blur from the game).
+[[midasm_hook]]
+address = 0x821278C4
+name = "PdHookSlowHitReceive"
+registers = ["r10", "r21", "r25", "r26", "r28", "r30"]
+
 # ---- Test tools ---------------------------------------------------------------------
 
 # The player input step sub_820F2988, just after its stack frame is made
