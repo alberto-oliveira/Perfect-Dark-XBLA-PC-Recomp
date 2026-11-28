@@ -317,6 +317,80 @@ death.
 
 **Feasibility: high. Difficulty: ★★☆☆☆** (walking); ★★★ with fire rate.
 
+### Slow Gun: static research (branch slow-gun, 2026-11-28)
+
+The weapon is built as **weapon 0x44** (name text 0x4CE3). It works like the **Mauler**
+(base 6) and looks like the **DY357 Magnum** (look 8). Its secondary is the Mauler's
+charge, which drains the whole clip. Everything below comes from the generated code and
+the N64 decomp; none of it has been tested in game yet.
+
+**Hit signal: the blur code.**
+- At the end of `chr_damage` (0x8212A500-0x8212A558), the game works out a "blur code"
+  for weapons with the dizzy function flag (512): Tranquilizer → 1, bolt (86) → 2,
+  N-Bomb → 3.
+- It passes the code as **r10** to **sub_822ABD68**, the network send of the hit
+  (`bl` at 0x8212A598; r3 = r28, r4 = r26, f1/f2 = the damage values, gset in r22).
+- On each receiving PC the code reaches the player-hit function sub_821274A0 as its
+  stack byte. It is read at **0x821278C0** (`lbz r10,375(r1)`): values 1/2/3 add blur
+  to chr+728 (r28 = the chr), any other value adds nothing.
+- The shooter's own call (0x8212A760) passes r24 (= 0) there instead.
+- **Plan A:** at 0x8212A598, a Slow Gun gset gets r10 = `0x40 | charge byte`. The
+  charge byte is gset+2 (`maulercharge`, the charge × 10, 0-50). At 0x821278C4 the
+  receivers read the marker and turn it back to 0. To be tested in P1.
+
+**Mauler checks (`cmplwi rX,6`).** Each one needs AsBase for 0x44 unless noted:
+
+| Function | Site | Register | What it does |
+|---|---|---|---|
+| `gset_populate` sub_82186358 | 0x82186370 | r8 | Stores the charge × 10 in gset+2. r8 is also the Laser test at 0x821863D4. |
+| `gset_get_damage` sub_821864A8 | 0x82186540 | r9 | Damage × (gset+2 / 3 + 1). |
+| `bgun_tick_gameplay2` sub_8217CD40 | 0x8217CED0 | r11 | Calls `bgun_tick_mauler_charge` sub_82175F98. |
+| sub_82179A40 (can fire again) | 0x82179C60 | r10 | Resets the charge after the shot. |
+| sub_82179620 (shot sound) | 0x821799B4 | r10 | Lower pitch when charged (cosmetic). Check that r10 is dead. |
+| `beam_create_for_hand` sub_821823A8 | 0x8218245C (r11), 0x821825F8 (r6) | | Beam type −3 − charge (green tracer textures). |
+| `bgun_create_fx` sub_82174CC0 | **0x82174E38** | r26 | The switch that makes the tracer. The existing AsBase at 0x82174E70 sees only numbers above 28, so a Mauler-based weapon needs this earlier site. |
+| gun renderer sub_821761F8 | | | Blends the gun's colour towards 0xFF00007F by charge × 50 (hand+572). The Slow Gun's tint goes here. |
+
+**Charge (`bgun_tick_mauler_charge` sub_82175F98).**
+- The loop runs per hand, with r31 = hand+572 (`mm_maulercharge`, a float that shares
+  its place with `mm_lasertype`).
+- loadedammo[0] = hand+544. Charging needs more than 1 round loaded.
+- Each frame adds 0.05 × lvupdate60freal (f24), capped at 5.0 (f25).
+- On each whole-number step, `loadedammo[0]--` runs at **0x821760A4**. The whole-clip
+  drain goes there: keep the 0-5 scale and take ceil((loaded − 1) / (6 − level)) rounds
+  per step, so that 20 rounds = 4 + 4 + 4 + 4 + 3 and the shot uses the last one.
+- With the primary selected, the charge wears off at 0.005 per frame.
+
+**Clocks.**
+- The move tick sub_820F4D40 scales g_Vars+52/+56/+76 for a boosted player around the
+  input step (`bl 0x820f2988` at 0x820F4DB0) and restores them at 0x820F56C4.
+  Movement and stick look run inside that window.
+- **The gun ticks elsewhere.** The per-hand tick sub_82174EC8 is called only from
+  `bgun_tick_gameplay2` sub_8217CD40. That function is called only from the
+  per-player function sub_820FC6E0 at **0x820FC798**, which also draws the bolt
+  beams and the gun.
+- So the fire-rate slow = scale the clock before 0x820FC798 and restore it at
+  0x820FC79C. This covers firing, charging and the gun animations.
+- Automatic fire uses lvupdate60freal (rpm × freal / 60); the recovery times count
+  `stateframes`.
+
+**Mouse look.**
+- Online, the mouse turns through the port's own `OnMouseLookDelta`
+  (src/perfect_dark_app.h). There, `net_look_theta_` / `net_look_verta_` add up
+  dx/dy × step and are sent with the input.
+- Slowing the mouse aim = scale `step` for the local player. No guest hook.
+
+**Models.**
+- DY357 Magnum first person: hi 0x37A, lo 0x4BD. The lo file links mesh **0x9DA**
+  (texture 0x14BE, 7 groups: frame + 6 rounds); part 0 (link 0xFFFF) is the muzzle
+  flash, drawn from the N64 display list.
+- Third person: model 0xF8, file 0x34B, linking mesh 0x83C (textures include the
+  flash 0x970).
+- Borrowed model for the Slow Gun: **0x1A1** (MODEL_CHRDOORDECODER, scale 409). No
+  weapon's third-person model and no MP pickup uses it; only the solo setups of
+  dataDyne Extraction and the Institute place it.
+- 0x13 (data uplink) is ruled out: Hack That Mac uses it.
+
 ## Engine findings from the Remote Turret work (branch remote-turret, 2026-11-27)
 
 The Remote Turret is on hold on its own branch (`remote-turret`): its implementation
