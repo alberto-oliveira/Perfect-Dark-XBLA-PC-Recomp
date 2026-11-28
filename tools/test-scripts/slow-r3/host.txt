@@ -1,0 +1,57 @@
+# Scenario "slow-r3" (Slow Gun, R3): 3 copies. Runs after lobby-host.txt.
+# The poison and death: the host hits Zqclient (holding a Falcon 2: not disarmed) and
+# the poison ticks ([slow] poison tick lines on the client, health per tick); then with a
+# lethal poison (the client's pd_slow_poison_damage 3) the poison kills and the host gets
+# the frag (screenshots of the host's HUD); the client's slow waits while dead and goes
+# on after the respawn ([slow] state lines). Zqclient2 is hit with a full charge.
+
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start
+waitmenu none 60
+wait 5000
+give 0x44
+equip 0x44
+waitsignal armed 2 60
+tp near Zqclient 500
+wait 300
+face Zqclient
+wait 2500
+log slow-r3: hit 1 (poison)
+trig 0 255 60
+wait 10000
+signal lethal
+waitsignal lethal-set 1 30
+face Zqclient
+log slow-r3: hit 2 (lethal poison)
+trig 0 255 60
+wait 800
+shot r3-kill-1
+wait 400
+shot r3-kill-2
+wait 400
+shot r3-kill-3
+wait 400
+shot r3-kill-4
+wait 400
+shot r3-kill-5
+wait 400
+shot r3-kill-6
+wait 400
+shot r3-kill-7
+wait 400
+shot r3-kill-8
+wait 2000
+tp near Zqclient2 500
+wait 300
+face Zqclient2
+btn rb                       # the charge
+wait 3000
+face Zqclient2
+log slow-r3: full charge at Zqclient2
+trig 0 255 60
+wait 3000
+signal host-done
+waitsignal client-done 2 120
+log slow-r3: host done

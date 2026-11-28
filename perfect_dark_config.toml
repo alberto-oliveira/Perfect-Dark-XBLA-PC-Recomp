@@ -1040,22 +1040,19 @@ registers = ["r10", "r21", "r25", "r26", "r28", "r30"]
 # number for a custom weapon (PdHookCustomAsBase; each register is not used afterwards
 # for anything else; docs/research/custom-weapons.md "Slow Gun: static research"):
 #   gset_populate sub_82186358 (`cmplwi r8,6`: the charge into gset+2; r8 is also the
-#   Laser test at 0x821863D4), gset_get_damage sub_821864A8 (`cmplwi r9,6`: the charge
-#   raises the damage), bgun_tick_gameplay2 sub_8217CD40 (`cmplwi r11,6`: calls
+#   Laser test at 0x821863D4), bgun_tick_gameplay2 sub_8217CD40 (`cmplwi r11,6`: calls
 #   bgun_tick_mauler_charge), sub_82179A40 (r10, `cmplwi r10,19` then `cmplwi r10,6`:
 #   the charge is reset after a shot), sub_82179620 (`cmplwi r10,6`: a charged shot's
 #   lower sound), bgun_create_fx sub_82174CC0 (the switch on r26 from 0x82174E38: which
 #   guns make a tracer beam; the AsBase at 0x82174E70 sees only numbers above 28), the
 #   gun renderer sub_821761F8 (`cmplwi r11,6`: the charge colour).
+# Left alone: gset_get_damage sub_821864A8 (`cmplwi r9,6` at 0x82186540), where the
+# Mauler's charge multiplies the damage (about x18 at a full charge: test R3's full charge
+# killed outright); a Slow Gun's charge buys a longer slow and more blur, not damage.
 [[midasm_hook]]
 address = 0x82186370
 name = "PdHookCustomAsBase"
 registers = ["r8"]
-
-[[midasm_hook]]
-address = 0x82186540
-name = "PdHookCustomAsBase"
-registers = ["r9"]
 
 [[midasm_hook]]
 address = 0x8217CED0

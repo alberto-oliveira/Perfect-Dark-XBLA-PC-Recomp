@@ -2203,6 +2203,7 @@ void PdMpMusicFrame(uint8_t* base) {
 constexpr uint32_t kGVarsCurrentPlayer = 0x82648BF8 + 1188;  // g_Vars.currentplayer
 constexpr uint32_t kPlayerIsDead = 224;                      // player->isdead (XBLA +8)
 constexpr uint32_t kChrBlur = 728;                           // s16 chr->blurdrugamount
+constexpr uint32_t kPlayerHealth = 228;                      // f32 player->bondhealth (0-1; XBLA +8)
 
 // TEMP_SLOW (probe P1): also mark a vanilla Mauler's hits, to see whether the marker
 // reaches the other PCs before the Slow Gun exists.
@@ -2218,6 +2219,7 @@ void PdSlowHitSend(uint8_t* base, uint32_t gset, uint32_t* disarm, uint32_t* blu
   const uint8_t weapon = base[gset + slow::kGsetWeapon];
   const bool probe = REXCVAR_GET(pd_slow_probe) && weapon == slow::kWeaponMauler;  // TEMP_SLOW
   if (weapon != slow::kWeaponSlow && !probe) return;
+  if (slow::g_poisoning) return;  // the poison's own damage: not a new hit
   const uint32_t function = base[gset + slow::kGsetFunction];
   const uint32_t charge = base[gset + slow::kGsetCharge];
   // TEMP_SLOW
@@ -2288,6 +2290,10 @@ REXCVAR_DEFINE_INT32(pd_slow_fire, 50, "PerfectDark", "Slow Gun: a slowed player
 REXCVAR_DEFINE_INT32(pd_slow_blur, 800, "PerfectDark",
                      "Slow Gun: the blur while slowed (0-5000; a fully charged hit: pd_slow_blur_full)");
 REXCVAR_DEFINE_INT32(pd_slow_blur_full, 4000, "PerfectDark", "Slow Gun: the blur after a fully charged hit");
+REXCVAR_DEFINE_DOUBLE(pd_slow_poison_seconds, 8.0, "PerfectDark",
+                      "Slow Gun: how long its poison lasts (seconds, one tick a second; death ends it)");
+REXCVAR_DEFINE_DOUBLE(pd_slow_poison_damage, 0.3, "PerfectDark",
+                      "Slow Gun: the damage of each poison tick (full health is about 8; 0.3 x 8 ticks = 30%)");
 // TEMP_SLOW: set to a tier (1-3) to slow the local player as if hit (then it goes back to 0).
 REXCVAR_DEFINE_INT32(pd_slow_test, 0, "PerfectDark", "TEMP_SLOW: slow the local player as if hit by this tier");
 
@@ -2302,6 +2308,8 @@ void PdSlowFrame(uint8_t* base) {
   r.fire = std::clamp(REXCVAR_GET(pd_slow_fire), 5, 100);
   r.blur = std::clamp(REXCVAR_GET(pd_slow_blur), 0, 5000);
   r.blur_full = std::clamp(REXCVAR_GET(pd_slow_blur_full), 0, 5000);
+  r.poison_seconds = float(std::clamp(REXCVAR_GET(pd_slow_poison_seconds), 0.0, 120.0));
+  r.poison_damage = float(std::clamp(REXCVAR_GET(pd_slow_poison_damage), 0.0, 100.0));
   PdSlowTick(base);
   // TEMP_SLOW: how many Slow Gun beams were drawn (beam_render's colour hook), once a second.
   static uint32_t last_drawn = 0;
@@ -2349,9 +2357,10 @@ void PdSlowStateLog(uint8_t* base, uint32_t player) {
   const uint32_t prop = GuestU32(base, player + pd::player::kProp);
   const uint32_t chr = prop ? GuestU32(base, prop + 4) : 0;
   const int32_t blur = chr ? int16_t((base[chr + kChrBlur] << 8) | base[chr + kChrBlur + 1]) : -1;
-  REXLOG_INFO("[slow] state: {:.1f} s left, tier {}, attacker {}, {}, rounds {}, theta {:.1f}, blur {}, clock "
-              "hooks: move {} gun {}/{}",
+  REXLOG_INFO("[slow] state: {:.1f} s left, tier {}, attacker {}, {} (health {:.3f}), poison {:.1f} s, rounds {}, "
+              "theta {:.1f}, blur {}, clock hooks: move {} gun {}/{}",
               st.left60 / 60.0f, st.tier, st.attacker, GuestU32(base, player + kPlayerIsDead) ? "dead" : "alive",
+              slow::LoadF32(base, player + kPlayerHealth), st.poison_left60 / 60.0f,
               GuestU32(base, hand + slow::kHandLoadedAmmo), slow::LoadF32(base, player + pd::player::kTheta), blur,
               slow::g_move_scaled, slow::g_gun_scaled, slow::g_gun_calls);
   slow::g_move_scaled = slow::g_gun_scaled = slow::g_gun_calls = 0;
@@ -2381,8 +2390,13 @@ void PdSlowTick(uint8_t* base) {
     return;
   }
   const bool dead = GuestU32(base, player + kPlayerIsDead) != 0;
-  if (!dead) {
-    st.left60 -= slow::LoadF32(base, slow::kClockFreal);  // 60ths of a second this frame
+  if (dead) {
+    st.poison_left60 = 0.0f;  // death ends the poison (the slow waits for the next life)
+    st.poison_due = 0;
+  } else {
+    const float dt60 = slow::LoadF32(base, slow::kClockFreal);  // 60ths of a second this frame
+    st.left60 -= dt60;
+    slow::PoisonClock(dt60);
     // The blur: topped up to its level, fading out over the last 2 seconds.
     const uint32_t prop = GuestU32(base, player + pd::player::kProp);
     const uint32_t chr = prop ? GuestU32(base, prop + 4) : 0;  // prop+4 = its chr
@@ -2396,11 +2410,54 @@ void PdSlowTick(uint8_t* base) {
       }
     }
   }
-  if (st.left60 <= 0.0f) {
+  if (st.left60 <= 0.0f && st.poison_left60 <= 0.0f && st.poison_due == 0) {
     st = {};
     REXLOG_INFO("[slow] the slow is over");  // TEMP_SLOW
   }
   slow::g_aim_factor = slow::Factor(slow::g_rules.aim);
+}
+
+// The poison's ticks that fell due, applied from the local player's own tick (the test
+// tools' input-step hook, PdTestPlayerTick: g_Vars.currentplayer is that player, and the
+// game's functions can be called). Each tick is chr_damage_by_dizziness (sub_8212DD90:
+// r3 chr, f1 damage, r5 vector, r6 gset, r7 the attacker's prop; it skips the shield,
+// as the combat knife's poison does) with the Slow Gun's gset and the attacker's prop,
+// so a poison kill gives the attacker the frag. The vector is zero: no knockback.
+void PdSlowPoison(PPCContext& ctx, uint8_t* base) {
+  namespace slow = pd::slow;
+  namespace pl = pd::player;
+  slow::State& st = slow::g_state;
+  if (st.poison_due <= 0) return;
+  const uint32_t player = GuestU32(base, pd::player::kPlayers);
+  if (!player || GuestU32(base, kGVarsCurrentPlayer) != player) return;
+  const uint32_t prop = GuestU32(base, player + pl::kProp);
+  const uint32_t chr = prop ? GuestU32(base, prop + 4) : 0;
+  if (!chr || GuestU32(base, player + kPlayerIsDead) != 0) {
+    st.poison_due = 0;
+    return;
+  }
+  const uint32_t attacker_player = st.attacker >= 0 ? pl::Player(base, st.attacker) : 0;
+  const uint32_t attacker_prop = attacker_player ? GuestU32(base, attacker_player + pl::kProp) : 0;
+  const uint32_t scratch = ctx.r1.u32 - 0x400;  // under the game's stack (as the Ricochet Laser's calls)
+  pl::StoreVec(base, scratch, {0.0f, 0.0f, 0.0f});
+  SetGuestU32(base, scratch + 16, uint32_t(slow::kWeaponSlow) << 24);  // gset {weapon, 0, 0, primary}
+  for (; st.poison_due > 0; --st.poison_due) {
+    const float before = slow::LoadF32(base, player + kPlayerHealth);
+    PPCContext call = ctx;
+    call.r1.u64 = scratch - 0x200;
+    call.r3.u64 = chr;
+    call.f1.f64 = slow::g_rules.poison_damage;
+    call.r5.u64 = scratch;
+    call.r6.u64 = scratch + 16;
+    call.r7.u64 = attacker_prop;
+    slow::g_poisoning = true;
+    sub_8212DD90(call, base);  // chr_damage_by_dizziness
+    slow::g_poisoning = false;
+    // TEMP_SLOW
+    REXLOG_INFO("[slow] poison tick: damage {:.2f}, health {:.3f} -> {:.3f}, attacker {} (prop 0x{:08X})",
+                slow::g_rules.poison_damage, before, slow::LoadF32(base, player + kPlayerHealth), st.attacker,
+                attacker_prop);
+  }
 }
 
 // The local player's move tick before its input step (0x820F4DB0): movement and stick aim
@@ -2713,6 +2770,7 @@ void PdTestPlayerTick(PPCContext& ctx, uint8_t* base) {
   const uint32_t player = pl::Player(base, 0);
   if (!player || pl::LoadU32(base, 0x82648BF8 + 1188) != player) return;  // not the local player's turn
   PdRicoTick(ctx, base);  // the Ricochet Laser's bounce beams (once a level frame)
+  PdSlowPoison(ctx, base);  // the Slow Gun's poison ticks
 
   if (pl::g_track_frames > 0) {
     const uint32_t frame = pl::LoadU32(base, pl::kLevelFrames);

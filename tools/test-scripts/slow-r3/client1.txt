@@ -1,0 +1,35 @@
+# Scenario "slow-r3", Zqclient: the victim of the poison. Runs after lobby-client.txt.
+
+pick 825FA2F8                # Ready
+signal ready-{copy}
+waitmenu none 120
+wait 3000
+give 2
+equip 2
+wait 2000
+signal armed-{copy}
+waitsignal lethal 1 120
+pos after-poison
+cvar pd_slow_poison_damage 3
+signal lethal-set
+wait 1500
+shot r3-dead-1
+wait 500
+shot r3-dead-2
+wait 500
+shot r3-dead-3
+wait 500
+shot r3-dead-4
+wait 3000
+log slow-r3: respawning
+btn a
+wait 1500
+btn a
+wait 1500
+btn a
+wait 4000
+pos respawned
+waitsignal host-done 1 120
+wait 3000
+signal client-done-{copy}
+log slow-r3: client done

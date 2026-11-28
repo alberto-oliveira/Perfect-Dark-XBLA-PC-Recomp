@@ -205,6 +205,8 @@ struct Rules {
   int32_t fire = 50;           // gun speed (fire rate, charge, reload), %
   int32_t blur = 800;          // the blur kept up while slowed (chr+728; the game caps 5000)
   int32_t blur_full = 4000;    // ... after a fully charged hit
+  float poison_seconds = 8.0f; // how long the poison lasts (one tick a second)
+  float poison_damage = 0.3f;  // the damage of each tick (chr_damage units; full health is about 8)
 };
 inline Rules g_rules;
 
@@ -213,8 +215,15 @@ struct State {
   float left60 = 0.0f;  // 60ths of a second of slow left (counts down while alive)
   uint32_t tier = 0;    // the hit that started it (kTierShot...)
   int32_t attacker = -1;  // who hit them (this PC's player number), for the poison's credit
+  float poison_left60 = 0.0f;  // 60ths of a second of poison left (death ends it)
+  float poison_next60 = 0.0f;  // 60ths of a second to the next tick
+  int32_t poison_due = 0;      // ticks to apply (the frame tick counts, the player tick applies)
 };
 inline State g_state;
+
+// True while the poison's own damage call runs: chr_damage then sends a hit with the
+// Slow Gun's gset, which must not be marked as a new Slow Gun hit.
+inline bool g_poisoning = false;
 
 inline bool Active() { return g_state.left60 > 0.0f; }
 
@@ -240,6 +249,22 @@ inline void Start(uint32_t tier, int32_t attacker) {
     g_state.tier = tier;
   }
   g_state.attacker = attacker;
+  // The poison starts again too: a tick a second from now, for poison_seconds.
+  g_state.poison_left60 = g_rules.poison_seconds * 60.0f;
+  g_state.poison_next60 = 60.0f;
+}
+
+// The poison's clock for one frame of `dt60` 60ths (the player alive): counts the ticks
+// that fall due; they are applied from the player's own tick (main.cpp, PdSlowPoison).
+inline void PoisonClock(float dt60) {
+  State& s = g_state;
+  if (s.poison_left60 <= 0.0f) return;
+  s.poison_left60 -= dt60;
+  s.poison_next60 -= dt60;
+  if (s.poison_next60 <= 0.0f) {
+    ++s.poison_due;
+    s.poison_next60 += 60.0f;
+  }
 }
 
 // The speed factor (0-1) for a percentage while slowed, 1 otherwise.
