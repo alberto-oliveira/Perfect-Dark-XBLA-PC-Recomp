@@ -122,7 +122,7 @@ inline constexpr Weapon kList[] = {
     // which here drains the whole clip), looks like the DY357 Magnum (weapon 8); its hits
     // slow the victim down and poison them. Number and name: solo item 0x44's (0x4CE3).
     // Its two functions are copies of the Mauler's, made slower (pd::slow::InstallFunctions).
-    {0x44, 6, 0x4CE3, "Slow Gun", 0, 0, 0, 8},
+    {0x44, 6, 0x4CE3, "Slow Gun", 0, 0, 0, 8, 0x27F, 0x27F, 0x1A1, 0x281},
 };
 constexpr int kCount = int(sizeof(kList) / sizeof(kList[0]));
 static_assert(kFirstSpareFuncBitWeapon + kCount - 1 <= kLastSpareFuncBitWeapon, "no spare function bits left");

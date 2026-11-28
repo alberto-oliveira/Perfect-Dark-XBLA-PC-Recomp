@@ -1,0 +1,42 @@
+# Scenario "slow-skin", client: watches the host's Slow Gun and then a real Magnum.
+# Runs after lobby-client.txt.
+
+pick 825FA2F8                # Ready
+signal ready-{copy}
+waitmenu none 120
+wait 3000
+waitsignal host-armed 1 60
+tp near Zqhost 180
+face Zqhost -5
+wait 400
+shot slow-client-sees-held     # the held Slow Gun, third person
+signal placed
+waitsignal host-side 1 30
+wait 400
+shot slow-client-side          # in profile: the fat cylinder, the longer barrel
+signal side-seen
+waitsignal fired 1 60
+wait 20
+shot slow-client-sees-shot-0
+wait 20
+shot slow-client-sees-shot-1
+wait 20
+shot slow-client-sees-shot-2
+waitsignal fired-charged 1 60
+wait 10
+shot slow-client-sees-charged
+waitsignal host-magnum 1 60
+face Zqhost -5
+wait 300
+shot magnum-client-sees-held   # a real Magnum, third person
+waitsignal host-side-2 1 30
+wait 400
+shot magnum-client-side
+signal side-seen-2
+waitsignal fired-magnum 1 60
+wait 10
+shot magnum-client-sees-shot
+waitsignal host-done 1 90
+log slow-skin: client done
+
+

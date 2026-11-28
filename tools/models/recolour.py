@@ -3,6 +3,12 @@
 #
 #   python -I recolour.py <in.png> <out.png> --skin   (metal -> near-white, green -> blue)
 #   python -I recolour.py <in.png> <out.png> --flash  (green muzzle flash -> red)
+#   python -I recolour.py <in.png> <out.png> --slow   (the Slow Gun's DY357 Magnum: grey metal ->
+#            deep violet, the dark grip -> violet-black, warm parts (the wood inlay, brass
+#            rounds) -> acid green)
+#   --green-rect X0 Y0 X1 Y1 (with --slow): the lit pixels (brightness above 0.25) inside that
+#            rectangle of the image become acid green too (the Magnum's grip panels are grey in
+#            the texture, so no colour rule finds them)
 #   options: --details-hue 215 (degrees, the colour green parts become), --white 0.55 (how
 #            light the metal gets: brightness = white + (1 - white) * old brightness),
 #            --flash-hue 0
@@ -51,6 +57,18 @@ def flash(r, g, b, flash_hue):
     return r, g, b
 
 
+def slow(r, g, b):
+    h, s, v = colorsys.rgb_to_hsv(r, g, b)
+    if v < 0.006:
+        return r, g, b  # the atlas's empty background (pure black)
+    if 10 / 360 <= h <= 60 / 360 and s > 0.2:
+        # Warm parts (wood, brass): acid green, brighter, so they read as the gun's "toxic" bits.
+        return colorsys.hsv_to_rgb(95 / 360, 0.85, min(1.0, v * 1.3 + 0.15))
+    # Metal and the grip: one violet hue, saturated more where the metal is light, so the
+    # shading and wear stay; the darkest parts become violet-black.
+    return colorsys.hsv_to_rgb(275 / 360, 0.35 + 0.3 * v, v * 0.85)
+
+
 def fill_specks(img, w, h):
     """Pure-black pixels inside a part (DXT1's black "transparent" texels: invisible on the
     old dark metal, specks on light metal) take the average of their non-black neighbours,
@@ -79,11 +97,25 @@ def main():
     out = bytearray(rgba)
     cache = {}
     details_hue, white, flash_hue = opt('--details-hue', 215) / 360, opt('--white', 0.55), opt('--flash-hue', 0) / 360
+    rect = [int(a[a.index('--green-rect') + 1 + k]) for k in range(4)] if '--green-rect' in a else None
     for i in range(0, len(rgba), 4):
+        if rect:
+            px, py_ = (i // 4) % w, (i // 4) // w
+            if rect[0] <= px <= rect[2] and rect[1] <= py_ <= rect[3]:
+                r, g, b = (c / 255 for c in rgba[i:i + 3])
+                v = max(r, g, b)
+                if v > 0.25:
+                    out[i:i + 3] = bytes(int(round(c * 255)) for c in colorsys.hsv_to_rgb(95 / 360, 0.8, min(1.0, v * 1.1)))
+                    continue
         key = rgba[i:i + 3]
         if key not in cache:
             r, g, b = (c / 255 for c in key)
-            nr, ng, nb = skin(r, g, b, details_hue, white) if '--skin' in a else flash(r, g, b, flash_hue)
+            if '--skin' in a:
+                nr, ng, nb = skin(r, g, b, details_hue, white)
+            elif '--slow' in a:
+                nr, ng, nb = slow(r, g, b)
+            else:
+                nr, ng, nb = flash(r, g, b, flash_hue)
             cache[key] = bytes(int(round(max(0.0, min(1.0, c)) * 255)) for c in (nr, ng, nb))
         out[i:i + 3] = cache[key]
     if '--skin' in a:

@@ -1,0 +1,91 @@
+# Scenario "slow-skin" (Slow Gun model, tests C1-C3): 2 copies, -ExtraArgs pd_file_override,
+# with make_slowgun.py's files in game\DataFiles\override. Runs after lobby-host.txt.
+# The host's extra weapon slots are all the Slow Gun (table index 50), so its pickups lie
+# around. The host shows the Slow Gun in first person (idle, a shot with its flash, the
+# charge glow, a reload) while the client watches the held gun (front and profile) and its
+# flash; then a real DY357 Magnum (unchanged) to compare.
+
+cvar pd_mp_weapons 50,50,50,50,50,50,50,50,50,50
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start
+waitmenu none 60
+wait 4000
+look 90 -20
+wait 200
+shot slow-around-90            # pickups, if any are in view
+look 270 -20
+wait 200
+shot slow-around-270
+give 8
+give 0x44
+equip 0x44
+wait 2500
+look 0 0
+wait 300
+shot slow-host-idle
+signal host-armed
+waitsignal placed 1 60
+wait 300
+face Zqclient 0 90             # side on to the client: the gun in profile
+wait 300
+signal host-side
+waitsignal side-seen 1 30
+wait 300
+face Zqclient -40              # the floor in front of the client
+wait 300
+trig 0 255 60
+wait 20
+shot slow-host-shot-0
+wait 20
+shot slow-host-shot-1
+wait 20
+shot slow-host-shot-2
+wait 20
+shot slow-host-shot-3
+signal fired
+wait 1800
+btn rb                         # the charge
+wait 2800
+shot slow-host-charged
+face Zqclient -40
+trig 0 255 60
+wait 30
+shot slow-host-charged-shot
+signal fired-charged
+wait 1500
+look 0 -60
+btn x                          # reload
+wait 500
+shot slow-host-reload
+wait 3000
+log slow-skin: real magnum
+equip 8
+wait 2500
+look 0 0
+wait 300
+shot magnum-host-idle
+signal host-magnum
+face Zqclient 0 90
+signal host-side-2
+waitsignal side-seen-2 1 30
+face Zqclient -40
+trig 0 255 60
+wait 20
+shot magnum-host-shot-0
+wait 20
+shot magnum-host-shot-1
+wait 20
+shot magnum-host-shot-2
+signal fired-magnum
+wait 1500
+equip 0x44
+wait 2500
+look 0 0
+wait 300
+shot slow-host-back
+signal host-done
+log slow-skin: host done
+
+
