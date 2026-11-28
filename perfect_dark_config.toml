@@ -1097,6 +1097,24 @@ address = 0x821767D0
 name = "PdHookSlowChargeColour"
 registers = ["r3", "r29"]
 
+# The slow (pd_slow.h): the player's move tick sub_820F4D40 just before its input step
+# (`bl 0x820f2988`; the tick saved the frame clock at its start and puts it back at
+# 0x820F56C4): a slowed local player's clock is scaled (movement, stick aim).
+[[midasm_hook]]
+address = 0x820F4DB0
+name = "PdHookSlowMoveClock"
+
+# The player's per-frame function sub_820FC6E0 around its gun tick (`bl 0x8217cd40`,
+# bgun_tick_gameplay2: firing, charge, reload, the gun's animations): the clock is scaled
+# for a slowed local player before, and put back after.
+[[midasm_hook]]
+address = 0x820FC798
+name = "PdHookSlowGunClock"
+
+[[midasm_hook]]
+address = 0x820FC79C
+name = "PdHookSlowGunClockDone"
+
 # ---- Test tools ---------------------------------------------------------------------
 
 # The player input step sub_820F2988, just after its stack frame is made

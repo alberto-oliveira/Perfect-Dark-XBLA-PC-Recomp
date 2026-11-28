@@ -1,0 +1,60 @@
+# Scenario "slow-r2" (Slow Gun, R2): 2 copies. Runs after lobby-host.txt.
+# The slow on the host: walking, stick turning and the Reaper's fire, normal then slowed
+# (pd_slow_test 1), read from the pos lines and the [slow] state lines; then the client
+# hits the host for real (a shot, then a full charge) and the host's state follows.
+
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start
+waitmenu none 60
+wait 5000
+give 20
+give 0x44
+equip 20
+wait 2500
+tp near Zqclient 900
+face Zqclient
+wait 300
+pos b-start
+log slow-r2: base walk
+stick 0 32767 1500
+wait 300
+pos b-walked
+log slow-r2: base turn
+rstick 32767 0 800
+wait 300
+pos b-turned
+log slow-r2: base reaper
+trig 0 255 3000
+wait 1200
+log slow-r2: base done
+tp near Zqclient 900
+face Zqclient
+cvar pd_slow_test 1
+wait 300
+pos s-start
+log slow-r2: slow walk
+stick 0 32767 1500
+wait 300
+pos s-walked
+log slow-r2: slow turn
+rstick 32767 0 800
+wait 300
+pos s-turned
+log slow-r2: slow reaper
+trig 0 255 3000
+wait 1200
+log slow-r2: slow done
+shot r2-blur
+wait 12000
+log slow-r2: real hits
+tp near Zqclient 500
+face Zqclient
+signal hit-me
+waitsignal hit-done 1 60
+wait 2000
+shot r2-blur-full
+wait 3000
+signal host-done
+log slow-r2: host done

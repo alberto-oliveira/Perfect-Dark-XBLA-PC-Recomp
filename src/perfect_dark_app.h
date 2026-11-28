@@ -55,6 +55,7 @@
 #include "pd_weapons.h"        // pd_mp_weapons: weapon slots 7-16, shuffled respawns
 #include "pd_custom_weapons.h"  // new weapons under borrowed weapon numbers
 #include "pd_player.h"         // test pipe: the local player (give, look, tp, ...)
+#include "pd_slow.h"           // the Slow Gun: a slowed player aims slower
 #include "pd_stages.h"         // pd_solo_stages: the solo mission stages as arenas
 #include <rex/input/sdl/sdl_input_driver.h>
 #include <rex/cvar.h>
@@ -4519,7 +4520,8 @@ class PerfectDarkApp : public rex::ReXApp {
     std::string sens_str = rex::cvar::GetFlagByName("mnk_sensitivity");
     float sens = sens_str.empty() ? 1.0f : float(atof(sens_str.c_str()));
     if (!(sens > 0.0f)) sens = 1.0f;
-    const float step = kMouseLookDegreesPerCount * sens;
+    // A player slowed by the Slow Gun turns slower (pd_slow.h; 1 otherwise).
+    const float step = kMouseLookDegreesPerCount * sens * pd::slow::g_aim_factor.load();
 
     // In a networked match the turn is sent with this PC's input and applied
     // by every PC (NetLookSend). A direct write here would change only this

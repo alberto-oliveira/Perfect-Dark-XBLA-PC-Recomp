@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <atomic>
 #include <map>
 
 namespace pd::slow {
@@ -176,5 +177,112 @@ inline float BeamWidth(uint32_t beam) {
   const auto it = g_beams.find(beam);
   return it == g_beams.end() ? 0.0f : 1.0f + it->second;
 }
+
+// ---- The slow (on the victim's own PC) ------------------------------------------------
+//
+// Each PC keeps the slow of its own player only (players[0]): a player's movement, aim
+// and gun run on that player's PC, and the others see the result.
+//   - Movement and stick aim: the player's move tick (sub_820F4D40) runs the input step
+//     (`bl 0x820f2988` at 0x820F4DB0) with g_Vars' frame clock (+52 lvupdate240, +56
+//     lvupdate60, +76 lvupdate60freal), which combat boost doubles for a boosted player.
+//     It saves the clock first and puts it back at 0x820F56C4, so the slow just scales
+//     the clock at 0x820F4DB0 (on top of a boost: a boost cancels a 50% slow).
+//   - Fire rate: the gun ticks elsewhere, in bgun_tick_gameplay2 (sub_8217CD40), called
+//     from the player's per-frame function sub_820FC6E0 at 0x820FC798; the clock is
+//     scaled before that call and put back after it (0x820FC79C).
+//   - Mouse aim: the port's mouse look (perfect_dark_app.h OnMouseLookDelta) turns by
+//     less (g_aim_factor).
+//   - Blur: the player's chr blur amount (chr+728, the dizziness the Tranquilizer gives;
+//     the game wears it off) is topped up each frame while the slow lasts.
+// The timer only runs while the player is alive, so a slow carries into the next life.
+
+// The settings (the host's, in a match: step 6). Percentages are of normal speed.
+struct Rules {
+  float seconds = 15.0f;       // a primary hit's slow
+  float full_charge = 2.5f;    // a fully charged hit's slow lasts this much longer
+  int32_t move = 50;           // movement (and stick aim) speed, %
+  int32_t aim = 50;            // mouse aim speed, %
+  int32_t fire = 50;           // gun speed (fire rate, charge, reload), %
+  int32_t blur = 800;          // the blur kept up while slowed (chr+728; the game caps 5000)
+  int32_t blur_full = 4000;    // ... after a fully charged hit
+};
+inline Rules g_rules;
+
+// The local player's slow.
+struct State {
+  float left60 = 0.0f;  // 60ths of a second of slow left (counts down while alive)
+  uint32_t tier = 0;    // the hit that started it (kTierShot...)
+  int32_t attacker = -1;  // who hit them (this PC's player number), for the poison's credit
+};
+inline State g_state;
+
+inline bool Active() { return g_state.left60 > 0.0f; }
+
+// How much longer a hit of `tier` slows than a primary shot.
+inline float TierLength(const Rules& r, uint32_t tier) {
+  if (tier >= kTierFull) return r.full_charge;
+  if (tier == kTierCharged) return (1.0f + r.full_charge) / 2.0f;
+  return 1.0f;
+}
+inline int32_t TierBlur(const Rules& r, uint32_t tier) {
+  if (tier >= kTierFull) return r.blur_full;
+  if (tier == kTierCharged) return (r.blur + r.blur_full) / 2;
+  return r.blur;
+}
+
+// A Slow Gun hit on the local player: the slow starts again from its full length (a
+// new hit does not add to what is left, but a stronger one is not cut short by a
+// weaker one).
+inline void Start(uint32_t tier, int32_t attacker) {
+  const float length = g_rules.seconds * 60.0f * TierLength(g_rules, tier);
+  if (length >= g_state.left60) {
+    g_state.left60 = length;
+    g_state.tier = tier;
+  }
+  g_state.attacker = attacker;
+}
+
+// The speed factor (0-1) for a percentage while slowed, 1 otherwise.
+inline float Factor(int32_t percent) {
+  if (!Active()) return 1.0f;
+  return std::clamp(percent, 5, 100) / 100.0f;
+}
+
+// For the mouse look, read on the input thread.
+inline std::atomic<float> g_aim_factor{1.0f};
+
+// Scales g_Vars' frame clock by `factor`. The two integer counts keep their remainders
+// from frame to frame, so a 50% clock alternates lvupdate60 1, 0, 1, 0... instead of
+// rounding every frame down to 0.
+struct ClockScaler {
+  float rest240 = 0.0f, rest60 = 0.0f;
+  int32_t saved240 = 0, saved60 = 0;
+  float saved_freal = 0.0f;
+};
+constexpr uint32_t kGVars = 0x82648BF8;
+constexpr uint32_t kClock240 = kGVars + 52, kClock60 = kGVars + 56, kClockFreal = kGVars + 76;
+
+inline int32_t ScaleCount(int32_t value, float factor, float* rest) {
+  const float exact = float(value) * factor + *rest;
+  const int32_t whole = int32_t(exact);
+  *rest = exact - float(whole);
+  return whole;
+}
+inline void ScaleClock(uint8_t* base, float factor, ClockScaler* c) {
+  c->saved240 = int32_t(LoadU32(base, kClock240));
+  c->saved60 = int32_t(LoadU32(base, kClock60));
+  c->saved_freal = LoadF32(base, kClockFreal);
+  StoreU32(base, kClock240, uint32_t(ScaleCount(c->saved240, factor, &c->rest240)));
+  StoreU32(base, kClock60, uint32_t(ScaleCount(c->saved60, factor, &c->rest60)));
+  StoreF32(base, kClockFreal, c->saved_freal * factor);
+}
+inline void RestoreClock(uint8_t* base, const ClockScaler& c) {
+  StoreU32(base, kClock240, uint32_t(c.saved240));
+  StoreU32(base, kClock60, uint32_t(c.saved60));
+  StoreF32(base, kClockFreal, c.saved_freal);
+}
+inline ClockScaler g_move_clock, g_gun_clock;
+inline bool g_gun_clock_scaled = false;
+inline uint32_t g_move_scaled = 0, g_gun_scaled = 0, g_gun_calls = 0;  // TEMP_SLOW: hook counts
 
 }  // namespace pd::slow

@@ -1,0 +1,22 @@
+# Scenario "slow-r2", client: hits the host with the Slow Gun. Runs after lobby-client.txt.
+
+pick 825FA2F8                # Ready
+signal ready-{copy}
+waitmenu none 120
+waitsignal hit-me 1 180
+give 0x44
+equip 0x44
+wait 2500
+face Zqhost
+log slow-r2: client shoots
+trig 0 255 60
+wait 2000
+btn rb                       # the charge
+wait 2800
+face Zqhost
+log slow-r2: client charged shot
+trig 0 255 60
+wait 1000
+signal hit-done
+waitsignal host-done 1 60
+log slow-r2: client done

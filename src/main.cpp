@@ -2200,6 +2200,10 @@ void PdMpMusicFrame(uint8_t* base) {
 // against real time (100% = the game runs at its own speed).
 // ---- The Slow Gun (pd_slow.h) -----------------------------------------------------
 
+constexpr uint32_t kGVarsCurrentPlayer = 0x82648BF8 + 1188;  // g_Vars.currentplayer
+constexpr uint32_t kPlayerIsDead = 224;                      // player->isdead (XBLA +8)
+constexpr uint32_t kChrBlur = 728;                           // s16 chr->blurdrugamount
+
 // TEMP_SLOW (probe P1): also mark a vanilla Mauler's hits, to see whether the marker
 // reaches the other PCs before the Slow Gun exists.
 REXCVAR_DEFINE_BOOL(pd_slow_probe, false, "PerfectDark",
@@ -2237,6 +2241,7 @@ void PdSlowHitEntry(uint8_t* base, uint32_t sp, uint32_t* disarm, uint32_t r3, u
   if (!slow::IsMarker(*disarm, blur_code)) return;
   *disarm = 0;
   base[sp + 87] = 0;
+  if (r4 == 0) slow::Start(blur_code, int32_t(r3));  // the victim is this PC's player (players[0])
 }
 
 // bgun_tick_mauler_charge where a charge step takes a round (0x821760A4): `hand` is the
@@ -2272,8 +2277,32 @@ REXCVAR_DEFINE_STRING(pd_slow_charge_tint, "purple", "PerfectDark",
                       "Slow Gun: the colour its gun glows as it charges (a name or #RRGGBB)");
 REXCVAR_DEFINE_STRING(pd_slow_beam_tint, "purple", "PerfectDark",
                       "Slow Gun: the colour of its shots' tracers (a name or #RRGGBB)");
-void PdSlowFrame() {
+// The slow's settings (the host's in a match: step 6).
+REXCVAR_DEFINE_DOUBLE(pd_slow_seconds, 15.0, "PerfectDark",
+                      "Slow Gun: how long a primary hit slows (seconds; charged hits last longer)");
+REXCVAR_DEFINE_DOUBLE(pd_slow_full_charge, 2.5, "PerfectDark",
+                      "Slow Gun: how many times longer a fully charged hit slows");
+REXCVAR_DEFINE_INT32(pd_slow_move, 50, "PerfectDark", "Slow Gun: a slowed player's movement speed, %");
+REXCVAR_DEFINE_INT32(pd_slow_aim, 50, "PerfectDark", "Slow Gun: a slowed player's mouse aim speed, %");
+REXCVAR_DEFINE_INT32(pd_slow_fire, 50, "PerfectDark", "Slow Gun: a slowed player's gun speed (fire rate), %");
+REXCVAR_DEFINE_INT32(pd_slow_blur, 800, "PerfectDark",
+                     "Slow Gun: the blur while slowed (0-5000; a fully charged hit: pd_slow_blur_full)");
+REXCVAR_DEFINE_INT32(pd_slow_blur_full, 4000, "PerfectDark", "Slow Gun: the blur after a fully charged hit");
+// TEMP_SLOW: set to a tier (1-3) to slow the local player as if hit (then it goes back to 0).
+REXCVAR_DEFINE_INT32(pd_slow_test, 0, "PerfectDark", "TEMP_SLOW: slow the local player as if hit by this tier");
+
+void PdSlowTick(uint8_t* base);
+void PdSlowFrame(uint8_t* base) {
   namespace slow = pd::slow;
+  slow::Rules& r = slow::g_rules;
+  r.seconds = float(std::clamp(REXCVAR_GET(pd_slow_seconds), 0.0, 600.0));
+  r.full_charge = float(std::clamp(REXCVAR_GET(pd_slow_full_charge), 1.0, 10.0));
+  r.move = std::clamp(REXCVAR_GET(pd_slow_move), 5, 100);
+  r.aim = std::clamp(REXCVAR_GET(pd_slow_aim), 5, 100);
+  r.fire = std::clamp(REXCVAR_GET(pd_slow_fire), 5, 100);
+  r.blur = std::clamp(REXCVAR_GET(pd_slow_blur), 0, 5000);
+  r.blur_full = std::clamp(REXCVAR_GET(pd_slow_blur_full), 0, 5000);
+  PdSlowTick(base);
   // TEMP_SLOW: how many Slow Gun beams were drawn (beam_render's colour hook), once a second.
   static uint32_t last_drawn = 0;
   static auto last_time = std::chrono::steady_clock::now();
@@ -2305,6 +2334,104 @@ uint32_t PdSlowHitReceive(uint8_t* base, uint32_t code, uint32_t victim_chr, uin
               xbow::PlayerName(base, victim), xbow::IsLocalPlayer(base, victim) ? ", local" : "", attacker,
               xbow::PlayerName(base, attacker), r25, r26, r30);
   return code;
+}
+
+// TEMP_SLOW: the local player's state once a second in a match (slowed or not): the
+// slow, the right hand's rounds, the view angle and the blur.
+void PdSlowStateLog(uint8_t* base, uint32_t player) {
+  namespace slow = pd::slow;
+  static uint32_t last_second = 0;
+  const uint32_t second = GuestU32(base, kGVarsLevelFrames) / 60;
+  if (second == last_second) return;
+  last_second = second;
+  const slow::State& st = slow::g_state;
+  const uint32_t hand = player + pd::custom::kPlayerHands;
+  const uint32_t prop = GuestU32(base, player + pd::player::kProp);
+  const uint32_t chr = prop ? GuestU32(base, prop + 4) : 0;
+  const int32_t blur = chr ? int16_t((base[chr + kChrBlur] << 8) | base[chr + kChrBlur + 1]) : -1;
+  REXLOG_INFO("[slow] state: {:.1f} s left, tier {}, attacker {}, {}, rounds {}, theta {:.1f}, blur {}, clock "
+              "hooks: move {} gun {}/{}",
+              st.left60 / 60.0f, st.tier, st.attacker, GuestU32(base, player + kPlayerIsDead) ? "dead" : "alive",
+              GuestU32(base, hand + slow::kHandLoadedAmmo), slow::LoadF32(base, player + pd::player::kTheta), blur,
+              slow::g_move_scaled, slow::g_gun_scaled, slow::g_gun_calls);
+  slow::g_move_scaled = slow::g_gun_scaled = slow::g_gun_calls = 0;
+}
+
+// The local player's slow, once a frame (game thread, at the frame's start, where the
+// frame clock is the real one): its timer runs while the player is alive, the blur is
+// kept up, and the mouse aim factor follows.
+void PdSlowTick(uint8_t* base) {
+  namespace slow = pd::slow;
+  slow::State& st = slow::g_state;
+  const uint32_t player = GuestU32(base, pd::player::kPlayers);  // players[0]: this PC's player
+  if (GuestU32(base, kGVarsMpRunning) == 0 || !player) {
+    st = {};  // no match: nobody is slowed
+    slow::g_aim_factor = 1.0f;
+    return;
+  }
+  // TEMP_SLOW: the test setting starts a slow as a hit would.
+  if (const int32_t test = REXCVAR_GET(pd_slow_test)) {
+    REXCVAR_SET(pd_slow_test, 0);
+    slow::Start(uint32_t(std::clamp(test, 1, 3)), -1);
+    REXLOG_INFO("[slow] test: slowed as by a tier {} hit", test);
+  }
+  PdSlowStateLog(base, player);  // TEMP_SLOW
+  if (!slow::Active()) {
+    slow::g_aim_factor = 1.0f;
+    return;
+  }
+  const bool dead = GuestU32(base, player + kPlayerIsDead) != 0;
+  if (!dead) {
+    st.left60 -= slow::LoadF32(base, slow::kClockFreal);  // 60ths of a second this frame
+    // The blur: topped up to its level, fading out over the last 2 seconds.
+    const uint32_t prop = GuestU32(base, player + pd::player::kProp);
+    const uint32_t chr = prop ? GuestU32(base, prop + 4) : 0;  // prop+4 = its chr
+    if (chr) {
+      const float fade = std::min(1.0f, std::max(st.left60, 0.0f) / 120.0f);
+      const int32_t want = int32_t(float(slow::TierBlur(slow::g_rules, st.tier)) * fade);
+      const int32_t now = int16_t((base[chr + kChrBlur] << 8) | base[chr + kChrBlur + 1]);
+      if (now < want) {
+        base[chr + kChrBlur] = uint8_t(want >> 8);
+        base[chr + kChrBlur + 1] = uint8_t(want);
+      }
+    }
+  }
+  if (st.left60 <= 0.0f) {
+    st = {};
+    REXLOG_INFO("[slow] the slow is over");  // TEMP_SLOW
+  }
+  slow::g_aim_factor = slow::Factor(slow::g_rules.aim);
+}
+
+// The local player's move tick before its input step (0x820F4DB0): movement and stick aim
+// run slower (the game puts the clock back at the tick's end).
+void PdSlowMoveClock(uint8_t* base) {
+  namespace slow = pd::slow;
+  if (!slow::Active()) return;
+  const uint32_t player = GuestU32(base, pd::player::kPlayers);
+  if (!player || GuestU32(base, kGVarsCurrentPlayer) != player) return;  // only this PC's player
+  slow::ScaleClock(base, slow::Factor(slow::g_rules.move), &slow::g_move_clock);
+  ++slow::g_move_scaled;  // TEMP_SLOW
+}
+
+// Around the gun tick (bgun_tick_gameplay2, called at 0x820FC798; 0x820FC79C after it):
+// the local player's gun runs slower (fire rate, charge, reload).
+void PdSlowGunClock(uint8_t* base) {
+  namespace slow = pd::slow;
+  slow::g_gun_clock_scaled = false;
+  ++slow::g_gun_calls;  // TEMP_SLOW
+  if (!slow::Active()) return;
+  const uint32_t player = GuestU32(base, pd::player::kPlayers);
+  if (!player || GuestU32(base, kGVarsCurrentPlayer) != player) return;
+  slow::ScaleClock(base, slow::Factor(slow::g_rules.fire), &slow::g_gun_clock);
+  slow::g_gun_clock_scaled = true;
+  ++slow::g_gun_scaled;  // TEMP_SLOW
+}
+void PdSlowGunClockDone(uint8_t* base) {
+  namespace slow = pd::slow;
+  if (!slow::g_gun_clock_scaled) return;
+  slow::RestoreClock(base, slow::g_gun_clock);
+  slow::g_gun_clock_scaled = false;
 }
 
 // ---- Custom weapons (pd_custom_weapons.h) ----------------------------------------
@@ -2723,7 +2850,7 @@ void PdNoteGameFrame(uint8_t* base) {
   PdCustomInstall(base);
   PdXbowNetFrame();
   PdRicoFrame();
-  PdSlowFrame();
+  PdSlowFrame(base);
   PdFileOverrideNetFrame();
   PdMpMusicFrame(base);
   PdWeaponsFrame();

@@ -1,0 +1,73 @@
+# Scenario "slow-fire" (Slow Gun, R2b): 2 copies. Runs after lobby-host.txt.
+# The gun's speed when slowed: the Reaper held for 3 s, then the Slow Gun clicked for
+# 3 s, normal and slowed (pd_slow_test 1). Read the rounds in the [slow] state lines.
+
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start
+waitmenu none 60
+wait 5000
+give 20
+give 0x44
+equip 20
+wait 2500
+look 90 -30
+log slow-fire: base reaper
+trig 0 255 3000
+wait 4500
+log slow-fire: base reaper done
+equip 0x44
+wait 2500
+log slow-fire: base slow gun clicks
+trig 0 255 80
+wait 300
+trig 0 255 80
+wait 300
+trig 0 255 80
+wait 300
+trig 0 255 80
+wait 300
+trig 0 255 80
+wait 300
+trig 0 255 80
+wait 300
+trig 0 255 80
+wait 300
+trig 0 255 80
+wait 300
+trig 0 255 80
+wait 1500
+log slow-fire: base clicks done
+equip 20
+wait 2500
+cvar pd_slow_test 3
+wait 500
+log slow-fire: slow reaper
+trig 0 255 3000
+wait 4500
+log slow-fire: slow reaper done
+equip 0x44
+wait 2500
+log slow-fire: slow slow gun clicks
+trig 0 255 80
+wait 300
+trig 0 255 80
+wait 300
+trig 0 255 80
+wait 300
+trig 0 255 80
+wait 300
+trig 0 255 80
+wait 300
+trig 0 255 80
+wait 300
+trig 0 255 80
+wait 300
+trig 0 255 80
+wait 300
+trig 0 255 80
+wait 1500
+log slow-fire: slow clicks done
+signal host-done
+log slow-fire: host done

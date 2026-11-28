@@ -69,6 +69,9 @@ void PdSlowHitSend(uint8_t* base, uint32_t gset, uint32_t* disarm, uint32_t* blu
 void PdSlowHitEntry(uint8_t* base, uint32_t sp, uint32_t* disarm, uint32_t r3, uint32_t r4);
 uint32_t PdSlowChargeDrain(uint8_t* base, uint32_t hand, uint32_t loaded, uint32_t level);
 void PdSlowShotLog(const uint8_t* base, uint32_t player);  // TEMP_SLOW
+void PdSlowMoveClock(uint8_t* base);
+void PdSlowGunClock(uint8_t* base);
+void PdSlowGunClockDone(uint8_t* base);
 uint32_t PdSlowHitReceive(uint8_t* base, uint32_t code, uint32_t victim_chr, uint32_t attacker_prop, uint32_t r25,
                           uint32_t r26, uint32_t r30);
 
@@ -816,6 +819,16 @@ void PdHookSlowChargeColour(PPCRegister& r3, PPCRegister& r29) {
   if (HookBase()[r29.u32] != pd::slow::kWeaponSlow) return;
   r3.u64 = pd::slow::g_charge_colour;
 }
+
+// The player's move tick before its input step (`bl 0x820f2988` at 0x820F4DB0): a
+// slowed local player's clock runs slower (movement, stick aim).
+void PdHookSlowMoveClock() { PdSlowMoveClock(HookBase()); }
+
+// The player's per-frame function sub_820FC6E0 around its gun tick (`bl
+// bgun_tick_gameplay2` at 0x820FC798, and 0x820FC79C after it): a slowed local player's
+// gun runs slower; the clock is put back after.
+void PdHookSlowGunClock() { PdSlowGunClock(HookBase()); }
+void PdHookSlowGunClockDone() { PdSlowGunClockDone(HookBase()); }
 
 // ---- Test tools (pd_player.h) ------------------------------------------------------
 
