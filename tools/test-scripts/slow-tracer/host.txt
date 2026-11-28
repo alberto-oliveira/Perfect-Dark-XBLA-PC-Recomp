@@ -1,0 +1,60 @@
+# Scenario "slow-tracer" (Slow Gun, R1b): 2 copies. Runs after lobby-host.txt.
+# Is the Slow Gun's tracer drawn? Screenshot bursts after a vanilla Mauler shot and
+# after Slow Gun shots, from the host and the client ([slow] tracer beams drawn lines).
+
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start
+waitmenu none 60
+wait 5000
+give 6
+give 0x44
+equip 6
+tp near Zqclient 700
+wait 500
+face Zqclient 0 6
+wait 2500
+signal look-host
+wait 1500
+log slow-tracer: mauler
+signal fire-1
+trig 0 255 40
+shot t-mauler-0
+shot t-mauler-1
+shot t-mauler-2
+wait 60
+shot t-mauler-3
+wait 1500
+equip 0x44
+wait 2500
+face Zqclient 0 6
+log slow-tracer: slow gun
+signal fire-2
+trig 0 255 40
+shot t-slow-0
+shot t-slow-1
+shot t-slow-2
+wait 60
+shot t-slow-3
+wait 2000
+face Zqclient 0 -6
+signal fire-3
+trig 0 255 40
+shot t-slow-b0
+shot t-slow-b1
+shot t-slow-b2
+wait 1500
+face Zqclient 0 4
+btn rb                       # the charge
+wait 2800
+signal fire-4
+trig 0 255 40
+shot t-charged-0
+shot t-charged-1
+shot t-charged-2
+wait 40
+shot t-charged-3
+wait 2000
+signal host-done
+log slow-tracer: host done

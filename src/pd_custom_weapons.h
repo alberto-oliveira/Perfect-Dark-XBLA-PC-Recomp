@@ -118,6 +118,11 @@ inline constexpr Weapon kList[] = {
     // with the borrowed model number 0x111 (MODEL_CHRFLASHBANG: a cut weapon; no weapon
     // number's third-person model and no multiplayer pickup uses it).
     {0x50, 2, 0x4CE2, "Test Gun", 0, 0, 0, 2, 0x273, 0x273, 0x111, 0x275},
+    // The Slow Gun (pd_slow.h): works like the Mauler (weapon 6: its shot and its charge,
+    // which here drains the whole clip), looks like the DY357 Magnum (weapon 8); its hits
+    // slow the victim down and poison them. Number and name: solo item 0x44's (0x4CE3).
+    // Its two functions are copies of the Mauler's, made slower (pd::slow::InstallFunctions).
+    {0x44, 6, 0x4CE3, "Slow Gun", 0, 0, 0, 8},
 };
 constexpr int kCount = int(sizeof(kList) / sizeof(kList[0]));
 static_assert(kFirstSpareFuncBitWeapon + kCount - 1 <= kLastSpareFuncBitWeapon, "no spare function bits left");

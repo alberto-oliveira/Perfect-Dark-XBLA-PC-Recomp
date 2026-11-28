@@ -67,6 +67,8 @@ void PdRicoShot(PPCContext& ctx, uint8_t* base);
 uint32_t PdRicoRenderBeams(PPCContext& ctx, uint8_t* base, uint32_t gdl);
 void PdSlowHitSend(uint8_t* base, uint32_t gset, uint32_t* disarm, uint32_t* blur_code, uint32_t r3, uint32_t r4);
 void PdSlowHitEntry(uint8_t* base, uint32_t sp, uint32_t* disarm, uint32_t r3, uint32_t r4);
+uint32_t PdSlowChargeDrain(uint8_t* base, uint32_t hand, uint32_t loaded, uint32_t level);
+void PdSlowShotLog(const uint8_t* base, uint32_t player);  // TEMP_SLOW
 uint32_t PdSlowHitReceive(uint8_t* base, uint32_t code, uint32_t victim_chr, uint32_t attacker_prop, uint32_t r25,
                           uint32_t r26, uint32_t r30);
 
@@ -701,20 +703,34 @@ void PdHookCustomObjectColour(PPCRegister& r3, PPCRegister& r4) {
 // for the Laser's Stream), r28 = the player. For a Ricochet Laser the beams are
 // noted (PdHookRicoBeamCreate) and get the Laser's number, so beam_render draws
 // them as Laser beams.
-void PdHookRicoHandBeams(PPCRegister& r25, PPCRegister& r28) {
+void PdHookRicoHandBeams(PPCRegister& r25, PPCRegister& r28, PPCRegister& r30) {
   namespace rico = pd::ricochet;
+  namespace slow = pd::slow;
   uint8_t* base = HookBase();
   rico::g_filling = int8_t(base[r28.u32 + rico::kPlayerWeapon]) == int8_t(rico::kWeaponRicochet);
   if (r25.u32 == rico::kWeaponRicochet) r25.u64 = rico::kWeaponLaser;
+  // A Slow Gun shot (r30 = the hand number): its beams are noted with the shot's charge
+  // and drawn with the blue texture (pd_slow.h, "Tracers").
+  slow::g_filling = r25.u32 == slow::kWeaponSlow;
+  if (slow::g_filling) {
+    const uint32_t hand = r28.u32 + pd::custom::kPlayerHands + r30.u32 * pd::custom::kHandSize;
+    slow::g_fill_charge = slow::LoadF32(base, hand + slow::kHandCharge);
+    PdSlowShotLog(base, r28.u32);  // TEMP_SLOW
+    r25.u64 = slow::kBeamTextureWeapon;
+  }
 }
 
 // beam_create_for_hand's exit (loc_82182618): its beams are filled.
-void PdHookRicoHandBeamsDone() { pd::ricochet::g_filling = false; }
+void PdHookRicoHandBeamsDone() {
+  pd::ricochet::g_filling = false;
+  pd::slow::g_filling = false;
+}
 
 // beam_create (sub_82182130) after its stack frame (r3 = the beam being filled):
-// noted as a Ricochet Laser beam, or no longer one.
+// noted as a Ricochet Laser or a Slow Gun beam, or no longer one.
 void PdHookRicoBeamCreate(PPCRegister& r3) {
   namespace rico = pd::ricochet;
+  pd::slow::NoteBeam(r3.u32);
   if (rico::g_filling) {
     rico::g_beams.insert(r3.u32);
   } else {
@@ -732,8 +748,18 @@ void PdHookRicoBeamCreate(PPCRegister& r3) {
 // user's check; the game's other beam textures were thinner still).
 void PdHookRicoBeamColour(PPCRegister& r25, PPCRegister& r29, PPCRegister& f29) {
   namespace rico = pd::ricochet;
-  if (!rico::IsRicochetBeam(r29.u32)) return;
   uint8_t* base = HookBase();
+  // A Slow Gun tracer gets its colour, opaque, wider the more it was charged.
+  if (const float width = pd::slow::BeamWidth(r29.u32)) {
+    base[r25.u32] = uint8_t(pd::slow::g_beam_colour >> 16);
+    base[r25.u32 + 1] = uint8_t(pd::slow::g_beam_colour >> 8);
+    base[r25.u32 + 2] = uint8_t(pd::slow::g_beam_colour);
+    base[r25.u32 + 3] = 0xFF;
+    f29.f64 = f29.f64 * width;
+    ++pd::slow::g_beams_drawn;  // TEMP_SLOW
+    return;
+  }
+  if (!rico::IsRicochetBeam(r29.u32)) return;
   f29.f64 = f29.f64 * double(rico::g_beam_width) / 100.0;
   if (rico::g_beam_tint == pd::custom::kNoTint) return;
   base[r25.u32] = uint8_t(rico::g_beam_tint >> 16);
@@ -773,6 +799,22 @@ void PdHookSlowHitEntry(PPCRegister& r1, PPCRegister& r3, PPCRegister& r4, PPCRe
 void PdHookSlowHitReceive(PPCRegister& r10, PPCRegister& r21, PPCRegister& r25, PPCRegister& r26,
                           PPCRegister& r28, PPCRegister& r30) {
   r10.u64 = PdSlowHitReceive(HookBase(), r10.u32, r28.u32, r21.u32, r25.u32, r26.u32, r30.u32);
+}
+
+// bgun_tick_mauler_charge (sub_82175F98) where a charge step takes a round (`addi
+// r10,r10,-1` at 0x821760A4; r10 = the rounds loaded, r11 = the hand's loadedammo[0] =
+// hand+544, r8 = the new whole charge): a Slow Gun step takes its share of the clip
+// (pd_slow.h, ChargeDrain); the game's own -1 is part of it.
+void PdHookSlowChargeDrain(PPCRegister& r8, PPCRegister& r10, PPCRegister& r11) {
+  r10.u64 = PdSlowChargeDrain(HookBase(), r11.u32 - pd::slow::kHandLoadedAmmo, r10.u32, r8.u32);
+}
+
+// The gun renderer (sub_821761F8) just before it blends a charging Mauler's colour
+// (`bl colour_blend` at 0x821767D0; r3 = the colour it blends towards, r29 = the hand):
+// a Slow Gun blends towards its own colour.
+void PdHookSlowChargeColour(PPCRegister& r3, PPCRegister& r29) {
+  if (HookBase()[r29.u32] != pd::slow::kWeaponSlow) return;
+  r3.u64 = pd::slow::g_charge_colour;
 }
 
 // ---- Test tools (pd_player.h) ------------------------------------------------------

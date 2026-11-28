@@ -964,8 +964,9 @@ registers = ["r4"]
 
 # beam_create_for_hand sub_821823A8: its Stream check (`cmplwi r11,29` at
 # 0x82182428, r11 = the hand's weapon) sees the base; at 0x82182440 (r25 = the
-# beams' weapon number, r28 = the player) a Ricochet Laser's beams are noted and
-# get the Laser's number; its exit loc_82182618 ends the noting.
+# beams' weapon number, r28 = the player, r30 = the hand number) a Ricochet Laser's beams
+# are noted and get the Laser's number, and a Slow Gun's are noted with the shot's charge
+# and get the Cyclone's (blue texture); its exit loc_82182618 ends the noting.
 [[midasm_hook]]
 address = 0x82182428
 name = "PdHookCustomAsBase"
@@ -974,7 +975,7 @@ registers = ["r11"]
 [[midasm_hook]]
 address = 0x82182440
 name = "PdHookRicoHandBeams"
-registers = ["r25", "r28"]
+registers = ["r25", "r28", "r30"]
 
 [[midasm_hook]]
 address = 0x82182618
@@ -1034,6 +1035,67 @@ registers = ["r1", "r3", "r4", "r10"]
 address = 0x821278C4
 name = "PdHookSlowHitReceive"
 registers = ["r10", "r21", "r25", "r26", "r28", "r30"]
+
+# The game's checks for the Mauler (weapon 6, N64 WEAPON_MAULER) see the base weapon's
+# number for a custom weapon (PdHookCustomAsBase; each register is not used afterwards
+# for anything else; docs/research/custom-weapons.md "Slow Gun: static research"):
+#   gset_populate sub_82186358 (`cmplwi r8,6`: the charge into gset+2; r8 is also the
+#   Laser test at 0x821863D4), gset_get_damage sub_821864A8 (`cmplwi r9,6`: the charge
+#   raises the damage), bgun_tick_gameplay2 sub_8217CD40 (`cmplwi r11,6`: calls
+#   bgun_tick_mauler_charge), sub_82179A40 (r10, `cmplwi r10,19` then `cmplwi r10,6`:
+#   the charge is reset after a shot), sub_82179620 (`cmplwi r10,6`: a charged shot's
+#   lower sound), bgun_create_fx sub_82174CC0 (the switch on r26 from 0x82174E38: which
+#   guns make a tracer beam; the AsBase at 0x82174E70 sees only numbers above 28), the
+#   gun renderer sub_821761F8 (`cmplwi r11,6`: the charge colour).
+[[midasm_hook]]
+address = 0x82186370
+name = "PdHookCustomAsBase"
+registers = ["r8"]
+
+[[midasm_hook]]
+address = 0x82186540
+name = "PdHookCustomAsBase"
+registers = ["r9"]
+
+[[midasm_hook]]
+address = 0x8217CED0
+name = "PdHookCustomAsBase"
+registers = ["r11"]
+
+[[midasm_hook]]
+address = 0x82179C24
+name = "PdHookCustomAsBase"
+registers = ["r10"]
+
+[[midasm_hook]]
+address = 0x821799B4
+name = "PdHookCustomAsBase"
+registers = ["r10"]
+
+[[midasm_hook]]
+address = 0x82174E38
+name = "PdHookCustomAsBase"
+registers = ["r26"]
+
+[[midasm_hook]]
+address = 0x821767AC
+name = "PdHookCustomAsBase"
+registers = ["r11"]
+
+# bgun_tick_mauler_charge sub_82175F98 where a charge step takes a round (`addi
+# r10,r10,-1`; r10 = rounds loaded, r11 = hand+544, r8 = the new whole charge): a Slow
+# Gun's charge drains the whole clip over its 5 steps.
+[[midasm_hook]]
+address = 0x821760A4
+name = "PdHookSlowChargeDrain"
+registers = ["r8", "r10", "r11"]
+
+# The gun renderer sub_821761F8 before it blends a charging Mauler's colour (`bl
+# colour_blend` at 0x821767D0; r3 = 0xFF00007F, r29 = the hand): the Slow Gun's colour.
+[[midasm_hook]]
+address = 0x821767D0
+name = "PdHookSlowChargeColour"
+registers = ["r3", "r29"]
 
 # ---- Test tools ---------------------------------------------------------------------
 

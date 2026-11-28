@@ -1,0 +1,25 @@
+# Scenario "slow-tracer", client: screenshot bursts of the host's shots. Runs after lobby-client.txt.
+
+pick 825FA2F8                # Ready
+signal ready-{copy}
+waitmenu none 120
+waitsignal look-host 1 120
+face Zqhost 0 20
+waitsignal fire-1 1 60
+shot c-mauler-0
+shot c-mauler-1
+shot c-mauler-2
+waitsignal fire-2 1 60
+shot c-slow-0
+shot c-slow-1
+shot c-slow-2
+waitsignal fire-3 1 60
+shot c-slow-b0
+shot c-slow-b1
+shot c-slow-b2
+waitsignal fire-4 1 60
+shot c-charged-0
+shot c-charged-1
+shot c-charged-2
+waitsignal host-done 1 60
+log slow-tracer: client done

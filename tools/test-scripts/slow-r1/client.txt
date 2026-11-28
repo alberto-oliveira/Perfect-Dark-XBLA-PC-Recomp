@@ -1,0 +1,19 @@
+# Scenario "slow-r1", client: watches the host's shots. Runs after lobby-client.txt.
+
+pick 825FA2F8                # Ready
+signal ready-{copy}
+waitmenu none 120
+waitsignal look-host 1 120
+face Zqhost
+waitsignal fire-1 1 60
+wait 50
+shot r1-client-tracer
+waitsignal fire-2 1 60
+wait 50
+shot r1-client-tracer-side
+waitsignal fire-3 1 60
+wait 50
+shot r1-client-charged
+waitsignal host-done 1 60
+pos end
+log slow-r1: client done

@@ -2239,6 +2239,57 @@ void PdSlowHitEntry(uint8_t* base, uint32_t sp, uint32_t* disarm, uint32_t r3, u
   base[sp + 87] = 0;
 }
 
+// bgun_tick_mauler_charge where a charge step takes a round (0x821760A4): `hand` is the
+// hand, `loaded` its rounds, `level` the new whole charge (1-5). Returns the rounds the
+// game then takes one from: a Slow Gun step takes its share of the clip (ChargeDrain).
+uint32_t PdSlowChargeDrain(uint8_t* base, uint32_t hand, uint32_t loaded, uint32_t level) {
+  namespace slow = pd::slow;
+  if (base[hand] != slow::kWeaponSlow) return loaded;  // hand+0 = its weapon
+  // Only the local player's own hands: this PC also ticks its copies of the other
+  // players' guns, whose rounds come from their own PCs.
+  const uint32_t local = GuestU32(base, pd::player::kPlayers);
+  if (!local || hand < local + pd::custom::kPlayerHands || hand >= local + pd::custom::kHandLeft + pd::custom::kHandSize)
+    return loaded;
+  const int32_t drain = slow::ChargeDrain(int32_t(loaded), int32_t(level));
+  // TEMP_SLOW
+  REXLOG_INFO("[slow] charge step {}: {} rounds loaded, takes {}", level, loaded, drain);
+  return drain > 1 ? uint32_t(int32_t(loaded) - (drain - 1)) : loaded;
+}
+
+// TEMP_SLOW: one line per Slow Gun shot (beam_create_for_hand), for the fire rate and
+// the charge: the level frame, the right hand's rounds, charge and function.
+void PdSlowShotLog(const uint8_t* base, uint32_t player) {
+  const uint32_t hand = player + pd::custom::kPlayerHands;
+  float charge;
+  const uint32_t bits = GuestU32(base, hand + pd::slow::kHandCharge);
+  std::memcpy(&charge, &bits, 4);
+  REXLOG_INFO("[slow] shot: frame {} rounds {} charge {:.2f} function {}", GuestU32(base, kGVarsLevelFrames),
+              GuestU32(base, hand + pd::slow::kHandLoadedAmmo), charge, base[hand + 3]);
+}
+
+// The Slow Gun's colours, from its settings (every frame).
+REXCVAR_DEFINE_STRING(pd_slow_charge_tint, "purple", "PerfectDark",
+                      "Slow Gun: the colour its gun glows as it charges (a name or #RRGGBB)");
+REXCVAR_DEFINE_STRING(pd_slow_beam_tint, "purple", "PerfectDark",
+                      "Slow Gun: the colour of its shots' tracers (a name or #RRGGBB)");
+void PdSlowFrame() {
+  namespace slow = pd::slow;
+  // TEMP_SLOW: how many Slow Gun beams were drawn (beam_render's colour hook), once a second.
+  static uint32_t last_drawn = 0;
+  static auto last_time = std::chrono::steady_clock::now();
+  if (std::chrono::steady_clock::now() - last_time > std::chrono::seconds(1)) {
+    last_time = std::chrono::steady_clock::now();
+    if (slow::g_beams_drawn != last_drawn) {
+      REXLOG_INFO("[slow] tracer beams drawn: {} (+{})", slow::g_beams_drawn, slow::g_beams_drawn - last_drawn);
+      last_drawn = slow::g_beams_drawn;
+    }
+  }
+  const uint32_t charge = pd::custom::ParseTint(REXCVAR_GET(pd_slow_charge_tint));
+  if (charge != pd::custom::kNoTint) slow::g_charge_colour = (charge << 8) | 0x7F;  // the Mauler's own alpha
+  const uint32_t beam = pd::custom::ParseTint(REXCVAR_GET(pd_slow_beam_tint));
+  if (beam != pd::custom::kNoTint) slow::g_beam_colour = beam;
+}
+
 // The player-hit function sub_821274A0 where it reads the blur code (0x821278C4, r10),
 // TEMP_SLOW (log only): on the PC that receives a hit: r28 = the victim's chr, r21 = the attacker's prop,
 // r30 = its second argument. Returns the code the game goes on with (0 for a marker).
@@ -2263,6 +2314,9 @@ void PdCustomInstall(uint8_t* base) {
   if (pd::custom::g_installed) return;
   auto* memory = rex::system::kernel_state()->memory();
   pd::custom::Install(base, [memory](uint32_t size) { return memory->SystemHeapAlloc(size); });
+  // The Slow Gun's own (slower) copies of the Mauler's two functions.
+  pd::slow::InstallFunctions(base, pd::custom::kWeapons, pd::slow::kWeaponSlow,
+                             [memory](uint32_t size) { return memory->SystemHeapAlloc(size); });
 }
 
 // ---- Custom weapons: a first-person gun model of our own (stage 4a) -------------------
@@ -2669,6 +2723,7 @@ void PdNoteGameFrame(uint8_t* base) {
   PdCustomInstall(base);
   PdXbowNetFrame();
   PdRicoFrame();
+  PdSlowFrame();
   PdFileOverrideNetFrame();
   PdMpMusicFrame(base);
   PdWeaponsFrame();

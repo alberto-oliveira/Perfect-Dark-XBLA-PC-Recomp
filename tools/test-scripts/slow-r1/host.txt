@@ -1,0 +1,62 @@
+# Scenario "slow-r1" (Slow Gun, R1): 2 copies. Runs after lobby-host.txt.
+# The Slow Gun (0x44): its fire rate (8 clicks in 2.4 s -> ~2-3 shots, [slow] shot lines),
+# its tracer colour, the charge (whole clip, [slow] charge step lines; violet glow) and
+# the hit marks ([slow] send on the host, entry on the client).
+
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start
+waitmenu none 60
+wait 5000
+give 6
+give 0x44
+equip 0x44
+tp near Zqclient 450
+wait 500
+face Zqclient
+wait 2500
+shot r1-equip                # the Slow Gun in first person, its name on the HUD
+signal look-host
+log slow-r1: clicks
+trig 0 255 100
+wait 200
+trig 0 255 100
+wait 200
+trig 0 255 100
+wait 200
+trig 0 255 100
+wait 200
+trig 0 255 100
+wait 200
+trig 0 255 100
+wait 200
+trig 0 255 100
+wait 200
+trig 0 255 100
+wait 2000
+log slow-r1: tracer
+signal fire-1
+trig 0 255 60
+shot r1-tracer
+wait 1500
+face Zqclient 0 8
+signal fire-2
+trig 0 255 60
+shot r1-tracer-side
+wait 1500
+face Zqclient
+btn rb                       # the charge
+wait 900
+shot r1-charging
+wait 1800
+shot r1-charged
+pos charged
+log slow-r1: charged shot
+signal fire-3
+trig 0 255 60
+shot r1-charged-fire
+wait 1500
+pos after
+signal host-done
+log slow-r1: host done
