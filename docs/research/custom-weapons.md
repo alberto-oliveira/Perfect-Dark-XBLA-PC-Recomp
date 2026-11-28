@@ -406,6 +406,86 @@ the N64 decomp; none of it has been tested in game yet.
   dataDyne Extraction and the Institute place it.
 - 0x13 (data uplink) is ruled out: Hack That Mac uses it.
 
+### Slow Gun: implementation notes (branch slow-gun, 2026-11-28)
+
+Built as planned: `src/pd_slow.h`, the toml section "The Slow Gun", and
+`tools/models/make_slowgun.py`. All of this was verified in scripted tests R1-R4 and
+C1-C3, except where noted.
+
+**The weapon.**
+- Weapon 0x44 works as the Mauler (base 6) and looks like the DY357 Magnum (look 8).
+- Its two functions are copies of the Mauler's with `unk27 = -1` and `recoverytime60 =
+  60`, so it fires once per ~1.25 s (with `unk27 >= 0` a new press fires after only
+  `unk24 + unk25` frames), at half the damage.
+- The Mauler checks listed above get AsBase, except `gset_get_damage`: a full Mauler
+  charge multiplies the damage by about 18 and killed outright. A Slow Gun charge buys
+  duration and blur instead.
+- The charge drains the whole clip: each of the 5 steps takes its share at 0x821760A4,
+  local hands only, since every PC also ticks its copies of the other players' guns.
+
+**Tracers.**
+- A Mauler shot's beams take the gun's weapon number. An unknown number gets
+  `beam_render`'s orange texture, and a violet colour on orange came out pinkish red.
+- So the Slow Gun's beams are noted at `beam_create` (the Carom LX's hooks) and get the
+  Cyclone's number (11, the blue texture).
+- They are drawn violet, opaque, and (1 + charge) times as wide.
+
+**The hit.** Disarm + blur code, as found in P1 above, on the victim's PC only.
+
+**The slow** (the victim's own PC):
+- movement and stick aim: the move tick's clock, scaled at 0x820F4DB0;
+- the gun: the clock is scaled around `bgun_tick_gameplay2` (0x820FC798 / 0x820FC79C);
+- mouse aim: the port's mouse-look step;
+- blur: chr+728 topped up.
+
+The integer clocks keep their remainder from frame to frame, so a 50% clock alternates
+1, 0, 1… Measured: walking 715 → 322 units, stick turning 156° → 78°, Reaper ~29 → ≤14
+rounds/s. Mouse aim was not testable by script.
+
+**Death.**
+- The timer runs only while the player is alive (`player+224`), so a slow carries into
+  the next life.
+- Death ends the poison.
+
+**Poison.**
+- One tick a second: `chr_damage_by_dizziness` (sub_8212DD90), called from the player's
+  input-step hook with the attacker's prop.
+- 0.3 damage ≈ 3.75% of health; full health is about 8 damage units (`bondhealth`,
+  player+228).
+- A poison kill credits the shooter ("Killed Zqclient" on the shooter's HUD).
+- The poison's own `chr_damage` sends a hit too; a flag keeps it from being marked as a
+  new Slow Gun hit.
+
+**Host rules.**
+- Host blob "SLOW": 9 u16s (duration, full-charge factor, move/aim/fire %, two blur
+  levels, poison seconds and damage).
+- Joined PCs use the host's rules (R4: the host's 20 s over a client's own 5).
+
+**The tint.**
+- Only the victim's PC gets the hit, so each PC marks a slowed player itself from its
+  replay of every shot.
+- At 0x821FC9B8, r3 is **not** the prop hit (it was 0 for a hit). The mark comes from
+  a capsule test from the shot's start (144(r1)) to the game's hit point (hand+1372),
+  skipping the shooter.
+- The overlay is added in the prop colour hook (0x821E1900) for player props (type 6).
+- All three PCs marked the right player.
+
+**Model.**
+- The Magnum's first-person cylinder is the vertices of bone 34 (the hammer is bone 38).
+- The third-person mesh is rigid: x along the barrel (muzzle at -120), y the width,
+  z the height.
+- The first-person flash names its texture in its display list (`C0580004` + number):
+  the Magnum's 0x39B becomes the Mauler's green 0x85E. The third-person `chrgunfire`
+  texconfig becomes 0x96F.
+- The Magnum's grip panels are grey in the texture, so a rectangle of the atlas is
+  recoloured.
+- A pistol's muzzle flash lasts too short for the scripted screenshots, the real
+  Magnum's too, so the flash colour was not seen in a test.
+
+**Test scripts.**
+- Signals sent by several clients need names with `{copy}` (`armed-{copy}`).
+- `tp near` can put two players on the same spot.
+
 ## Engine findings from the Remote Turret work (branch remote-turret, 2026-11-27)
 
 The Remote Turret is on hold on its own branch (`remote-turret`): its implementation

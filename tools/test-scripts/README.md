@@ -135,6 +135,11 @@ current menu, and the selected option of an open dropdown.
   Carom LX's own model in first and third person, its flash, side views, and a real Mauler.
 - `ricochet-func` (2 copies): the client's copy of the host's primary/secondary
   bits (`peek`) after each toggle, for the Carom LX and the Laser.
+- `slow-handson` (2 copies, `-ExtraArgs pd_file_override`, make_slowgun.py's files
+  installed): both players get the Slow Gun (0x44), the Reaper and a real DY357 Magnum,
+  with Slow Gun pickups in the extra slots, then play by hand.
+- `slow-skin` (2 copies, `-ExtraArgs pd_file_override`): the Slow Gun's own model in first
+  and third person, its charge glow, and a real Magnum.
 
 The Carom LX's development scenarios (bounces, hits, Stream, wall sweeps) need
 its debug code back: they are in `tools/debug-bank/ricochet-laser-scenarios/`.

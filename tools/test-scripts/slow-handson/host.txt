@@ -1,0 +1,21 @@
+# Scenario "slow-handson" (Slow Gun, the user's check by hand): 2 copies left in the
+# match, started with -ExtraArgs pd_file_override (make_slowgun.py's files in
+# game\DataFiles\override). Runs after lobby-host.txt. Both players get the Slow Gun
+# (0x44), the Reaper (20, to feel the slowed fire rate) and a real DY357 Magnum (8) to
+# compare; the host's extra weapon slots are all Slow Guns (table index 50), so its
+# pickups lie around. The default rules: a shot slows for 15 s (a full charge 37.5 s),
+# movement/aim/fire at 50%, the poison 8 ticks of 0.3 (about 30% of health), the slow
+# carries into the next life.
+
+cvar pd_mp_weapons 50,50,50,50,50,50,50,50,50,50
+waitplayers {players} 120
+waitsignal ready {clients} 120
+wait 1000
+pick 825FA2F8                # Ready / Start
+waitmenu none 60
+wait 5000
+give 20                      # Reaper
+give 8                       # DY357 Magnum
+give 0x44                    # Slow Gun
+equip 0x44
+log slow-handson: host ready, play by hand
